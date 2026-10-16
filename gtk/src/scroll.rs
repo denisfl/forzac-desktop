@@ -355,7 +355,7 @@ impl PageView {
         if s.focus.is_some() {
             let areas = Self::visible_areas(s, h).to_vec();
             if let Some((first, last)) = s.focus.and_then(|f| stops(&areas).get(f).copied()) {
-                let mut ink = rgba(THEMES[s.theme].3);
+                let mut ink = rgba(THEMES[s.theme].link);
                 ink.set_alpha(0.22);
                 for area in &areas[first..=last] {
                     let r = area.rect;

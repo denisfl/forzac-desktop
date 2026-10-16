@@ -49,8 +49,7 @@ fn choosing_a_theme_starts_from_the_one_shown() {
     let mut s = Settings::default();
     s.step(Setting::Theme, 1, true); // Dark shown → the next is Dawn
     assert_eq!(s.theme, Some(3));
-    assert_eq!(s.value(Setting::Theme, true), "Dawn");
-    assert_eq!(Settings::default().value(Setting::Theme, true), "Dark (system)");
+    assert_eq!(s.theme_index(false), 3, "chosen: no longer follows the system");
     let mut size = Settings::default();
     for _ in 0..20 {
         size.step(Setting::Size, 1, false);

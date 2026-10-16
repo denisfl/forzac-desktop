@@ -12,7 +12,7 @@ mkdir -p "$stage/share/forzac" && cp -r "$root/assets/fonts" "$stage/share/forza
 install -Dm644 "$root/data/app.truenrth.forzac.desktop" -t "$stage/share/applications/"
 install -Dm644 "$root/data/forzac-mime.xml" "$stage/share/mime/packages/forzac.xml"
 install -Dm644 "$root/LICENSE" "$root/assets/hyph/hyph-ru.lic.txt" "$root/assets/hyph/hyph-en-us.lic.txt" -t "$stage/share/licenses/forzac/"
-for f in pt-serif pt-sans literata source-serif; do
+for f in pt-serif pt-sans literata source-serif golos-text; do
     install -Dm644 "$root/assets/fonts/$f/OFL.txt" "$stage/share/licenses/forzac/$f-OFL.txt"
 done
 tar -C "$(dirname "$stage")" -czf "$PWD/$name.tar.gz" "$name"

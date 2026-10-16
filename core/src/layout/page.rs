@@ -2,7 +2,7 @@
 
 use super::{Area, BlockLayout, Content, GlyphRun, Group, Ink, PageStyle, Rect, Typesetter};
 use crate::fonts::Face;
-use crate::model::{Block, Book, Chapter, Kind, Locator, StyledText};
+use crate::model::{Block, Book, Chapter, Locator};
 
 /// Lines `[line_start, line_end)` of a block (one "line" for an image or a table row), `top` below the text area's top.
 #[derive(Debug, Clone, Copy)]
@@ -257,15 +257,11 @@ fn label(typesetter: &mut Typesetter, text: &str, size: f32, center: f32, y: f32
     run
 }
 
-/// Note `id` typeset as one tall page at `style`'s width: its title (a subtitle) and text, the chapter start not
-/// lowered. Draw it with `render_body`; images are the book's.
+/// Note `id` typeset as one tall page at `style`'s width: its text (the shell shows the title as the panel's label), the
+/// chapter start not lowered. Draw it with `render_body`; images are the book's.
 pub fn layout_note(book: &Book, id: &str, style: &PageStyle, typesetter: &mut Typesetter) -> Option<ChapterLayout> {
     let note = book.notes.get(id)?;
-    let mut blocks = Vec::new();
-    if let Some(title) = note.title.as_ref().filter(|t| !t.trim().is_empty()) {
-        blocks.push(Block::Paragraph { text: StyledText { text: title.clone(), styles: Vec::new() }, kind: Kind::Subtitle });
-    }
-    blocks.extend(note.blocks.iter().cloned());
+    let blocks = note.blocks.clone();
     let images = blocks
         .iter()
         .filter_map(|b| if let Block::Image { id } = b { book.images.get_key_value(id) } else { None })

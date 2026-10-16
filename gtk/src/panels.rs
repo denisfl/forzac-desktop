@@ -1,15 +1,15 @@
 //! Panels over the page: the contents (`o`), the settings (`s`) and a note. They use the reader's theme and take the
 //! focus while open; closing one gives the focus back to the page.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use forzac_core::Locator;
-use forzac_core::settings::Setting;
 use gtk::subclass::prelude::*;
-use gtk::{gdk, glib, gsk, prelude::*};
+use gtk::{gdk, glib, graphene, gsk, prelude::*};
 
-use crate::page_view::{PageView, THEMES};
+use crate::icons::{self, Icon};
+use crate::page_view::{PageView, Palette, THEMES};
 
 thread_local! {
     static THEME: Theme = Theme::new();
@@ -33,29 +33,91 @@ impl Theme {
     }
 
     fn set(&self, theme: usize) {
-        let (_, bg, ink, link) = THEMES[theme];
         let hex = |c: u32| format!("#{c:06x}");
+        let Palette { paper, ink, muted, line, sheet, .. } = THEMES[theme];
+        let (paper, ink, muted, line, sheet) = (hex(paper), hex(ink), hex(muted), hex(line), hex(sheet));
+        // The theme circles keep their own theme's colours. GTK draws a later shadow over an earlier one: the gap in the
+        // panel's colour lies over the ring, as on Android (a 4 px gap, a 2 px ring).
+        let circles: String = THEMES
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                format!(
+                    ".forzac-panel .circle.theme-{i} {{ background-color: {}; color: {}; box-shadow: inset 0 0 0 1px {}; }}
+                     .forzac-panel .circle.theme-{i}.selected {{ box-shadow: inset 0 0 0 1px {}, 0 0 0 6px {ink}, 0 0 0 4px {sheet}; }}\n",
+                    hex(t.paper),
+                    hex(t.ink),
+                    hex(t.line),
+                    hex(t.line),
+                )
+            })
+            .collect();
         self.0.load_from_string(&format!(
-            ".forzac-panel {{ background-color: {bg}; color: {ink}; }}
-             .forzac-panel.side {{ border-left: 1px solid alpha({ink}, 0.15); box-shadow: -8px 0 24px alpha(black, 0.12); }}
-             .forzac-panel.bottom {{ border-top: 1px solid alpha({ink}, 0.15); box-shadow: 0 -8px 24px alpha(black, 0.12); }}
-             .forzac-panel listview, .forzac-panel list, .forzac-panel row, .forzac-panel scrolledwindow {{ background: transparent; color: {ink}; }}
-             .forzac-panel row:selected {{ background-color: alpha({link}, 0.22); color: {ink}; }}
-             .forzac-panel .dim {{ color: alpha({ink}, 0.6); }}
-             .forzac-panel entry {{ background-color: alpha({ink}, 0.06); color: {ink}; margin: 10px 12px 4px 12px; }}",
-            bg = hex(bg),
-            ink = hex(ink),
-            link = hex(link),
+            "{STATIC_CSS}
+             .forzac-panel {{ color: {ink}; }}
+             .forzac-panel .muted {{ color: {muted}; }}
+             .forzac-sheet {{ background-color: {sheet}; box-shadow: 0 -1px 0 {line}, 0 -12px 32px alpha(black, 0.08); }}
+             .forzac-side {{ background-color: {paper}; box-shadow: -1px 0 0 {line}, -12px 0 32px alpha(black, 0.08); }}
+             .forzac-panel .grabber, .forzac-panel .rule, .forzac-panel .divider {{ background-color: {line}; }}
+             .forzac-panel .segmented {{ border: 1px solid {line}; }}
+             .forzac-panel .chip {{ border: 1px solid {line}; }}
+             .forzac-panel button:hover {{ background-color: alpha({ink}, 0.06); }}
+             .forzac-panel .segment.selected, .forzac-panel .chip.selected {{ background-color: {ink}; border-color: {ink}; color: {sheet}; }}
+             .forzac-panel .keys {{ outline: 2px solid alpha({ink}, 0.55); }}
+             .forzac-panel .dot {{ background-color: {ink}; }}
+             .forzac-panel .search {{ background-color: {sheet}; border: 1px solid {line}; }}
+             .forzac-panel .search text placeholder {{ color: {muted}; }}
+             .forzac-panel row:selected {{ background-color: alpha({ink}, 0.07); color: {ink}; }}
+             {circles}"
         ));
     }
 }
+
+/// The panels' layout, the same in every theme (sizes from the Android design, in logical pixels).
+const STATIC_CSS: &str = "
+    .forzac-panel { font-family: 'Golos Text'; font-size: 14px; }
+    .forzac-panel button { background: none; border: none; box-shadow: none; outline: none; min-height: 0; min-width: 0;
+        padding: 0; border-radius: 0; color: inherit; font-weight: normal; }
+    .forzac-panel button:disabled { opacity: 0.35; }
+    .forzac-sheet { border-radius: 22px 22px 0 0; padding: 10px 20px 24px 20px; }
+    .forzac-sheet.note { padding: 10px 24px 36px 24px; }
+    .forzac-panel .grabber { min-width: 36px; min-height: 4px; border-radius: 2px; }
+    .forzac-panel .rule { min-height: 1px; }
+    .forzac-panel .divider { min-width: 1px; }
+    .forzac-panel .theme-name { font-size: 11px; }
+    .forzac-panel .circle { min-width: 44px; min-height: 44px; border-radius: 22px; font-family: 'PT Serif'; font-size: 16px; }
+    .forzac-panel .segmented { border-radius: 12px; min-height: 44px; }
+    .forzac-panel .segmented button { min-height: 44px; }
+    .forzac-panel .size-smaller { font-family: 'PT Serif'; font-size: 14px; }
+    .forzac-panel .size-larger { font-family: 'PT Serif'; font-size: 22px; }
+    .forzac-panel .size { font-size: 14px; font-feature-settings: 'tnum'; }
+    .forzac-panel .chip { min-height: 40px; border-radius: 20px; padding: 0 16px; font-size: 15px; }
+    .forzac-panel .font-pt-serif { font-family: 'PT Serif'; }
+    .forzac-panel .font-literata { font-family: 'Literata'; }
+    .forzac-panel .font-source-serif { font-family: 'Source Serif 4'; }
+    .forzac-panel .font-pt-sans { font-family: 'PT Sans'; }
+    .forzac-panel .caption { font-size: 12px; }
+    .forzac-panel .keys { outline-offset: 3px; border-radius: 12px; }
+    .forzac-panel .note-label { font-size: 12px; font-weight: 500; letter-spacing: 0.72px; }
+    .forzac-panel .panel-title { font-size: 17px; font-weight: 600; }
+    .forzac-panel .book-title { font-family: 'PT Serif'; font-size: 18px; font-weight: 600; }
+    .forzac-panel .book-meta, .forzac-panel .position { font-size: 13px; font-feature-settings: 'tnum'; }
+    .forzac-panel .entry { font-family: 'PT Serif'; font-size: 16px; }
+    .forzac-panel .entry.current { font-weight: 700; }
+    .forzac-panel .dot { min-width: 6px; min-height: 6px; border-radius: 3px; }
+    .forzac-panel .search { min-height: 44px; border-radius: 22px; padding: 0 14px; font-size: 15px; }
+    .forzac-panel .plain-cover { background-color: #2f3e46; color: #f3efe6; border-radius: 3px; padding: 5px;
+        font-family: 'PT Serif'; font-size: 8px; font-weight: 700; }
+    .forzac-panel listview, .forzac-panel row, .forzac-panel scrolledwindow { background: none; color: inherit; padding: 0; }
+    .forzac-panel row:focus-visible { outline: none; }
+";
 
 /// Lower case and "ё" as "е", for filtering the contents.
 fn fold(s: &str) -> String {
     s.to_lowercase().replace('ё', "е")
 }
 
-fn shortcut(controller: &gtk::ShortcutController, trigger: &str, f: impl Fn() + 'static) {
+pub(crate) fn shortcut(controller: &gtk::ShortcutController, trigger: &str, f: impl Fn() + 'static) {
     let action = gtk::CallbackAction::new(move |_, _| {
         f();
         glib::Propagation::Stop
@@ -63,24 +125,43 @@ fn shortcut(controller: &gtk::ShortcutController, trigger: &str, f: impl Fn() + 
     controller.add_shortcut(gtk::Shortcut::new(gtk::ShortcutTrigger::parse_string(trigger), Some(action)));
 }
 
-/// The contents panel of a reader window: titled sections with their position in the book. Built once, hidden (a
-/// list view: only the rows on screen exist); `open` shows it with the current entry selected. `Enter` jumps (remembered
-/// for `Ctrl+O`), `/` filters, `Esc` or `o` closes.
+/// The widest bottom sheet (settings, notes), as on Android tablets.
+pub(crate) const SHEET_WIDTH: i32 = 560;
+
+/// The 36×4 handle at the top of a bottom sheet.
+pub(crate) fn grabber() -> gtk::Box {
+    let grabber = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    grabber.add_css_class("grabber");
+    grabber.set_halign(gtk::Align::Center);
+    grabber
+}
+
+/// The contents panel of a reader window, laid out as the Android contents (`TocScreen.kt`, the design's
+/// `Toc.dc.html`): a title with a close button, a filter field, the book, then the entries with their position in the
+/// book. Built once, hidden (a list view: only the rows on screen exist); `open` shows it with the current entry
+/// selected. `Enter` jumps (remembered for `Ctrl+O`), `/` filters, `Esc` or `o` closes.
 pub struct Contents {
     panel: gtk::Box,
     list: gtk::ListView,
-    search: gtk::SearchEntry,
+    search: gtk::Text,
     selection: gtk::SingleSelection,
+    model: gtk::StringList,
     places: Rc<Vec<Locator>>,
+    /// The entry of the current place: bold and marked.
+    current: Rc<Cell<usize>>,
+    /// "author · N% read".
+    meta: gtk::Label,
 }
 
 impl Contents {
     pub fn new(overlay: &gtk::Overlay, view: &PageView) -> Rc<Self> {
+        crate::fonts::add_interface_fonts();
         let entries = view.contents();
         let book = view.book();
         let places: Rc<Vec<Locator>> = Rc::new(entries.iter().map(|e| e.2).collect());
         let positions = forzac_core::state::progress_of(&book, &places);
         let titles: Vec<String> = entries.iter().map(|e| fold(&e.0)).collect();
+        let current = Rc::new(Cell::new(usize::MAX));
 
         // Items are entry indices; the factory looks the entry up.
         let indices: Vec<String> = (0..entries.len()).map(|i| i.to_string()).collect();
@@ -93,48 +174,126 @@ impl Contents {
                 q.is_empty() || index_of(item).and_then(|i| titles.get(i)).is_some_and(|t| t.contains(q.as_str()))
             })
         };
-        let filtered = gtk::FilterListModel::new(Some(model), Some(filter.clone()));
+        let filtered = gtk::FilterListModel::new(Some(model.clone()), Some(filter.clone()));
         let selection = gtk::SingleSelection::new(Some(filtered));
 
         let factory = gtk::SignalListItemFactory::new();
         factory.connect_setup(|_, item| {
-            let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-            row.set_margin_top(7);
-            row.set_margin_bottom(7);
-            row.set_margin_end(16);
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            row.set_height_request(32);
+            row.set_margin_top(8);
+            row.set_margin_bottom(8);
+            row.set_margin_end(20);
             let t = gtk::Label::new(None);
+            t.add_css_class("entry");
             t.set_xalign(0.0);
             t.set_hexpand(true);
             t.set_wrap(true);
             t.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+            t.set_lines(2);
+            t.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            dot.add_css_class("dot");
+            dot.set_valign(gtk::Align::Center);
+            dot.set_margin_start(12);
             let p = gtk::Label::new(None);
-            p.add_css_class("dim");
-            p.set_valign(gtk::Align::Start);
+            p.add_css_class("position");
+            p.add_css_class("muted");
+            p.set_width_request(44);
+            p.set_xalign(1.0);
             row.append(&t);
+            row.append(&dot);
             row.append(&p);
             item.downcast_ref::<gtk::ListItem>().unwrap().set_child(Some(&row));
         });
+        let c = current.clone();
         factory.connect_bind(move |_, item| {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
             let (Some(i), Some(row)) = (item.item().as_ref().and_then(index_of), item.child().and_downcast::<gtk::Box>()) else { return };
             let (title, level, _) = &entries[i];
-            row.set_margin_start(16 + 18 * (*level as i32 - 1).clamp(0, 4));
+            row.set_margin_start(20 + 16 * (*level as i32 - 1).clamp(0, 4));
             let t = row.first_child().and_downcast::<gtk::Label>().unwrap();
             t.set_text(title);
-            let p = t.next_sibling().and_downcast::<gtk::Label>().unwrap();
+            let dot = t.next_sibling().unwrap();
+            let is_current = i == c.get();
+            if is_current {
+                t.add_css_class("current")
+            } else {
+                t.remove_css_class("current")
+            }
+            dot.set_visible(is_current);
+            let p = dot.next_sibling().and_downcast::<gtk::Label>().unwrap();
             p.set_text(&format!("{}%", (positions[i] * 100.0).round() as u32));
         });
         let list = gtk::ListView::new(Some(selection.clone()), Some(factory));
 
         let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
         panel.add_css_class("forzac-panel");
-        panel.add_css_class("side");
+        panel.add_css_class("forzac-side");
         panel.set_halign(gtk::Align::End);
         panel.set_visible(false);
-        let search = gtk::SearchEntry::new();
-        search.set_visible(false);
-        panel.append(&search);
+
+        // Title and close.
+        let header = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        header.set_margin_start(20);
+        header.set_margin_end(8);
+        header.set_margin_top(12);
+        let title = gtk::Label::new(Some("Contents"));
+        title.add_css_class("panel-title");
+        title.set_xalign(0.0);
+        title.set_hexpand(true);
+        header.append(&title);
+        let close = gtk::Button::new();
+        close.set_child(Some(&Icon::new(icons::X, 22)));
+        close.set_size_request(44, 44);
+        close.set_focusable(false);
+        header.append(&close);
+        panel.append(&header);
+
+        // The filter field.
+        let field = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        field.add_css_class("search");
+        field.set_margin_start(20);
+        field.set_margin_end(20);
+        field.set_margin_top(8);
+        let icon = Icon::new(icons::SEARCH, 18);
+        icon.add_css_class("muted");
+        field.append(&icon);
+        let search = gtk::Text::new();
+        search.set_placeholder_text(Some("Filter contents"));
+        search.set_hexpand(true);
+        field.append(&search);
+        panel.append(&field);
+
+        // The book.
+        let card = gtk::Box::new(gtk::Orientation::Horizontal, 14);
+        card.set_margin_start(20);
+        card.set_margin_end(20);
+        card.set_margin_top(12);
+        card.set_margin_bottom(22);
+        card.append(&cover(&book));
+        let about = gtk::Box::new(gtk::Orientation::Vertical, 3);
+        about.set_valign(gtk::Align::Center);
+        let name = gtk::Label::new(Some(&book.title));
+        name.add_css_class("book-title");
+        name.set_xalign(0.0);
+        name.set_wrap(true);
+        name.set_lines(2);
+        name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        about.append(&name);
+        let meta = gtk::Label::new(None);
+        meta.add_css_class("book-meta");
+        meta.add_css_class("muted");
+        meta.set_xalign(0.0);
+        about.append(&meta);
+        card.append(&about);
+        panel.append(&card);
+        let rule = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        rule.add_css_class("rule");
+        panel.append(&rule);
+
         let scrolled = gtk::ScrolledWindow::builder().child(&list).hscrollbar_policy(gtk::PolicyType::Never).vexpand(true).build();
+        scrolled.set_margin_top(6);
         panel.append(&scrolled);
         overlay.add_overlay(&panel);
         // Shown once, invisibly: styles, the interface font and the rows are ready before the reader presses `o`.
@@ -151,7 +310,16 @@ impl Contents {
             p.set_can_target(true);
         });
 
-        let contents = Rc::new(Contents { panel, list: list.clone(), search: search.clone(), selection: selection.clone(), places });
+        let contents = Rc::new(Contents {
+            panel,
+            list: list.clone(),
+            search: search.clone(),
+            selection: selection.clone(),
+            model,
+            places,
+            current,
+            meta,
+        });
         let weak = Rc::downgrade(&contents);
         let view = view.downgrade();
         let with = move |f: &dyn Fn(&Contents, &PageView)| {
@@ -161,7 +329,9 @@ impl Contents {
         };
 
         let w = with.clone();
-        search.connect_search_changed(move |entry| {
+        close.connect_clicked(move |_| w(&|c, v| c.close(v)));
+        let w = with.clone();
+        search.connect_changed(move |entry| {
             *query.borrow_mut() = fold(&entry.text());
             filter.changed(gtk::FilterChange::Different);
             w(&|c, _| c.select(0));
@@ -179,20 +349,18 @@ impl Contents {
         shortcut(&keys, "k", move || w(&|c, _| c.step(-1)));
         let s = search.clone();
         shortcut(&keys, "slash", move || {
-            s.set_visible(true);
             s.grab_focus();
         });
         let w = with.clone();
         shortcut(&keys, "Escape|o|q", move || w(&|c, v| c.close(v)));
         list.add_controller(keys);
 
-        // Esc in the filter clears it, then hides it; ↓ goes to the list.
+        // Esc in the filter clears it, then goes back to the list; ↓ goes to the list.
         let entry_keys = gtk::ShortcutController::new();
         let w = with.clone();
         shortcut(&entry_keys, "Escape", move || {
             w(&|c, _| {
                 if c.search.text().is_empty() {
-                    c.search.set_visible(false);
                     c.select(c.selection.selected());
                 } else {
                     c.search.set_text("");
@@ -207,14 +375,22 @@ impl Contents {
     /// Shows the panel over `view`'s window with the entry of the current place selected.
     pub fn open(&self, view: &PageView) {
         let here = view.locator();
+        let book = view.book();
+        let read = (forzac_core::state::progress(&book, here) * 100.0).round() as u32;
+        let meta: Vec<String> = book.authors.first().cloned().into_iter().chain([format!("{read}% read")]).collect();
+        self.meta.set_text(&meta.join(" · "));
         self.search.set_text("");
-        self.search.set_visible(false);
+        let current = self.places.iter().rposition(|p| *p <= here).unwrap_or(0);
+        if current != self.current.replace(current) {
+            // Rows bound for the old current entry are bound again.
+            let n = self.model.n_items();
+            self.model.items_changed(0, n, n);
+        }
         self.panel.set_width_request(panel_width(view.parent().map_or(0, |p| p.width())));
         self.panel.set_opacity(1.0);
         self.panel.set_can_target(true);
         self.panel.set_visible(true);
-        let current = self.places.iter().rposition(|p| *p <= here).unwrap_or(0) as u32;
-        self.select(current);
+        self.select(current as u32);
         self.list.grab_focus();
     }
 
@@ -243,6 +419,46 @@ impl Contents {
     }
 }
 
+/// The book's cover, 44×66: its own picture, else a plain one with the title.
+fn cover(book: &forzac_core::Book) -> gtk::Widget {
+    const W: f32 = 44.0;
+    const H: f32 = 66.0;
+    let picture = book
+        .cover
+        .as_ref()
+        .and_then(|id| book.images.get(id))
+        .and_then(|i| gdk::Texture::from_bytes(&glib::Bytes::from(&i.bytes[..])).ok());
+    let widget: gtk::Widget = match picture {
+        Some(texture) => {
+            // Filling the cover's box, cropped, with rounded corners.
+            let (w, h) = (texture.width() as f32, texture.height() as f32);
+            let scale = (W / w).max(H / h);
+            let rect = graphene::Rect::new((W - w * scale) / 2.0, (H - h * scale) / 2.0, w * scale, h * scale);
+            let image = gsk::TextureScaleNode::new(&texture, &rect, gsk::ScalingFilter::Trilinear);
+            let clip = gsk::RoundedRect::from_rect(graphene::Rect::new(0.0, 0.0, W, H), 3.0);
+            NodeView::new(gsk::RoundedClipNode::new(&image, &clip).upcast(), W, H).upcast()
+        }
+        None => {
+            let plain = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            plain.add_css_class("plain-cover");
+            let title = gtk::Label::new(Some(&book.title));
+            title.set_wrap(true);
+            title.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+            title.set_xalign(0.0);
+            title.set_vexpand(true);
+            title.set_valign(gtk::Align::End);
+            title.set_max_width_chars(1);
+            plain.append(&title);
+            plain.upcast()
+        }
+    };
+    widget.set_size_request(W as i32, H as i32);
+    widget.set_vexpand(false); // the title inside expands; the card must not
+    widget.set_overflow(gtk::Overflow::Hidden);
+    widget.set_valign(gtk::Align::Center);
+    widget
+}
+
 /// The contents panel's width in a window `width` wide.
 fn panel_width(width: i32) -> i32 {
     ((width as f32 * 0.45) as i32).clamp(280, 460)
@@ -253,133 +469,34 @@ fn index_of(item: &glib::Object) -> Option<usize> {
     item.downcast_ref::<gtk::StringObject>()?.string().parse().ok()
 }
 
-/// The settings panel over the lower part of the page: each setting with its value. Built on the first `s`, then shown
-/// and hidden. `j`/`k` choose a setting, `h`/`l` switch its value and the page behind shows it at once (`Enter` or a
-/// click switches to the next value); `Esc` or `s` closes.
-pub struct SettingsPanel {
-    panel: gtk::Box,
-    list: gtk::ListBox,
-    values: Vec<gtk::Label>,
-}
-
-impl SettingsPanel {
-    /// `save` remembers the settings and recolours the panels after a change.
-    pub fn new(overlay: &gtk::Overlay, view: &PageView, save: Rc<dyn Fn()>) -> Rc<Self> {
-        let list = gtk::ListBox::new();
-        list.set_selection_mode(gtk::SelectionMode::Browse);
-        list.set_halign(gtk::Align::Center);
-        list.set_width_request(400);
-        list.set_margin_top(10);
-        list.set_margin_bottom(14);
-        let values: Vec<gtk::Label> = Setting::ALL
-            .iter()
-            .map(|setting| {
-                let row = gtk::Box::new(gtk::Orientation::Horizontal, 24);
-                row.set_margin_top(7);
-                row.set_margin_bottom(7);
-                row.set_margin_start(16);
-                row.set_margin_end(16);
-                let name = gtk::Label::new(Some(setting.name()));
-                name.add_css_class("dim");
-                name.set_xalign(0.0);
-                name.set_hexpand(true);
-                let value = gtk::Label::new(None);
-                row.append(&name);
-                row.append(&value);
-                list.append(&row);
-                value
-            })
-            .collect();
-        let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        panel.add_css_class("forzac-panel");
-        panel.add_css_class("bottom");
-        panel.set_valign(gtk::Align::End);
-        panel.append(&list);
-        panel.set_visible(false);
-        overlay.add_overlay(&panel);
-
-        let this = Rc::new(SettingsPanel { panel, list: list.clone(), values });
-        let weak = Rc::downgrade(&this);
-        let view = view.downgrade();
-        let with = move |f: &dyn Fn(&SettingsPanel, &PageView)| {
-            if let (Some(p), Some(v)) = (weak.upgrade(), view.upgrade()) {
-                f(&p, &v);
-            }
-        };
-        let change = {
-            let with = with.clone();
-            Rc::new(move |delta: i32| {
-                with(&|p, v| {
-                    let Some(i) = p.list.selected_row().map(|r| r.index() as usize) else { return };
-                    v.step(Setting::ALL[i], delta);
-                    save();
-                    p.show_values(v);
-                })
-            })
-        };
-        let c = change.clone();
-        list.connect_row_activated(move |_, _| c(1));
-
-        // Capture: the list's own arrow-key navigation would otherwise run first.
-        let keys = gtk::ShortcutController::new();
-        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
-        let w = with.clone();
-        shortcut(&keys, "j|Down", move || w(&|p, _| p.select_by(1)));
-        let w = with.clone();
-        shortcut(&keys, "k|Up", move || w(&|p, _| p.select_by(-1)));
-        let c = change.clone();
-        shortcut(&keys, "l|Right", move || c(1));
-        shortcut(&keys, "h|Left", move || change(-1));
-        shortcut(&keys, "Escape|s|q", move || {
-            with(&|p, v| {
-                p.panel.set_visible(false);
-                v.grab_focus();
-            })
-        });
-        list.add_controller(keys);
-        this
-    }
-
-    pub fn open(&self, view: &PageView) {
-        self.show_values(view);
-        self.panel.set_visible(true);
-        let row = self.list.selected_row().or_else(|| self.list.row_at_index(0));
-        if let Some(row) = row {
-            self.list.select_row(Some(&row));
-            row.grab_focus();
-        }
-    }
-
-    fn show_values(&self, view: &PageView) {
-        let (settings, dark) = (view.settings(), view.system_dark());
-        for (label, setting) in self.values.iter().zip(Setting::ALL) {
-            label.set_text(&settings.value(setting, dark));
-        }
-    }
-
-    fn select_by(&self, delta: i32) {
-        let i = self.list.selected_row().map_or(0, |r| r.index());
-        if let Some(row) = self.list.row_at_index((i + delta).clamp(0, Setting::ALL.len() as i32 - 1)) {
-            self.list.select_row(Some(&row));
-            row.grab_focus();
-        }
-    }
-}
-
-/// Note `id` in a panel over the lower part of the page, typeset by the core; `Esc`, `Enter` or `q` closes it.
+/// Note `id` in a bottom sheet over the page, as the Android note (`NoteSheet.kt`, the design's `Footnote.dc.html`): a
+/// grabber, "NOTE" with the note's title, then the note typeset by the core. `Esc`, `Enter` or `q` closes it.
 pub fn note(overlay: &gtk::Overlay, view: &PageView, id: &str) {
-    let width = (overlay.width() as f32).min(760.0);
-    let Some((node, height)) = view.note(id, width) else { return };
-    let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    crate::fonts::add_interface_fonts();
+    let width = overlay.width().min(SHEET_WIDTH);
+    let Some((node, height)) = view.note(id, (width - 48) as f32) else { return };
+    let panel = gtk::Box::new(gtk::Orientation::Vertical, 12);
     panel.add_css_class("forzac-panel");
-    panel.add_css_class("bottom");
+    panel.add_css_class("forzac-sheet");
+    panel.add_css_class("note");
     panel.set_valign(gtk::Align::End);
-    let note = NoteView::new(node, width, height);
+    panel.set_halign(gtk::Align::Center);
+    panel.set_width_request(width);
+    panel.append(&grabber());
+    let title = view.book().notes.get(id).and_then(|n| n.title.clone()).filter(|t| !t.trim().is_empty());
+    let label = gtk::Label::new(Some(&["Note", title.as_deref().unwrap_or("")].join(" ").trim().to_uppercase()));
+    label.add_css_class("note-label");
+    label.add_css_class("muted");
+    label.set_xalign(0.0);
+    panel.append(&label);
+    let note = NodeView::new(node, (width - 48) as f32, height);
+    note.set_focusable(true);
     let scrolled = gtk::ScrolledWindow::builder()
         .child(&note)
         .hscrollbar_policy(gtk::PolicyType::Never)
         .propagate_natural_height(true)
-        .max_content_height(overlay.height() / 2)
+        // 60 % of the window for the whole sheet, as on Android.
+        .max_content_height((overlay.height() as f32 * 0.6) as i32 - 80)
         .build();
     panel.append(&scrolled);
     overlay.add_overlay(&panel);
@@ -397,21 +514,21 @@ mod imp {
     use super::*;
 
     #[derive(Default)]
-    pub struct NoteView {
+    pub struct NodeView {
         pub node: RefCell<Option<gsk::RenderNode>>,
         pub size: std::cell::Cell<(f32, f32)>,
     }
 
     #[glib::object_subclass]
-    impl ObjectSubclass for NoteView {
-        const NAME: &'static str = "ForzacNoteView";
-        type Type = super::NoteView;
+    impl ObjectSubclass for NodeView {
+        const NAME: &'static str = "ForzacNodeView";
+        type Type = super::NodeView;
         type ParentType = gtk::Widget;
     }
 
-    impl ObjectImpl for NoteView {}
+    impl ObjectImpl for NodeView {}
 
-    impl WidgetImpl for NoteView {
+    impl WidgetImpl for NodeView {
         fn measure(&self, orientation: gtk::Orientation, _: i32) -> (i32, i32, i32, i32) {
             let (w, h) = self.size.get();
             let size = if orientation == gtk::Orientation::Horizontal { w } else { h }.ceil() as i32;
@@ -419,7 +536,7 @@ mod imp {
         }
 
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
-            // Centred when the panel is wider than the note's column.
+            // Centred when the panel is wider than the node.
             let offset = ((self.obj().width() as f32 - self.size.get().0) / 2.0).max(0.0);
             if let Some(node) = self.node.borrow().as_ref() {
                 snapshot.translate(&gtk::graphene::Point::new(offset, 0.0));
@@ -430,18 +547,17 @@ mod imp {
 }
 
 glib::wrapper! {
-    /// A note typeset by the core, drawn like a page.
-    pub struct NoteView(ObjectSubclass<imp::NoteView>)
+    /// A render node of a fixed size: a note typeset by the core, a book's cover.
+    pub struct NodeView(ObjectSubclass<imp::NodeView>)
         @extends gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
-impl NoteView {
+impl NodeView {
     fn new(node: gsk::RenderNode, width: f32, height: f32) -> Self {
         let view: Self = glib::Object::new();
         *view.imp().node.borrow_mut() = Some(node);
         view.imp().size.set((width, height));
-        view.set_focusable(true);
         view
     }
 }

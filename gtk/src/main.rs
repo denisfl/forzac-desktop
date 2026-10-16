@@ -14,8 +14,10 @@
 
 mod appearance;
 mod fonts;
+mod icons;
 mod page_view;
 mod panels;
+mod settings_sheet;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -159,11 +161,11 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
         }));
         window.connect_destroy(move |_| drop(watch.take()));
     }
-    let settings_panel: Rc<RefCell<Option<Rc<panels::SettingsPanel>>>> = Rc::default();
+    let settings_panel: Rc<RefCell<Option<Rc<settings_sheet::SettingsSheet>>>> = Rc::default();
     let open_settings: Rc<dyn Fn()> = {
         let (panel, overlay, view, save) = (settings_panel.clone(), overlay.clone(), view.clone(), save_style.clone());
         Rc::new(move || {
-            let panel = panel.borrow_mut().get_or_insert_with(|| panels::SettingsPanel::new(&overlay, &view, save.clone())).clone();
+            let panel = panel.borrow_mut().get_or_insert_with(|| settings_sheet::SettingsSheet::new(&overlay, &view, save.clone())).clone();
             panel.open(&view);
         })
     };

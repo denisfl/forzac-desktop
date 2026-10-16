@@ -34,14 +34,26 @@ pub enum Mode {
     Scroll,
 }
 
-/// Background, ink and link ink of the six themes (docs: the Android app's palettes).
-pub const THEMES: [(&str, u32, u32, u32); 6] = [
-    ("Light", 0xFAFAFA, 0x1C1C1C, 0x94621F),
-    ("Sepia", 0xF4ECD8, 0x5B4636, 0x8A5A1C),
-    ("Dark", 0x121212, 0xCFCFCF, 0xC49A52),
-    ("Dawn", 0xFAF4ED, 0x575279, 0x8F5E1D),
-    ("Wave", 0x1F1F28, 0xDCD7BA, 0xDCA561),
-    ("Forest", 0x2D353B, 0xD3C6AA, 0xDBBC7F),
+/// A theme's colours (the Android app's `docs/design.md`): the page's paper, ink and link ink; the panels' secondary
+/// text, lines and background.
+#[derive(Clone, Copy)]
+pub struct Palette {
+    pub paper: u32,
+    pub ink: u32,
+    pub muted: u32,
+    pub line: u32,
+    pub sheet: u32,
+    pub link: u32,
+}
+
+/// The six themes, in the order of `settings::THEMES`.
+pub const THEMES: [Palette; 6] = [
+    Palette { paper: 0xFAFAFA, ink: 0x1C1C1C, muted: 0x6E6E6E, line: 0xE5E5E5, sheet: 0xFFFFFF, link: 0x94621F },
+    Palette { paper: 0xF4ECD8, ink: 0x5B4636, muted: 0x7A6650, line: 0xE2D6BC, sheet: 0xFBF5E8, link: 0x8A5A1C },
+    Palette { paper: 0x121212, ink: 0xCFCFCF, muted: 0x8E8E8E, line: 0x333333, sheet: 0x1E1E1E, link: 0xC49A52 },
+    Palette { paper: 0xFAF4ED, ink: 0x575279, muted: 0x6E6A86, line: 0xE6DDD6, sheet: 0xFFFAF3, link: 0x8F5E1D },
+    Palette { paper: 0x1F1F28, ink: 0xDCD7BA, muted: 0x9A9585, line: 0x363646, sheet: 0x2A2A37, link: 0xDCA561 },
+    Palette { paper: 0x2D353B, ink: 0xD3C6AA, muted: 0x9DA9A0, line: 0x475258, sheet: 0x343F44, link: 0xDBBC7F },
 ];
 
 /// Opacity of the ink for secondary text (the page number) and for table rules by strength.
@@ -331,8 +343,16 @@ impl PageView {
     /// Note `id` typeset at `width` for the note panel: its node and height, in the current theme and text size.
     pub fn note(&self, id: &str, width: f32) -> Option<(gsk::RenderNode, f32)> {
         self.with(|s| {
-            let base = PageStyle { text_size: s.settings.text_size() * 0.9, ..s.settings.page_style(width, 100_000.0) };
-            let style = PageStyle { margin_h: 28.0, margin_top: 18.0, margin_bottom: 18.0, ..base };
+            // The design's note: 17 px with 27 px lines next to an 18 px page.
+            let base = s.settings.page_style(width, 100_000.0);
+            let style = PageStyle {
+                text_size: base.text_size * 17.0 / 18.0,
+                line_height: 27.0 / 17.0,
+                margin_h: 0.0,
+                margin_top: 0.0,
+                margin_bottom: 4.0,
+                ..base
+            };
             let mut typesetter = Typesetter::new(style, s.hyphenator.clone());
             let layout = layout_note(&s.book, id, &style, &mut typesetter)?;
             let content = layout.render_body(0, &style);
@@ -680,7 +700,7 @@ impl PageView {
         let (w, h) = (WidgetExt::width(self) as f32, WidgetExt::height(self) as f32);
         let now = WidgetExt::frame_clock(self).map_or(0, |c| c.frame_time());
         self.with(|s| {
-            snapshot.append_color(&rgba(THEMES[s.theme].1), &graphene::Rect::new(0.0, 0.0, w, h));
+            snapshot.append_color(&rgba(THEMES[s.theme].paper), &graphene::Rect::new(0.0, 0.0, w, h));
             if s.mode == Mode::Scroll {
                 Self::draw_column(s, snapshot, h);
                 return;
@@ -708,7 +728,7 @@ impl PageView {
                     if let (Some(areas), Some(f)) = (areas, s.focus)
                         && let Some(&(first, last)) = stops(areas).get(f)
                     {
-                        let mut ink = rgba(THEMES[s.theme].3);
+                        let mut ink = rgba(THEMES[s.theme].link);
                         ink.set_alpha(0.22);
                         for area in &areas[first..=last] {
                             let r = area.rect;
@@ -729,7 +749,7 @@ impl PageView {
         self.with(|s| {
             let page = Self::page_node(s, s.page)?;
             let snapshot = gtk::Snapshot::new();
-            snapshot.append_color(&rgba(THEMES[s.theme].1), &graphene::Rect::new(0.0, 0.0, w, h));
+            snapshot.append_color(&rgba(THEMES[s.theme].paper), &graphene::Rect::new(0.0, 0.0, w, h));
             snapshot.append_node(&page);
             snapshot.to_node()
         })
@@ -883,7 +903,7 @@ fn content_node(
     textures: &mut HashMap<String, Option<gdk::Texture>>,
     book: &Book,
 ) -> Option<gsk::RenderNode> {
-    let (_, _, text, link) = THEMES[theme];
+    let Palette { ink: text, link, .. } = THEMES[theme];
     let mut secondary = rgba(text);
     secondary.set_alpha(SECONDARY);
     let snapshot = gtk::Snapshot::new();

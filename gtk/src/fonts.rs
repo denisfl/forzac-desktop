@@ -65,6 +65,27 @@ pub fn assets() -> PathBuf {
     }
 }
 
+/// Makes the interface font (Golos Text) and the book families usable by name in GTK's own widgets: their files join
+/// the process's default fontconfig configuration. Done once, when the first panel is built: reading the files takes
+/// about 10 ms on a Raspberry Pi 5, which the start does not pay.
+pub fn add_interface_fonts() {
+    static ADDED: std::sync::Once = std::sync::Once::new();
+    ADDED.call_once(|| {
+        let fonts = assets().join("fonts");
+        for family in ["golos-text", "pt-serif", "literata", "source-serif", "pt-sans"] {
+            let Ok(files) = std::fs::read_dir(fonts.join(family)) else { continue };
+            for path in files.flatten().map(|f| f.path()).filter(|p| p.extension().is_some_and(|e| e == "ttf")) {
+                if let Ok(path) = CString::new(path.as_os_str().as_encoded_bytes()) {
+                    // A null configuration is the current (default) one.
+                    unsafe { FcConfigAppFontAddFile(std::ptr::null_mut(), path.as_ptr()) };
+                }
+            }
+        }
+        // GTK's widgets use the default font map, which cached the configuration before.
+        unsafe { pango_fc_font_map_config_changed(Fonts::raw(&pangocairo::FontMap::default())) };
+    });
+}
+
 /// The system font configuration, used only to look up fallback files from the layout threads.
 struct SystemFonts(*mut c_void);
 // SAFETY: fontconfig serialises access to a configuration internally (since 2.13); lookups do not modify it.

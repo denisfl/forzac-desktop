@@ -112,7 +112,7 @@ impl Turning {
     }
 }
 
-/// One setting, a row of the settings panel.
+/// One setting, a control of the settings panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Setting {
     Theme,
@@ -122,23 +122,6 @@ pub enum Setting {
     Align,
     Margins,
     Turning,
-}
-
-impl Setting {
-    pub const ALL: [Setting; 7] =
-        [Setting::Theme, Setting::Font, Setting::Size, Setting::Spacing, Setting::Align, Setting::Margins, Setting::Turning];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Setting::Theme => "Theme",
-            Setting::Font => "Font",
-            Setting::Size => "Text size",
-            Setting::Spacing => "Line spacing",
-            Setting::Align => "Alignment",
-            Setting::Margins => "Margins",
-            Setting::Turning => "Pages",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -222,22 +205,6 @@ impl Settings {
             justify: self.align == Align::Justified,
             family: self.family,
             ..PageStyle::column(width, height, self.text_size(), measure, min_margin)
-        }
-    }
-
-    /// The value of `setting` as shown to the reader.
-    pub fn value(&self, setting: Setting, system_dark: bool) -> String {
-        match setting {
-            Setting::Theme => {
-                let name = THEMES[self.theme_index(system_dark)];
-                if self.theme.is_none() { format!("{name} (system)") } else { name.to_owned() }
-            }
-            Setting::Font => self.family.name().to_owned(),
-            Setting::Size => format!("{}", self.text_size()),
-            Setting::Spacing => ["Compact", "Normal", "Loose"][self.spacing as usize].to_owned(),
-            Setting::Align => ["Justified", "Left"][self.align as usize].to_owned(),
-            Setting::Margins => ["Narrow", "Medium", "Wide"][self.margins as usize].to_owned(),
-            Setting::Turning => ["Slide", "Scroll"][self.turning as usize].to_owned(),
         }
     }
 
