@@ -64,6 +64,5 @@ xdg-mime default app.truenrth.forzac.desktop application/epub+zip application/x-
 
 ## Licences
 
-The licence of the code is to be decided before the first public release. Bundled: PT Serif — SIL Open Font
-License 1.1 (`assets/fonts/pt-serif/OFL.txt`); Russian hyphenation patterns — LPPL 1.2 or later, English — free use
+The code is licensed under the [Mozilla Public License 2.0](LICENSE). Bundled: PT Serif — SIL Open Font License 1.1 (`assets/fonts/pt-serif/OFL.txt`); Russian hyphenation patterns — LPPL 1.2 or later, English — free use
 with the notice kept (`assets/hyph/*.lic.txt`).

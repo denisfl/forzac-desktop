@@ -32,6 +32,9 @@ fn rgba(rgb: u32) -> gdk::RGBA {
     gdk::RGBA::new(((rgb >> 16) & 0xFF) as f32 / 255.0, ((rgb >> 8) & 0xFF) as f32 / 255.0, (rgb & 0xFF) as f32 / 255.0, 1.0)
 }
 
+/// Runs once, after the first frame with a page is presented.
+type FirstFrame = Box<dyn FnOnce(&PageView)>;
+
 struct Turn {
     from: gsk::RenderNode,
     /// +1 forward (the new page comes from the right), −1 back.
@@ -68,7 +71,7 @@ mod imp {
         /// Frame times (µs) during page turns and the refresh interval, for `--turns`.
         pub frames: RefCell<Vec<Vec<i64>>>,
         pub refresh: std::cell::Cell<i64>,
-        pub on_first_frame: RefCell<Option<Box<dyn FnOnce(&super::PageView)>>>,
+        pub on_first_frame: RefCell<Option<FirstFrame>>,
     }
 
     #[glib::object_subclass]
@@ -209,11 +212,8 @@ impl PageView {
         self.with(|s| {
             snapshot.append_color(&rgba(THEMES[s.theme].1), &graphene::Rect::new(0.0, 0.0, w, h));
             let Some(current) = Self::page_node(s, s.page) else { return };
-            let progress: f32 = s
-                .turn
-                .as_mut()
-                .map(|t| ((now - *t.start.get_or_insert(now)) as f32 / TURN as f32).clamp(0.0, 1.0))
-                .unwrap_or(1.0);
+            let progress: f32 =
+                s.turn.as_mut().map(|t| ((now - *t.start.get_or_insert(now)) as f32 / TURN as f32).clamp(0.0, 1.0)).unwrap_or(1.0);
             match &s.turn {
                 Some(t) if progress < 1.0 => {
                     let p = 1.0 - (1.0 - progress).powi(3); // ease-out cubic

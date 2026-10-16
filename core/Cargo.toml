@@ -3,6 +3,7 @@ name = "forzac-core"
 description = "Book model, parsers and typesetting engine shared by the Forzac desktop shells"
 edition.workspace = true
 version.workspace = true
+license.workspace = true
 
 [lib]
 # rlib for the GTK shell, staticlib for the macOS shell (C ABI in `ffi.rs`).

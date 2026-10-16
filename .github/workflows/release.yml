@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: Linux archive (${{ matrix.arch }})
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: GTK 4 development files
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-4-dev
+      - run: cargo build --release --locked -p forzac-gtk
+      - name: Archive
+        run: |
+          name="forzac-${GITHUB_REF_NAME#v}-linux-${{ matrix.arch }}"
+          scripts/package-linux.sh "$name"
+          echo "ARCHIVE=$name.tar.gz" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: ${{ env.ARCHIVE }}
+
+  macos:
+    name: macOS app (arm64)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - run: macos/build.sh
+      - name: Archive
+        run: |
+          name="Forzac-${GITHUB_REF_NAME#v}-macos-arm64.zip"
+          ditto -c -k --keepParent macos/build/Forzac.app "$name"
+          echo "ARCHIVE=$name" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: ${{ env.ARCHIVE }}
+
+  release:
+    name: Draft release
+    needs: [linux, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: dist/*

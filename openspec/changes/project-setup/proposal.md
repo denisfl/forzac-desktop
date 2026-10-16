@@ -6,9 +6,9 @@ be settled: it decides who can reuse the code and how.
 
 ## What Changes
 
-- A licence for the code, chosen before the first public commit (options in design: MPL-2.0, MIT/Apache-2.0, GPL-3.0;
-  App Store distribution is not planned, so GPL is possible). Bundled fonts and hyphenation patterns keep their own
-  licences.
+- The code is licensed under MPL-2.0 (decided 2026-10-16): changes to Forzac's own files stay open, while the core can
+  still be embedded in other apps (the Android app included) and contributors need no CLA. Bundled fonts (OFL) and
+  hyphenation patterns (LPPL, notice-preserving) keep their own licences.
 - A public repository with CI on every pull request: `cargo fmt --check`, `cargo clippy -D warnings`, core tests,
   GTK shell builds on Linux x86_64 and aarch64 (the `ci/` containers), the macOS shell on arm64.
 - Release artefacts built by CI for tags: Linux binaries with assets for x86_64 and aarch64, the macOS app.
