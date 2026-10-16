@@ -44,7 +44,7 @@ PI=user@host scripts/pi-vnc.sh                             # watch the Pi's desk
 GTK shell flags for measurements: `--measure`, `--png out.png`, `--turns N`, `--chapter N`.
 Containers in `ci/` build and run the GTK shell on Fedora, Arch (makepkg) and Debian/Raspberry Pi OS.
 Books are never committed; test books live outside the repository.
-The development Linux machine is a Raspberry Pi 5 without a monitor, watched over VNC (`scripts/pi-vnc.sh`).
+The development Linux machine is a Raspberry Pi 5 without a monitor, watched over Raspberry Pi Connect in a browser or VNC (`scripts/pi-vnc.sh`).
 
 ## Process: OpenSpec
 
