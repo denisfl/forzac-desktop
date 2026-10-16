@@ -33,6 +33,11 @@ typedef struct {
 
 typedef struct {
     ForzacRect rect;
+    uint8_t ink;            // 0 text, 1 link, 2 secondary
+} ForzacStroke;             // a line through struck-out text
+
+typedef struct {
+    ForzacRect rect;
     uint8_t kind;           // 0 note marker, 1 link
     const char *target;     // note id or link key
 } ForzacArea;
@@ -46,6 +51,8 @@ typedef struct {
     uint32_t rule_count;
     const ForzacArea *areas;
     uint32_t area_count;
+    const ForzacStroke *strokes;
+    uint32_t stroke_count;
 } ForzacPage;
 
 typedef struct {
@@ -82,7 +89,9 @@ typedef struct {
 // Finds a font file with character `ch`: writes its path into `path` and the face index into `*index`.
 typedef bool (*ForzacFallback)(uint32_t ch, char *path, size_t capacity, uint32_t *index);
 
-ForzacDocument *forzac_open(const char *path);
+// NULL when the file is not a readable book; *error (if not NULL): 1 not a book, 2 no text, 3 DRM-protected,
+// 4 a damaged archive, 5 the file cannot be read.
+ForzacDocument *forzac_open(const char *path, uint32_t *error);
 const char *forzac_title(const ForzacDocument *doc);
 const char *forzac_authors(const ForzacDocument *doc);
 uint32_t forzac_chapter_count(const ForzacDocument *doc);
@@ -107,8 +116,13 @@ const uint8_t *forzac_cover(const ForzacDocument *doc, size_t *len);
 float forzac_note(ForzacDocument *doc, const char *id, float width, const ForzacSettings *settings, ForzacPage *out);
 // Strings below are valid until the next string from the document.
 const char *forzac_note_title(ForzacDocument *doc, const char *id);
-// 1 a place (*at), 2 a note (*text its id), 3 outside the book (*text the address); 0 unknown.
+// 1 a place (*at), 2 a note (*text its id), 3 outside the book (*text the address), 4 a short place for the note
+// sheet (forzac_link_preview; *at its start); 0 unknown.
 uint8_t forzac_link(ForzacDocument *doc, const char *key, ForzacLocator *at, const char **text);
+// A link's short target for a panel `width` wide into *out; returns its height, negative when it has none.
+float forzac_link_preview(ForzacDocument *doc, const char *key, float width, const ForzacSettings *settings, ForzacPage *out);
+// The end page after the book's last page, for the current style.
+ForzacPage forzac_end_page(ForzacDocument *doc);
 // Rectangles over the text [from, to) (a search match) on a page of the current chapter, or between heights of a
 // chapter's column; up to `capacity` into `out`, returns how many.
 uint32_t forzac_marks(ForzacDocument *doc, uint32_t page, ForzacLocator from, ForzacLocator to, ForzacRect *out, uint32_t capacity);
@@ -154,7 +168,8 @@ void forzac_settings_step(ForzacSettings *settings, uint32_t setting, int32_t de
 // Reading state: positions, recent books and settings in the file at `path`.
 ForzacState *forzac_state_open(const char *path);
 bool forzac_state_position(const ForzacState *state, const ForzacDocument *doc, ForzacLocator *out);
-bool forzac_state_save_position(ForzacState *state, const ForzacDocument *doc, ForzacLocator at);
+// `finished`: the end page was shown; the book reads 100 %.
+bool forzac_state_save_position(ForzacState *state, const ForzacDocument *doc, ForzacLocator at, bool finished);
 // Valid until the next call on `state`.
 const ForzacRecent *forzac_state_recent(ForzacState *state, uint32_t n, uint32_t *count);
 ForzacSettings forzac_state_settings(const ForzacState *state);

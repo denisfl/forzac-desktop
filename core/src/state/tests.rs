@@ -32,7 +32,7 @@ fn positions_and_settings_survive_a_restart() {
     let b = book("aaaa", &[4, 4]);
     let mut store = Store::open(&file);
     assert_eq!(store.position(&b, Path::new("/books/a.fb2")), None);
-    store.save_position(&b, Path::new("/books/a.fb2"), at(1, 2, 5)).unwrap();
+    store.save_position(&b, Path::new("/books/a.fb2"), at(1, 2, 5), false).unwrap();
     store.set_setting("theme", "Dark").unwrap();
 
     let store = Store::open(&file);
@@ -47,7 +47,7 @@ fn positions_and_settings_survive_a_restart() {
 fn a_moved_file_keeps_its_position_and_a_changed_one_falls_back_to_the_path() {
     let file = dir().join("state");
     let mut store = Store::open(&file);
-    store.save_position(&book("aaaa", &[3, 3]), Path::new("/old/a.epub"), at(1, 1, 0)).unwrap();
+    store.save_position(&book("aaaa", &[3, 3]), Path::new("/old/a.epub"), at(1, 1, 0), false).unwrap();
     assert_eq!(store.position(&book("aaaa", &[3, 3]), Path::new("/new/a.epub")), Some(at(1, 1, 0)), "same content elsewhere");
     assert_eq!(store.position(&book("bbbb", &[3, 3]), Path::new("/old/a.epub")), Some(at(1, 1, 0)), "new content, same path");
     assert_eq!(store.position(&book("bbbb", &[3, 3]), Path::new("/other.epub")), None);
@@ -66,8 +66,8 @@ fn writes_keep_what_another_process_wrote() {
     let file = dir().join("state");
     let mut first = Store::open(&file);
     let mut second = Store::open(&file);
-    first.save_position(&book("aaaa", &[2]), Path::new("/a"), at(0, 1, 0)).unwrap();
-    second.save_position(&book("bbbb", &[2]), Path::new("/b"), at(0, 0, 3)).unwrap();
+    first.save_position(&book("aaaa", &[2]), Path::new("/a"), at(0, 1, 0), false).unwrap();
+    second.save_position(&book("bbbb", &[2]), Path::new("/b"), at(0, 0, 3), false).unwrap();
     second.set_setting("text-size", "22").unwrap();
     first.set_setting("theme", "Sepia").unwrap();
     let store = Store::open(&file);
@@ -145,7 +145,7 @@ fn a_thousand_books_read_and_write_quickly() {
     let t = std::time::Instant::now();
     let mut store = Store::open(&file);
     let read = t.elapsed();
-    store.save_position(&book("aaaa", &[2]), Path::new("/a"), at(0, 1, 0)).unwrap();
+    store.save_position(&book("aaaa", &[2]), Path::new("/a"), at(0, 1, 0), false).unwrap();
     let elapsed = t.elapsed();
     eprintln!("1000 books: read in {read:?}, read and one save in {elapsed:?}");
     assert_eq!(store.books.len(), 1001);
@@ -161,4 +161,15 @@ fn progress_of_many_places_matches_one_by_one() {
     for (p, place) in many.iter().zip(places) {
         assert!((p - progress(&b, place)).abs() < 1e-6);
     }
+}
+
+#[test]
+fn a_finished_book_reads_100_percent() {
+    let file = dir().join("state");
+    let b = book("aaaa", &[4, 4]);
+    let mut store = Store::open(&file);
+    store.save_position(&b, Path::new("/books/a.fb2"), at(1, 3, 0), true).unwrap();
+    let store = Store::open(&file);
+    assert_eq!(store.position(&b, Path::new("/books/a.fb2")), Some(at(1, 3, 0)), "the last page's start");
+    assert_eq!(store.books[0].progress, 1.0);
 }

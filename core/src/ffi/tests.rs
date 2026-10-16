@@ -43,7 +43,7 @@ fn string(p: *const c_char) -> Option<String> {
 #[test]
 fn a_book_through_the_c_functions() {
     let path = book_file();
-    let doc = unsafe { forzac_open(c(path.to_str().unwrap()).as_ptr()) };
+    let doc = unsafe { forzac_open(c(path.to_str().unwrap()).as_ptr(), std::ptr::null_mut()) };
     assert!(!doc.is_null());
     unsafe {
         assert_eq!(string(forzac_title(doc)).as_deref(), Some("Рассказы"));
@@ -83,6 +83,7 @@ fn a_book_through_the_c_functions() {
         assert_eq!(forzac_link(doc, c("https://example.org").as_ptr(), &mut at, &mut text), 3);
         assert_eq!(string(text).as_deref(), Some("https://example.org"));
         assert_eq!(forzac_link(doc, c("#nowhere").as_ptr(), &mut at, &mut text), 0);
+        assert!(forzac_link_preview(doc, c("#ch3").as_ptr(), 500.0, &settings, &mut std::mem::zeroed()) < 0.0, "a chapter is long");
 
         let mut note = std::mem::zeroed();
         assert!(forzac_note(doc, c("n1").as_ptr(), 500.0, &settings, &mut note) > 20.0);
@@ -91,6 +92,8 @@ fn a_book_through_the_c_functions() {
         assert!(forzac_note(doc, c("missing").as_ptr(), 500.0, &settings, &mut note) < 0.0);
 
         assert_eq!(forzac_progress(doc, ForzacLocator { chapter: 0, block: 0, offset: 0 }), 0.0);
+        let end = forzac_end_page(doc);
+        assert!(end.run_count >= 2 && end.area_count == 0, "title, author, Finished");
         let mut len = 0;
         assert!(forzac_cover(doc, &mut len).is_null());
         forzac_close(doc);
@@ -109,8 +112,8 @@ fn settings_and_recent_books_through_the_state() {
         forzac_settings_step(&mut s, 2, 5, false); // sizes stop at the end
         assert_eq!((s.family, forzac_settings_text_size(&s)), (1, 30.0));
         assert!(forzac_state_save_settings(state, &s));
-        let doc = forzac_open(c(path.to_str().unwrap()).as_ptr());
-        assert!(forzac_state_save_position(state, doc, ForzacLocator { chapter: 2, block: 1, offset: 0 }));
+        let doc = forzac_open(c(path.to_str().unwrap()).as_ptr(), std::ptr::null_mut());
+        assert!(forzac_state_save_position(state, doc, ForzacLocator { chapter: 2, block: 1, offset: 0 }, false));
         forzac_state_close(state);
 
         let state = forzac_state_open(c(state_path.to_str().unwrap()).as_ptr());
@@ -133,7 +136,7 @@ fn settings_and_recent_books_through_the_state() {
 fn a_variable_family_reports_its_axes() {
     unsafe {
         forzac_set_assets(c(concat!(env!("CARGO_MANIFEST_DIR"), "/../assets")).as_ptr());
-        let doc = forzac_open(c(book_file().to_str().unwrap()).as_ptr());
+        let doc = forzac_open(c(book_file().to_str().unwrap()).as_ptr(), std::ptr::null_mut());
         let settings = ForzacSettings { family: 1, ..forzac_settings_default() }; // Literata
         forzac_paginate(doc, 1, 600.0, 800.0, &settings);
         let page = forzac_page(doc, 0);
@@ -154,7 +157,7 @@ fn a_variable_family_reports_its_axes() {
 #[test]
 fn search_and_marks_through_the_c_functions() {
     unsafe {
-        let doc = forzac_open(c(book_file().to_str().unwrap()).as_ptr());
+        let doc = forzac_open(c(book_file().to_str().unwrap()).as_ptr(), std::ptr::null_mut());
         let book = forzac_book(doc);
         // Searched on another thread, as the shell does (pointers as addresses to cross the thread).
         let address = book as usize;
@@ -176,6 +179,35 @@ fn search_and_marks_through_the_c_functions() {
         assert!(rects[0].w > 40.0);
         assert_eq!(forzac_flow_marks(doc, h.start.chapter, 0.0, 100_000.0, h.start, h.end, rects.as_mut_ptr(), 4), 1);
         forzac_search_free(search);
+        forzac_close(doc);
+    }
+}
+
+#[test]
+fn errors_and_previews_through_the_c_functions() {
+    unsafe {
+        let mut error = 0;
+        assert!(forzac_open(c("/nonexistent/book.fb2").as_ptr(), &mut error).is_null());
+        assert_eq!(error, 5, "unavailable");
+        let path = book_file().with_file_name("photo.png");
+        std::fs::write(&path, b"\x89PNG not a book").unwrap();
+        assert!(forzac_open(c(path.to_str().unwrap()).as_ptr(), &mut error).is_null());
+        assert_eq!(error, 1, "not a book");
+
+        // A link to one paragraph: kind 4, typeset for the note sheet.
+        let fb2 = r##"<?xml version="1.0" encoding="utf-8"?><FictionBook xmlns:l="http://www.w3.org/1999/xlink">
+            <description><title-info><book-title>T</book-title><lang>ru</lang></title-info></description>
+            <body><section><p>См. <a l:href="#p2">пояснение</a>.</p><p id="p2">Короткое пояснение.</p></section></body></FictionBook>"##;
+        let path = path.with_file_name("links.fb2");
+        std::fs::write(&path, fb2).unwrap();
+        let doc = forzac_open(c(path.to_str().unwrap()).as_ptr(), &mut error);
+        assert!(!doc.is_null());
+        let (mut at, mut text) = (ForzacLocator { chapter: 0, block: 0, offset: 0 }, std::ptr::null());
+        assert_eq!(forzac_link(doc, c("#p2").as_ptr(), &mut at, &mut text), 4);
+        let settings = forzac_settings_default();
+        let mut out = std::mem::zeroed();
+        assert!(forzac_link_preview(doc, c("#p2").as_ptr(), 500.0, &settings, &mut out) > 10.0);
+        assert!(out.run_count > 0);
         forzac_close(doc);
     }
 }

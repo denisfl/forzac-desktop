@@ -1,6 +1,7 @@
 //! Search in a book: the Android app's rules (`Search.kt`) without the PDF ones. Case and "ё"/"е" do not matter, a
 //! soft hyphen in the text does not interrupt a match, a non-breaking space equals a space and a space in the query
-//! matches any run of white space. Paragraphs and headings are searched; notes and table rows are not.
+//! matches any run of white space. Paragraphs, headings and table cells are searched (a match stays in its cell); notes
+//! are not.
 
 use std::ops::Range;
 
@@ -52,28 +53,31 @@ pub fn search(book: &Book, q: &str) -> Vec<Hit> {
     let mut chars: Vec<(usize, char)> = Vec::new();
     for (c, chapter) in book.chapters.iter().enumerate() {
         for (b, block) in chapter.blocks.iter().enumerate() {
-            let text = match block {
-                Block::Paragraph { text, .. } | Block::Heading { text, .. } => &text.text,
-                _ => {
-                    before += block.text_len();
-                    continue;
+            // The texts to search and where each starts in the block's text: a table row's cells one by one.
+            let texts: Vec<(&str, usize)> = match block {
+                Block::Paragraph { text, .. } | Block::Heading { text, .. } => vec![(&text.text, 0)],
+                Block::TableRow { table, row } => {
+                    table.rows[*row].iter().map(|c| c.text.text.as_str()).zip(table.cell_starts(*row)).collect()
                 }
+                _ => Vec::new(),
             };
-            chars.clear();
-            chars.extend(text.char_indices());
-            let mut i = 0;
-            while i < chars.len() {
-                match match_at(&chars, i, &q) {
-                    Some(end) => {
-                        let (start, end_byte) = (chars[i].0, chars.get(end).map_or(text.len(), |c| c.0));
-                        let at = Locator { chapter: c, block: b, offset: start };
-                        let section = contents.iter().rev().find(|e| e.target <= at).map(|e| e.title.clone());
-                        let position = if total == 0 { 0.0 } else { (before + start.min(block.text_len())) as f32 / total as f32 };
-                        let (snippet, matched) = snippet(&chars, i, end);
-                        hits.push(Hit { start: at, end: Locator { offset: end_byte, ..at }, snippet, matched, section, position });
-                        i = end.max(i + 1);
+            for (text, base) in texts {
+                chars.clear();
+                chars.extend(text.char_indices());
+                let mut i = 0;
+                while i < chars.len() {
+                    match match_at(&chars, i, &q) {
+                        Some(end) => {
+                            let (start, end_byte) = (base + chars[i].0, base + chars.get(end).map_or(text.len(), |c| c.0));
+                            let at = Locator { chapter: c, block: b, offset: start };
+                            let section = contents.iter().rev().find(|e| e.target <= at).map(|e| e.title.clone());
+                            let position = if total == 0 { 0.0 } else { (before + start.min(block.text_len())) as f32 / total as f32 };
+                            let (snippet, matched) = snippet(&chars, i, end);
+                            hits.push(Hit { start: at, end: Locator { offset: end_byte, ..at }, snippet, matched, section, position });
+                            i = end.max(i + 1);
+                        }
+                        None => i += 1,
                     }
-                    None => i += 1,
                 }
             }
             before += block.text_len();

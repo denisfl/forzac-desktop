@@ -697,11 +697,14 @@ final class ContentsRow: NSTableRowView {
 final class NoteSheet: SheetView {
     private weak var view: PageView?
 
-    init?(view: PageView, id: String, windowSize: CGSize) {
+    /// Note `id`, or with `preview` the short target of link `id` (a figure, a table, a paragraph) without a label.
+    init?(view: PageView, id: String, preview: Bool = false, windowSize: CGSize) {
         self.view = view
         let width = min(sheetWidth, windowSize.width) - 48
         var page = ForzacPage()
-        let height = withUnsafePointer(to: view.settings) { forzac_note(view.doc, id, Float(width), $0, &page) }
+        let height = withUnsafePointer(to: view.settings) {
+            preview ? forzac_link_preview(view.doc, id, Float(width), $0, &page) : forzac_note(view.doc, id, Float(width), $0, &page)
+        }
         guard height > 0 else { return nil }
         let p = view.palette
         let scale = NSScreen.main?.backingScaleFactor ?? 2
@@ -711,10 +714,12 @@ final class NoteSheet: SheetView {
         }
         super.init(spacing: 12, insets: NSEdgeInsets(top: 10, left: 24, bottom: 36, right: 24))
         addGrabber()
-        let title = forzac_note_title(view.doc, id).map { String(cString: $0) } ?? ""
-        let caption = label(["Note", title].filter { !$0.isEmpty }.joined(separator: " ").uppercased(), interfaceFont(12, .medium), p.muted)
-        caption.attributedStringValue = NSAttributedString(string: caption.stringValue, attributes: [.kern: 0.72, .font: interfaceFont(12, .medium), .foregroundColor: nsColor(p.muted)])
-        stack.addArrangedSubview(caption)
+        if !preview {
+            let title = forzac_note_title(view.doc, id).map { String(cString: $0) } ?? ""
+            let caption = label(["Note", title].filter { !$0.isEmpty }.joined(separator: " ").uppercased(), interfaceFont(12, .medium), p.muted)
+            caption.attributedStringValue = NSAttributedString(string: caption.stringValue, attributes: [.kern: 0.72, .font: interfaceFont(12, .medium), .foregroundColor: nsColor(p.muted)])
+            stack.addArrangedSubview(caption)
+        }
         let text = LayerView()
         text.layer!.contents = image
         text.layer!.contentsScale = scale

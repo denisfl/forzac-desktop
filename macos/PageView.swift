@@ -8,7 +8,13 @@ import QuartzCore
 /// What the view asks its window for.
 enum Command {
     case contents, settings, search, help, closePanels, note(String)
+    /// A link's short target in the note sheet.
+    case preview(String)
 }
+
+/// The pill after a jump, as on Android: it goes when the reader turns this many pages (or screens) away.
+private let pillPages: Int32 = 2
+private let pillLabel = "← Back · ⌃O"
 
 final class PageView: NSView {
     let doc: OpaquePointer
@@ -42,6 +48,20 @@ final class PageView: NSView {
     private var currentMatch: Int?
     /// Horizontal trackpad scrolling not yet turned into a page turn, and whether this swipe already turned one.
     private var swipe: (CGFloat, Bool) = (0, false)
+    /// Where the mouse went down: a click that moved is a drag, not a turn.
+    private var mouseDownAt: CGPoint?
+    /// Where the last jump arrived and the pages turned since ("Slide"), for the "← Back" pill; nil once the reader
+    /// returned or read on.
+    private var pill: (arrived: ForzacLocator, turns: Int32)?
+    private let pillLayer = CALayer()
+    private let pillText = CATextLayer()
+    /// "Slide": the end page after the book's last page is shown. "Scroll": the end screen fills the window.
+    private(set) var atEnd = false
+    private var columnEnd = false
+    private var endImage: CGImage?
+    private let endLayer = CALayer()
+    /// The end page (or end screen) is shown: the position is saved as finished.
+    var finished: Bool { scrolling ? columnEnd : atEnd }
 
     // "Scroll".
     private var offset: CGFloat = 0
@@ -77,6 +97,16 @@ final class PageView: NSView {
         }
         focusLayer.actions = ["sublayers": NSNull(), "contents": NSNull(), "position": NSNull(), "bounds": NSNull()]
         layer!.addSublayer(focusLayer)
+        endLayer.actions = ["contents": NSNull(), "position": NSNull(), "bounds": NSNull(), "hidden": NSNull()]
+        endLayer.isHidden = true
+        layer!.insertSublayer(endLayer, below: focusLayer)
+        // The pill fades (its opacity's implicit 0.25 s animation, shortened to Android's 150 ms when it changes).
+        pillLayer.actions = ["position": NSNull(), "bounds": NSNull(), "backgroundColor": NSNull()]
+        pillLayer.opacity = 0
+        pillText.actions = ["contents": NSNull(), "position": NSNull(), "bounds": NSNull(), "foregroundColor": NSNull()]
+        pillText.alignmentMode = .center
+        pillLayer.addSublayer(pillText)
+        layer!.addSublayer(pillLayer)
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -124,6 +154,7 @@ final class PageView: NSView {
         toLast = false
         laidOutFor = key
         images = [:]
+        endImage = nil
         pageAreas = [:]
         focus = nil
         if styleChanged {
@@ -148,16 +179,28 @@ final class PageView: NSView {
         return image
     }
 
+    /// The end page after the book's last page, as a bitmap at the backing scale.
+    private func endPage() -> CGImage? {
+        if let i = endImage { return i }
+        let h = bounds.height
+        endImage = bitmap(bounds.size, scale: scale, background: palette.paper) { ctx in
+            drawPage(forzac_end_page(doc), in: ctx, height: h, palette: palette, fonts: fonts, pictures: &pictures)
+        }
+        return endImage
+    }
+
     /// Shows the current page; `animated` +1 slides it in from the right, −1 from the left.
     func show(animated dir: CGFloat) {
         layer!.backgroundColor = color(palette.paper)
+        defer { updatePill() }
         if scrolling {
             current.contents = nil
             previous.contents = nil
             placeTiles()
             return
         }
-        guard let img = image(page) else { return }
+        endLayer.isHidden = true
+        guard let img = atEnd ? endPage() : image(page) else { return }
         let frame = bounds
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -191,7 +234,24 @@ final class PageView: NSView {
 
     func turn(_ delta: Int32) {
         if scrolling { return scroll(by: CGFloat(delta) * (bounds.height - lineHeight)) }
+        if atEnd {
+            // Back from the end page to the last page of the text; forward does nothing.
+            guard delta < 0 else { return }
+            atEnd = false
+            show(animated: -1)
+            onMoved?()
+            return
+        }
         let target = Int64(page) + Int64(delta)
+        if pill != nil { pill!.turns += delta }
+        if delta > 0 && target >= Int64(pageCount) && chapter + 1 == forzac_chapter_count(doc) {
+            // Past the book's last page: the end page; the position stays at the last page.
+            atEnd = true
+            focus = nil
+            show(animated: 1)
+            onMoved?()
+            return
+        }
         if target >= 0 && target < Int64(pageCount) {
             page = UInt32(target)
             locator = forzac_page_start(doc, page)
@@ -230,6 +290,7 @@ final class PageView: NSView {
         page = end ? pageCount - 1 : 0
         locator = forzac_page_start(doc, page)
         focus = nil
+        atEnd = false
         show(animated: 0)
         onMoved?()
     }
@@ -239,11 +300,13 @@ final class PageView: NSView {
         if remember {
             back.append(locator)
             if back.count > 50 { back.removeFirst() }
+            pill = (at, 0)
         }
         locator = at
         chapter = at.chapter
         focus = nil
         motion = nil
+        atEnd = false
         laidOutFor = nil
         relayout()
         if scrolling { offset = CGFloat(forzac_flow_y(doc, locator)) - marginTop }
@@ -253,17 +316,53 @@ final class PageView: NSView {
 
     /// Back to where the last jump started.
     func goBack() {
-        guard let at = back.popLast() else { return }
+        pill = nil
+        guard let at = back.popLast() else { return updatePill() }
         go(to: at, remember: false)
+    }
+
+    /// The "← Back · ⌃O" pill over the foot while the last jump is fresh: the ink as its fill, the paper as its text
+    /// (Android's `ReturnPill`).
+    private func updatePill() {
+        if let p = pill {
+            let far: Bool
+            if !scrolling {
+                far = abs(p.turns) >= pillPages
+            } else if p.arrived.chapter == locator.chapter {
+                far = abs(forzac_flow_y(doc, locator) - forzac_flow_y(doc, p.arrived)) >= Float(pillPages) * Float(bounds.height)
+            } else {
+                far = motion == nil
+            }
+            if far { pill = nil }
+        }
+        let visible = pill != nil && !back.isEmpty && !finished
+        let font = interfaceFont(14)
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.15)
+        if visible {
+            pillText.string = NSAttributedString(string: pillLabel, attributes: [.font: font, .foregroundColor: nsColor(palette.paper)])
+            pillText.contentsScale = scale
+            let text = pillText.preferredFrameSize()
+            let (w, h) = (text.width + 36, text.height + 20)
+            CATransaction.setDisableActions(true)
+            pillLayer.backgroundColor = color(palette.ink)
+            pillLayer.cornerRadius = h / 2
+            // Centred on the foot (half the bottom margin, 56 px), as Android's pill replaces the page number.
+            pillLayer.frame = CGRect(x: (bounds.width - w) / 2, y: 28 - h / 2, width: w, height: h)
+            pillText.frame = CGRect(x: 18, y: 10, width: text.width, height: text.height)
+            CATransaction.setDisableActions(false)
+        }
+        pillLayer.opacity = visible ? 1 : 0
+        CATransaction.commit()
     }
 
     // MARK: Settings
 
     func apply(_ new: ForzacSettings) {
         if new.turning != settings.turning { switchMode() }
-        let recolour = new.theme != settings.theme
+        let before = theme
         settings = new
-        if recolour { recoloured() }
+        if theme != before { recoloured() }
         relayout()
         show(animated: 0)
         onSettings?()
@@ -285,9 +384,15 @@ final class PageView: NSView {
         }
     }
 
-    /// The ink is baked into the bitmaps: a new theme draws them again, without a new layout.
+    /// The ink is baked into the bitmaps: a new theme draws them again, without a new layout, cross-fading the window's
+    /// content (page and panels) into the new colours in 200 ms.
     private func recoloured() {
+        let fade = CATransition()
+        fade.type = .fade
+        fade.duration = 0.2
+        (superview?.layer ?? layer)?.add(fade, forKey: "theme")
         images = [:]
+        endImage = nil
         clearTiles()
     }
 
@@ -295,6 +400,8 @@ final class PageView: NSView {
     private func switchMode() {
         motion = nil
         focus = nil
+        atEnd = false
+        columnEnd = false
         if scrolling {
             locator = forzac_flow_locator(doc, chapter, Float(offset + marginTop))
             chapter = locator.chapter
@@ -339,8 +446,9 @@ final class PageView: NSView {
                 break
             }
         }
-        let end = max(0, CGFloat(forzac_flow_height(doc, chapter)) - bounds.height)
         let last = chapter + 1 == count
+        // After the last paragraph, the end screen a window high.
+        let end = last ? CGFloat(forzac_flow_height(doc, chapter)) : max(0, CGFloat(forzac_flow_height(doc, chapter)) - bounds.height)
         let clamped = last ? min(max(offset, 0), end) : max(offset, 0)
         if clamped != offset {
             offset = clamped
@@ -417,6 +525,18 @@ final class PageView: NSView {
             tiles[key]?.isHidden = false
         }
         for (key, t) in tiles where !shown.contains(key) { t.isHidden = true }
+        // The end screen after the last chapter's column, when it reaches into the window.
+        let count = forzac_chapter_count(doc)
+        var top = -offset.rounded()
+        for c in chapter..<count { top += CGFloat(forzac_flow_height(doc, c)) + (c + 1 < count ? gap : 0) }
+        if top < h, let img = endPage() {
+            endLayer.contents = img
+            endLayer.contentsScale = scale
+            endLayer.frame = CGRect(x: 0, y: h - top - bounds.height, width: bounds.width, height: bounds.height)
+            endLayer.isHidden = false
+        } else {
+            endLayer.isHidden = true
+        }
         CATransaction.commit()
         if tiles.count > 16 {
             for key in tiles.keys where !shown.contains(key) && (key.chapter != chapter || abs(key.index - Int(offset / max(1, h))) > 2) {
@@ -466,6 +586,8 @@ final class PageView: NSView {
     /// The column stopped: the reading position is its top line; the tiles a screen around are drawn in idle time.
     private func settle() {
         locator = forzac_flow_locator(doc, chapter, Float(offset + marginTop))
+        columnEnd = chapter + 1 == forzac_chapter_count(doc) && offset >= CGFloat(forzac_flow_height(doc, chapter)) - 0.5
+        updatePill()
         onMoved?()
         DispatchQueue.main.async { [weak self] in
             guard let self, self.motion == nil, self.scrolling else { return }
@@ -477,6 +599,7 @@ final class PageView: NSView {
 
     /// The markers and links on screen, y down.
     private func visibleAreas() -> [Area] {
+        if atEnd { return [] }
         if !scrolling { return pageAreas[page] ?? [] }
         var out: [Area] = []
         forTiles(from: 0, to: bounds.height) { top, key in
@@ -530,7 +653,7 @@ final class PageView: NSView {
 
     /// The highlighted match's rectangles on screen, y down: on the page, or in the column's current and next chapter.
     private func matchRects() -> [CGRect] {
-        guard let i = currentMatch, let (from, to) = matches[safe: i] else { return [] }
+        guard !atEnd, let i = currentMatch, let (from, to) = matches[safe: i] else { return [] }
         var rects = [ForzacRect](repeating: ForzacRect(x: 0, y: 0, w: 0, h: 0), count: 8)
         var out: [CGRect] = []
         func add(_ n: UInt32, dy: CGFloat) {
@@ -592,16 +715,26 @@ final class PageView: NSView {
         case 1: go(to: at)
         case 2: if let text { onCommand?(.note(String(cString: text))) }
         case 3: if let text, let url = URL(string: String(cString: text)) { NSWorkspace.shared.open(url) }
+        case 4: onCommand?(.preview(area.target))
         default: break
         }
+    }
+
+    override func mouseDown(with e: NSEvent) {
+        mouseDownAt = convert(e.locationInWindow, from: nil)
     }
 
     override func mouseUp(with e: NSEvent) {
         if panelOpen?() == true { return onCommand?(.closePanels) ?? () }
         let p = convert(e.locationInWindow, from: nil)
+        if let down = mouseDownAt, hypot(p.x - down.x, p.y - down.y) > 4 { return } // a drag, not a click
+        if pillLayer.opacity > 0, pillLayer.frame.contains(p) { return goBack() }
         let y = bounds.height - p.y
         if let a = visibleAreas().first(where: { $0.rect.insetBy(dx: -4, dy: -4).contains(CGPoint(x: p.x, y: y)) }) {
             open(a)
+        } else if !scrolling {
+            // The side thirds turn the page, as taps do on Android; the middle does nothing.
+            if p.x < bounds.width / 3 { turn(-1) } else if p.x > bounds.width * 2 / 3 { turn(1) }
         }
     }
 

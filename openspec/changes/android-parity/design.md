@@ -83,9 +83,11 @@ in the Android wording without PDF: GTK a `gtk::AlertDialog` (the application he
 `xdg-open` still shows it), macOS the existing `NSAlert` with the reason as its informative text. After the message,
 with no book window open, the recent books show.
 
-**One window per book and after the last one (D1, P5) — GTK.** The application keeps its book windows by canonical
-path and presents the existing one. When a book window closes and it was the last window, the recent books open;
-closing the recent books quits, as it does now. macOS already behaves this way.
+**One window per book and after the last one (D1, P5) — GTK, and macOS for P5.** The application keeps its book
+windows by canonical path and presents the existing one. When a book window closes and it was the last window, the
+recent books open; closing the recent books quits, as it does now. macOS meant to do the same, but quit when its last
+window closed before the recent books could show (found in the by-hand pass): it now stays after the last book window,
+and closing the recent books quits.
 
 **Keeping the screen on (X2) — shells.** GTK: `Application::inhibit(window, IDLE, "Reading")` while a book window is
 active and was touched in the last 10 minutes (key, turn, scroll, click), `uninhibit` 10 minutes after the last

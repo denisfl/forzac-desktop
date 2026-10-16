@@ -47,12 +47,12 @@ impl Hyphenator {
         Self { patterns: map, exceptions: exc, max_len, left, right }
     }
 
-    /// Patterns bundled for `language` (`ru`, `en`); `None` for languages without patterns.
-    /// A book without a language is treated as Russian, as on Android.
+    /// Patterns bundled for `language` (`ru`, `en`); `None` for other languages and for none (`parse` gives every book
+    /// a language, guessed from its text when it names none).
     pub fn for_language(language: Option<&str>) -> Option<Self> {
-        let lang = language.unwrap_or("ru").split(['-', '_']).next().unwrap_or("").to_lowercase();
+        let lang = language?.split(['-', '_']).next().unwrap_or("").to_lowercase();
         match lang.as_str() {
-            "ru" | "" => {
+            "ru" => {
                 Some(Self::new(include_str!("../../assets/hyph/hyph-ru.pat.txt"), include_str!("../../assets/hyph/hyph-ru.hyp.txt"), 2, 2))
             }
             "en" => Some(Self::new(
@@ -117,5 +117,7 @@ mod tests {
         assert_eq!(split(&ru, "сон"), "сон");
         let en = Hyphenator::for_language(Some("en-GB")).unwrap();
         assert_eq!(split(&en, "hyphenation"), "hy-phen-ation");
+        assert!(Hyphenator::for_language(Some("de")).is_none());
+        assert!(Hyphenator::for_language(None).is_none());
     }
 }

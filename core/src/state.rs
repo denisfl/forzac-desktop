@@ -56,15 +56,15 @@ impl Store {
         Some(clamp(book, entry.position))
     }
 
-    /// Remembers that `book`, opened from `path`, is read at `at`.
-    pub fn save_position(&mut self, book: &Book, path: &Path, at: Locator) -> io::Result<()> {
+    /// Remembers that `book`, opened from `path`, is read at `at`; a `finished` book (its end page shown) reads 100 %.
+    pub fn save_position(&mut self, book: &Book, path: &Path, at: Locator, finished: bool) -> io::Result<()> {
         let entry = Entry {
             id: book.id.clone(),
             path: path.to_owned(),
             title: book.title.clone(),
             authors: book.authors.join(", "),
             position: at,
-            progress: progress(book, at),
+            progress: if finished { 1.0 } else { progress(book, at) },
             opened: now(),
         };
         self.write(|books, _| {

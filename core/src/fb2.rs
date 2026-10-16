@@ -26,7 +26,7 @@ const MAX_UNPACKED: u64 = 256 * 1024 * 1024;
 /// Parses `.fb2` or `.fb2.zip` content.
 pub fn parse(bytes: &[u8]) -> Result<Book, Error> {
     if bytes.starts_with(b"PK") {
-        let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|_| Error::NotABook)?;
+        let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|_| Error::Damaged)?;
         let name = zip
             .file_names()
             .filter_map(Result::ok)

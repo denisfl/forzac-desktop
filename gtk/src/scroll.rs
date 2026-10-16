@@ -112,9 +112,9 @@ fn normalize(s: &mut State, height: f32) -> bool {
             break;
         }
     }
-    // The ends of the book.
-    let end = s.layout.as_ref().map_or(0.0, |l| (l.flow_height() - height).max(0.0));
+    // The ends of the book; after the last paragraph, the end screen a window high.
     let last = s.chapter + 1 == s.book.chapters.len();
+    let end = s.layout.as_ref().map_or(0.0, |l| if last { l.flow_height() } else { (l.flow_height() - height).max(0.0) });
     let clamped = if last { s.column.offset.clamp(0.0, end) } else { s.column.offset.max(0.0) };
     if clamped != s.column.offset {
         s.column.offset = clamped;
@@ -161,6 +161,8 @@ impl PageView {
             }
             s.turn = None;
             s.focus = None;
+            s.at_end = false;
+            s.column_end = false;
             s.mode
         });
         self.moved();
@@ -281,6 +283,8 @@ impl PageView {
             let margin = s.style.map_or(0.0, |st| st.margin_top);
             if let Some(l) = &s.layout {
                 s.locator = l.flow_locator(s.column.offset + margin);
+                // The end screen fills the window: the book is finished.
+                s.column_end = s.chapter + 1 == s.book.chapters.len() && s.column.offset >= l.flow_height() - 0.5;
             }
         });
         self.moved();
@@ -353,6 +357,25 @@ impl PageView {
             snapshot.append_node(node);
             snapshot.restore();
         });
+        // The end screen after the last chapter's column, when it reaches into the window.
+        let last = s.book.chapters.len() - 1;
+        let (mut chapter, mut top) = (s.chapter, -s.column.offset.round());
+        while chapter < last
+            && let Some(length) = layout(s, chapter, false).map(|l| l.flow_height())
+        {
+            top += length + gap(s);
+            chapter += 1;
+        }
+        if chapter == last
+            && let Some(length) = layout(s, last, false).map(|l| l.flow_height())
+            && top + length < h
+            && let Some(node) = Self::end_node(s)
+        {
+            snapshot.save();
+            snapshot.translate(&graphene::Point::new(0.0, top + length));
+            snapshot.append_node(&node);
+            snapshot.restore();
+        }
         // The match highlighted: in the current chapter or the next one, where it reaches into the window.
         for (chapter, top) in [
             (s.chapter, -s.column.offset.round()),

@@ -65,3 +65,19 @@ fn notes_are_not_searched_and_positions_grow() {
     let hits = search(&b, "текст");
     assert!(hits[0].position < hits[1].position);
 }
+
+#[test]
+fn table_cells() {
+    use crate::model::{Table, TableCell};
+    use std::sync::Arc;
+    let cell = |t: &str| TableCell { text: StyledText { text: t.into(), styles: Vec::new() }, header: false, col_span: 1 };
+    let table = Arc::new(Table { rows: vec![vec![cell("Свойство"), cell("Реляционная модель")]] });
+    let mut b = book(&["Текст"]);
+    b.chapters[0].blocks.push(Block::TableRow { table, row: 0 });
+    let hits = search(&b, "реляционная");
+    assert_eq!(hits.len(), 1, "found in a cell");
+    let offset = "Свойство\n".len();
+    assert_eq!((hits[0].start.block, hits[0].start.offset), (2, offset), "an offset into the row's text");
+    assert_eq!(matched(&hits[0]), "Реляционная");
+    assert!(search(&b, "свойство реляционная").is_empty(), "a match stays in its cell");
+}

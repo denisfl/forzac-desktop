@@ -43,7 +43,7 @@ let assetsDir: String = {
 /// The interface font (Golos Text) and the book families, usable by name in the panels: registered for this process
 /// when the first panel is built, so the start does not read them.
 let registerInterfaceFonts: Void = {
-    for family in ["golos-text", "pt-serif", "literata", "source-serif", "pt-sans"] {
+    for family in ["golos-text", "pt-serif", "literata", "source-serif", "pt-sans", "pt-mono"] {
         let dir = URL(fileURLWithPath: assetsDir).appendingPathComponent("fonts/\(family)")
         let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
         for file in files where file.pathExtension == "ttf" { CTFontManagerRegisterFontsForURL(file as CFURL, .process, nil) }
@@ -159,6 +159,12 @@ func drawPage(_ page: ForzacPage, in ctx: CGContext, height h: CGFloat, palette:
         let rule = page.rules[i]
         ctx.setFillColor(color(palette.ink, alpha: ruleAlpha[Int(rule.strength)]))
         ctx.fill(flipped(rule.rect))
+    }
+    // Lines through struck-out text, in their run's ink.
+    for i in 0..<Int(page.stroke_count) {
+        let stroke = page.strokes[i]
+        ctx.setFillColor(stroke.ink == 1 ? color(palette.link) : color(palette.ink, alpha: stroke.ink == 2 ? secondaryAlpha : 1))
+        ctx.fill(flipped(stroke.rect))
     }
     for r in 0..<Int(page.run_count) {
         let run = page.runs[r]

@@ -10,7 +10,7 @@ pub(crate) const MAX_UNPACKED: u64 = 256 * 1024 * 1024;
 
 /// The files of a zip archive by name (directories left out), at most `max` bytes in all.
 pub(crate) fn unzip(bytes: &[u8], max: u64) -> Result<HashMap<String, Vec<u8>>, Error> {
-    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|_| Error::NotABook)?;
+    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|_| Error::Damaged)?;
     let mut files = HashMap::new();
     let mut total = 0u64;
     for i in 0..zip.len() {

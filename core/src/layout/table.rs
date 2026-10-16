@@ -99,7 +99,8 @@ impl Typesetter {
         let base = self.base_spec();
         let mut col = 0;
         let mut cells = Vec::new();
-        for cell in &table.rows[row] {
+        let starts = table.cell_starts(row);
+        for (cell, offset) in table.rows[row].iter().zip(starts) {
             if col >= columns {
                 break;
             }
@@ -108,7 +109,7 @@ impl Typesetter {
             let width = g.x[col + span - 1] + g.w[col + span - 1] - x;
             col += span;
             let spec = Spec { width: width.max(1.0), align: Align::Left, justify: false, bold: cell.header, scale: g.scale, ..base };
-            cells.push(Cell { text: self.text(&cell.text, &spec), x, y: pad });
+            cells.push(Cell { text: self.text(&cell.text, &spec), x, y: pad, offset });
         }
         let rows = &table.rows;
         let header = rows[row].iter().all(|c| c.header);

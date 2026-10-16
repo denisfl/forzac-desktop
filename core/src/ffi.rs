@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::fonts::{self, Family, FontId, FontSource};
 use crate::hyphen::Hyphenator;
-use crate::layout::{ChapterLayout, PageContent, PageStyle, Rect, Target, Typesetter, layout_note, paginate};
+use crate::layout::{ChapterLayout, PageContent, PageStyle, Rect, Target, Typesetter, end_page, layout_note, layout_preview, paginate};
 use crate::model::{Book, LinkTarget, Locator};
 use crate::settings::{Align, Margins, Setting, Settings, Spacing, TEXT_SIZES, THEMES, Turning};
 
@@ -57,6 +57,13 @@ pub struct ForzacRule {
     pub strength: u8,
 }
 
+/// A line through struck-out text, in an ink (0 text, 1 link, 2 secondary).
+#[repr(C)]
+pub struct ForzacStroke {
+    pub rect: ForzacRect,
+    pub ink: u8,
+}
+
 /// A note marker (`kind` 0, `target` the note id) or a link (`kind` 1, `target` the link key).
 #[repr(C)]
 pub struct ForzacArea {
@@ -75,6 +82,8 @@ pub struct ForzacPage {
     pub rule_count: u32,
     pub areas: *const ForzacArea,
     pub area_count: u32,
+    pub strokes: *const ForzacStroke,
+    pub stroke_count: u32,
 }
 
 /// Reading position: chapter, block, byte offset in the block. Pages are derived from it.
@@ -176,6 +185,7 @@ pub struct Document {
     runs: Vec<ForzacRun>,
     images: Vec<ForzacImage>,
     rules: Vec<ForzacRule>,
+    strokes: Vec<ForzacStroke>,
     areas: Vec<ForzacArea>,
     targets: Vec<CString>,
     contents: Vec<ForzacTocEntry>,
@@ -226,6 +236,7 @@ impl Document {
             })
             .collect();
         self.rules = p.rules.iter().map(|r| ForzacRule { rect: r.rect.into(), strength: r.strength }).collect();
+        self.strokes = p.strokes.iter().map(|s| ForzacStroke { rect: s.rect.into(), ink: s.ink as u8 }).collect();
         let (kinds, targets): (Vec<u8>, Vec<CString>) = p
             .areas
             .iter()
@@ -251,6 +262,8 @@ impl Document {
             rule_count: self.rules.len() as u32,
             areas: self.areas.as_ptr(),
             area_count: self.areas.len() as u32,
+            strokes: self.strokes.as_ptr(),
+            stroke_count: self.strokes.len() as u32,
         }
     }
 
@@ -272,14 +285,31 @@ unsafe fn str<'a>(s: *const c_char) -> std::borrow::Cow<'a, str> {
     unsafe { CStr::from_ptr(s) }.to_string_lossy()
 }
 
-/// Opens a book; null when the file is not a readable book.
+/// Opens a book; null when the file is not a readable book, with the reason in `*error` (when not null): 1 not a
+/// book, 2 no text, 3 protected (DRM), 4 a damaged archive, 5 the file cannot be read.
 ///
 /// # Safety
-/// `path` must be a valid NUL-terminated string.
+/// `path` must be a valid NUL-terminated string; `error` null or writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn forzac_open(path: *const c_char) -> *mut Document {
-    let Ok(path) = unsafe { CStr::from_ptr(path) }.to_str() else { return std::ptr::null_mut() };
-    let Ok(book) = crate::open(Path::new(path)) else { return std::ptr::null_mut() };
+pub unsafe extern "C" fn forzac_open(path: *const c_char, error: *mut u32) -> *mut Document {
+    let fail = |e: crate::Error| {
+        if !error.is_null() {
+            let code = match e {
+                crate::Error::NotABook => 1,
+                crate::Error::NoText => 2,
+                crate::Error::Protected => 3,
+                crate::Error::Damaged => 4,
+                crate::Error::Unavailable => 5,
+            };
+            unsafe { *error = code };
+        }
+        std::ptr::null_mut()
+    };
+    let Ok(path) = unsafe { CStr::from_ptr(path) }.to_str() else { return fail(crate::Error::Unavailable) };
+    let book = match crate::open(Path::new(path)) {
+        Ok(book) => book,
+        Err(e) => return fail(e),
+    };
     let title = cstring(&book.title);
     let authors = cstring(&book.authors.join(", "));
     let hyphenator = Hyphenator::for_language(book.language.as_deref()).map(Arc::new);
@@ -297,6 +327,7 @@ pub unsafe extern "C" fn forzac_open(path: *const c_char) -> *mut Document {
         runs: Vec::new(),
         images: Vec::new(),
         rules: Vec::new(),
+        strokes: Vec::new(),
         areas: Vec::new(),
         targets: Vec::new(),
         contents: Vec::new(),
@@ -511,6 +542,42 @@ pub unsafe extern "C" fn forzac_note(
     style.margin_top + layout.height(0) + style.margin_bottom
 }
 
+/// The short target of link `key` (`Book::preview`) typeset like a note into `*out`; returns its height, or a negative
+/// number when the link has no short target.
+///
+/// # Safety
+/// `doc` from [`forzac_open`]; `key` a valid NUL-terminated string; `settings` valid; `out` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_link_preview(
+    doc: *mut Document,
+    key: *const c_char,
+    width: f32,
+    settings: *const ForzacSettings,
+    out: *mut ForzacPage,
+) -> f32 {
+    let doc = unsafe { &mut *doc };
+    let key = unsafe { str(key) };
+    let style = Settings::from(unsafe { *settings }).note_style(width);
+    let mut typesetter = Typesetter::new(style, doc.hyphenator.clone());
+    let Some(layout) = layout_preview(&doc.book, &key, &style, &mut typesetter) else { return -1.0 };
+    doc.page = layout.render_body(0, &style);
+    unsafe { *out = doc.publish() };
+    style.margin_top + layout.height(0) + style.margin_bottom
+}
+
+/// The end page after the book's last page, for the current style.
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`] after [`forzac_paginate`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_end_page(doc: *mut Document) -> ForzacPage {
+    let doc = unsafe { &mut *doc };
+    if let (Some(style), Some(t)) = (doc.style, doc.typesetter.as_mut()) {
+        doc.page = end_page(&doc.book, &style, t);
+    }
+    doc.publish()
+}
+
 /// Note `id`'s title (its number, as a rule); null when it has none. Valid until the next string from `doc`.
 ///
 /// # Safety
@@ -523,15 +590,16 @@ pub unsafe extern "C" fn forzac_note_title(doc: *mut Document, id: *const c_char
 }
 
 /// Where link `key` leads: 1 a place in the book (`*at`), 2 a note (`*text` its id), 3 an address outside the book
-/// (`*text`); 0 for an unknown key. `*text` is valid until the next string from `doc`.
+/// (`*text`), 4 a short place to show in the note sheet (`forzac_link_preview`; `*at` its start); 0 for an unknown key. `*text` is valid until the next string from `doc`.
 ///
 /// # Safety
 /// `doc` from [`forzac_open`]; `key` a valid NUL-terminated string; `at` and `text` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn forzac_link(doc: *mut Document, key: *const c_char, at: *mut ForzacLocator, text: *mut *const c_char) -> u8 {
     let doc = unsafe { &mut *doc };
-    let (kind, place, s) = match doc.book.links.get(unsafe { str(key) }.as_ref()) {
-        Some(LinkTarget::Place { start, .. }) => (1, Some(*start), None),
+    let key = unsafe { str(key) };
+    let (kind, place, s) = match doc.book.links.get(key.as_ref()) {
+        Some(LinkTarget::Place { start, .. }) => (if doc.book.preview(&key).is_some() { 4 } else { 1 }, Some(*start), None),
         Some(LinkTarget::Note(id)) => (2, None, Some(id.clone())),
         Some(LinkTarget::External(url)) => (3, None, Some(url.clone())),
         None => return 0,
@@ -868,9 +936,9 @@ pub unsafe extern "C" fn forzac_state_position(state: *const State, doc: *const 
 /// # Safety
 /// `state` from [`forzac_state_open`], `doc` from [`forzac_open`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn forzac_state_save_position(state: *mut State, doc: *const Document, at: ForzacLocator) -> bool {
+pub unsafe extern "C" fn forzac_state_save_position(state: *mut State, doc: *const Document, at: ForzacLocator, finished: bool) -> bool {
     let (state, doc) = unsafe { (&mut *state, &*doc) };
-    state.store.save_position(&doc.book, &doc.path, at.into()).is_ok()
+    state.store.save_position(&doc.book, &doc.path, at.into(), finished).is_ok()
 }
 
 /// Up to `n` books whose files still exist, the last read first; valid until the next call on `state`.

@@ -16,7 +16,8 @@ use forzac_core::model::LinkTarget;
 use forzac_core::search::Hit;
 use forzac_core::settings::{Setting, Settings, Turning};
 use forzac_core::{
-    Area, Block, Book, ChapterLayout, Ink, Locator, PageContent, PageStyle, Rect, Target, Typesetter, fonts, layout_note, paginate,
+    Area, Block, Book, ChapterLayout, Ink, Locator, PageContent, PageStyle, Rect, Target, Typesetter, end_page, fonts, layout_note,
+    layout_preview, paginate,
 };
 use gtk::subclass::prelude::*;
 use gtk::{gdk, gio, glib, graphene, gsk, prelude::*};
@@ -70,9 +71,19 @@ const BACK_STACK: usize = 50;
 /// Touchpad scrolling (logical pixels) that turns a page; one turn per swipe.
 const SWIPE: f64 = 60.0;
 
+/// Theme cross-fade and "← Back" pill fade durations, µs.
+const THEME_FADE: i64 = 200_000;
+const PILL_FADE: i64 = 150_000;
+
+/// The pill after a jump, as on Android: it goes when the reader turns this many pages (or screens) away.
+const PILL_PAGES: i32 = 2;
+const PILL_TEXT: &str = "← Back · Ctrl+O";
+
 /// What opening a note marker or link asks of the window (jumps inside the book the view does itself).
 pub enum Open {
     Note(String),
+    /// A link's short target, shown in the note sheet (`Book::preview`).
+    Preview(String),
     External(String),
 }
 
@@ -109,6 +120,12 @@ type OnOpen = Box<dyn Fn(Open)>;
 
 /// Runs once, after the first frame with a page is presented.
 type FirstFrame = Box<dyn FnOnce(&PageView)>;
+
+/// Where the last jump arrived, for the "← Back" pill, and the pages turned since ("Slide").
+struct Pill {
+    arrived: Locator,
+    turns: i32,
+}
 
 struct Turn {
     from: gsk::RenderNode,
@@ -151,6 +168,21 @@ pub struct State {
     focus: Option<usize>,
     /// Where jumps started, the latest last.
     back: Vec<Locator>,
+    /// The "← Back" pill after a jump; `None` once the reader returned or read on.
+    pill: Option<Pill>,
+    /// Whether the pill is shown, and the frame time its fade in or out started.
+    pill_shown: bool,
+    pill_change: Option<i64>,
+    /// Where the pill was drawn, for clicks.
+    pill_rect: Option<graphene::Rect>,
+    /// "Slide": the end page after the book's last page is shown.
+    at_end: bool,
+    /// "Scroll": the end screen after the last paragraph fills the window.
+    column_end: bool,
+    /// The end page for the current style and theme.
+    end: Option<gsk::RenderNode>,
+    /// The frame before a theme change, cross-fading into the new colours, and the fade's first frame time.
+    fade: Option<(gsk::RenderNode, Option<i64>)>,
     /// The matches of the last search gone to, and the one highlighted (`n`/`N` move it; `None`: no highlight).
     search: Option<(Rc<Vec<Hit>>, Option<usize>)>,
     turn: Option<Turn>,
@@ -249,6 +281,14 @@ impl PageView {
             areas: HashMap::new(),
             focus: None,
             back: Vec::new(),
+            pill: None,
+            pill_shown: false,
+            pill_change: None,
+            pill_rect: None,
+            at_end: false,
+            column_end: false,
+            end: None,
+            fade: None,
             search: None,
             turn: None,
             mode: Mode::Slide,
@@ -345,6 +385,18 @@ impl PageView {
         })
     }
 
+    /// The short target of link `key` typeset for the note sheet `width` wide, as `note` does a note.
+    pub fn preview(&self, key: &str, width: f32) -> Option<(gsk::RenderNode, f32)> {
+        self.with(|s| {
+            let style = s.settings.note_style(width);
+            let mut typesetter = Typesetter::new(style, s.hyphenator.clone());
+            let layout = layout_preview(&s.book, key, &style, &mut typesetter)?;
+            let content = layout.render_body(0, &style);
+            let node = content_node(&content, s.theme, &mut s.fonts, &mut s.textures, &s.book)?;
+            Some((node, style.margin_top + layout.height(0) + style.margin_bottom))
+        })
+    }
+
     /// `Tab` (`delta` 1) and `Shift+Tab` (−1): focus the next or previous note marker or link of the page.
     pub fn focus_next(&self, delta: i32) {
         let h = WidgetExt::height(self) as f32;
@@ -393,7 +445,11 @@ impl PageView {
     }
 
     fn click(&self, x: f32, y: f32) {
-        let h = WidgetExt::height(self) as f32;
+        let (w, h) = (WidgetExt::width(self) as f32, WidgetExt::height(self) as f32);
+        if self.with(|s| s.pill_shown && s.pill_rect.is_some_and(|r| r.contains_point(&graphene::Point::new(x, y)))) {
+            self.back();
+            return;
+        }
         let target = self.with(|s| {
             let areas = if s.mode == Mode::Scroll { Self::visible_areas(s, h) } else { s.areas.get(&s.page)? };
             // A little slack: markers are small.
@@ -403,6 +459,13 @@ impl PageView {
         });
         if let Some(t) = target {
             self.open(t);
+        } else if self.mode() == Mode::Slide {
+            // The side thirds turn the page, as taps do on Android; the middle does nothing.
+            if x < w / 3.0 {
+                self.turn(-1);
+            } else if x > w * 2.0 / 3.0 {
+                self.turn(1);
+            }
         }
     }
 
@@ -410,6 +473,7 @@ impl PageView {
         let action = self.with(|s| match target {
             Target::Note(id) => Some(Err(Open::Note(id))),
             Target::Link(key) => match s.book.links.get(&key)? {
+                LinkTarget::Place { .. } if s.book.preview(&key).is_some() => Some(Err(Open::Preview(key))),
                 LinkTarget::Place { start, .. } => Some(Ok(*start)),
                 LinkTarget::Note(id) => Some(Err(Open::Note(id.clone()))),
                 LinkTarget::External(url) => Some(Err(Open::External(url.clone()))),
@@ -433,6 +497,7 @@ impl PageView {
             if s.back.len() > BACK_STACK {
                 s.back.remove(0);
             }
+            s.pill = Some(Pill { arrived: forzac_core::state::clamp(&s.book, at), turns: 0 });
         });
         self.show(at);
     }
@@ -492,7 +557,12 @@ impl PageView {
 
     /// Returns to where the last jump started; false when there is none.
     pub fn back(&self) -> bool {
-        let Some(at) = self.with(|s| s.back.pop()) else { return false };
+        let Some(at) = self.with(|s| {
+            s.pill = None;
+            s.back.pop()
+        }) else {
+            return false;
+        };
         self.show(at);
         true
     }
@@ -505,6 +575,7 @@ impl PageView {
             s.locator = at;
             s.turn = None;
             s.focus = None;
+            s.at_end = false;
             if let Some(layout) = s.layout.as_ref().filter(|l| l.chapter == at.chapter) {
                 s.page = layout.page_of(at);
             }
@@ -543,6 +614,11 @@ impl PageView {
         self.with(|s| s.locator)
     }
 
+    /// Whether the book's end page (or end screen) is shown: the position is saved as finished.
+    pub fn finished(&self) -> bool {
+        self.with(|s| if s.mode == Mode::Scroll { s.column_end } else { s.at_end })
+    }
+
     pub fn book(&self) -> Arc<Book> {
         self.with(|s| s.book.clone())
     }
@@ -566,11 +642,33 @@ impl PageView {
         if settings.turning != self.settings().turning {
             self.toggle_mode();
         }
+        let old = self.theme_changes(settings.theme_index(self.system_dark()));
         self.with(|s| {
             s.settings = settings;
             Self::show_theme(s);
         });
+        self.fade_from(old);
         self.queue_draw();
+    }
+
+    /// The frame as drawn now, when the theme is about to become `theme`, so the change can cross-fade from it.
+    fn theme_changes(&self, theme: usize) -> Option<gsk::RenderNode> {
+        if theme == self.theme() || WidgetExt::width(self) <= 0 {
+            return None;
+        }
+        let snapshot = gtk::Snapshot::new();
+        self.draw_frame(&snapshot);
+        snapshot.to_node()
+    }
+
+    /// Cross-fades from `old` (the frame before a theme change) to the new colours on the frame clock.
+    fn fade_from(&self, old: Option<gsk::RenderNode>) {
+        let Some(old) = old else { return };
+        self.with(|s| s.fade = Some((old, None)));
+        self.add_tick_callback(|view, _| {
+            view.queue_draw();
+            if view.with(|s| s.fade.is_some()) { glib::ControlFlow::Continue } else { glib::ControlFlow::Break }
+        });
     }
 
     /// Switches `setting` to its next (`delta` 1) or previous (−1) value.
@@ -582,10 +680,12 @@ impl PageView {
 
     /// The desktop's light or dark preference changed.
     pub fn set_system_dark(&self, dark: bool) {
+        let old = self.theme_changes(self.settings().theme_index(dark));
         self.with(|s| {
             s.system_dark = dark;
             Self::show_theme(s);
         });
+        self.fade_from(old);
         self.queue_draw();
     }
 
@@ -596,6 +696,7 @@ impl PageView {
             s.nodes.clear(); // ink is baked into the nodes; only a redraw, no re-layout
             s.areas.clear();
             s.column.tiles.clear();
+            s.end = None;
         }
     }
 
@@ -626,6 +727,7 @@ impl PageView {
                 s.style = Some(style);
                 s.neighbours.clear();
                 s.layout = None;
+                s.end = None;
             }
             let layout = match s.neighbours.iter().position(|l| l.chapter == s.chapter) {
                 Some(i) => s.neighbours.swap_remove(i),
@@ -726,11 +828,103 @@ impl PageView {
         Some(node)
     }
 
+    /// The end page's node for the current style and theme.
+    pub(super) fn end_node(s: &mut State) -> Option<gsk::RenderNode> {
+        if s.end.is_none() {
+            let (style, t) = (s.style?, s.typesetter.as_mut()?);
+            let content = end_page(&s.book, &style, t);
+            s.end = content_node(&content, s.theme, &mut s.fonts, &mut s.textures, &s.book);
+        }
+        s.end.clone()
+    }
+
     fn draw(&self, snapshot: &gtk::Snapshot) {
-        self.draw_page(snapshot);
+        let now = WidgetExt::frame_clock(self).map_or(0, |c| c.frame_time());
+        match self.with(|s| s.fade.as_mut().map(|(old, start)| (old.clone(), *start.get_or_insert(now)))) {
+            Some((old, start)) if now - start < THEME_FADE => {
+                let frame = gtk::Snapshot::new();
+                self.draw_frame(&frame);
+                let new = frame.to_node().unwrap_or_else(|| gsk::ContainerNode::new(&[]).upcast());
+                let p = (now - start) as f32 / THEME_FADE as f32;
+                snapshot.append_node(gsk::CrossFadeNode::new(&old, &new, p));
+            }
+            fade => {
+                if fade.is_some() {
+                    self.with(|s| s.fade = None);
+                }
+                self.draw_frame(snapshot);
+            }
+        }
         if self.mode() == Mode::Scroll && self.with(Self::placed) {
             self.prepare();
         }
+    }
+
+    /// The page (or the column) and the pill over it.
+    fn draw_frame(&self, snapshot: &gtk::Snapshot) {
+        self.draw_page(snapshot);
+        self.draw_pill(snapshot);
+    }
+
+    /// The "← Back · Ctrl+O" pill over the foot while the last jump is fresh: the ink as its fill, the paper as its text
+    /// (Android's `ReturnPill`), fading in and out.
+    fn draw_pill(&self, snapshot: &gtk::Snapshot) {
+        let (w, h) = (WidgetExt::width(self) as f32, WidgetExt::height(self) as f32);
+        let now = WidgetExt::frame_clock(self).map_or(0, |c| c.frame_time());
+        let (alpha, fading, palette, margin_bottom) = self.with(|s| {
+            // Read on: two pages (or screens) away from where the jump arrived.
+            let far = match (&s.pill, s.mode) {
+                (Some(p), Mode::Slide) => p.turns.abs() >= PILL_PAGES,
+                (Some(p), Mode::Scroll) => match s.layout.as_ref().filter(|l| l.chapter == p.arrived.chapter) {
+                    Some(l) => (l.flow_y(s.locator) - l.flow_y(p.arrived)).abs() >= PILL_PAGES as f32 * h,
+                    None => s.chapter.abs_diff(p.arrived.chapter) > 0 && s.column.motion.is_none(),
+                },
+                (None, _) => false,
+            };
+            if far {
+                s.pill = None;
+            }
+            let visible = s.pill.is_some() && !s.back.is_empty() && !s.at_end && !s.column_end;
+            if visible != s.pill_shown {
+                s.pill_shown = visible;
+                s.pill_change = Some(now);
+            }
+            let p = s.pill_change.map_or(1.0, |t| ((now - t) as f32 / PILL_FADE as f32).clamp(0.0, 1.0));
+            if p >= 1.0 {
+                s.pill_change = None;
+            }
+            let alpha = if s.pill_shown { p } else { 1.0 - p };
+            (alpha, s.pill_change.is_some(), THEMES[s.theme], s.style.map_or(56.0, |st| st.margin_bottom))
+        });
+        if fading {
+            self.add_tick_callback(|view, _| {
+                view.queue_draw();
+                glib::ControlFlow::Break
+            });
+        }
+        if alpha <= 0.0 {
+            self.with(|s| s.pill_rect = None);
+            return;
+        }
+        crate::fonts::add_interface_fonts();
+        let layout = self.create_pango_layout(Some(PILL_TEXT));
+        layout.set_font_description(Some(&gtk::pango::FontDescription::from_string("Golos Text 14px")));
+        let (tw, th) = layout.pixel_size();
+        let (pw, ph) = (tw as f32 + 36.0, th as f32 + 20.0);
+        // Centred on the foot, as Android's pill replaces the page number.
+        let rect = graphene::Rect::new((w - pw) / 2.0, h - margin_bottom / 2.0 - ph / 2.0, pw, ph);
+        let mut fill = rgba(palette.ink);
+        fill.set_alpha(alpha);
+        let mut text = rgba(palette.paper);
+        text.set_alpha(alpha);
+        snapshot.push_rounded_clip(&gsk::RoundedRect::from_rect(rect, ph / 2.0));
+        snapshot.append_color(&fill, &rect);
+        snapshot.pop();
+        snapshot.save();
+        snapshot.translate(&graphene::Point::new(rect.x() + 18.0, rect.y() + 10.0));
+        snapshot.append_layout(&layout, &text);
+        snapshot.restore();
+        self.with(|s| s.pill_rect = Some(rect));
     }
 
     fn draw_page(&self, snapshot: &gtk::Snapshot) {
@@ -742,7 +936,8 @@ impl PageView {
                 Self::draw_column(s, snapshot, h);
                 return;
             }
-            let Some(current) = Self::page_node(s, s.page) else { return };
+            let current = if s.at_end { Self::end_node(s) } else { Self::page_node(s, s.page) };
+            let Some(current) = current else { return };
             let progress: f32 =
                 s.turn.as_mut().map(|t| ((now - *t.start.get_or_insert(now)) as f32 / TURN as f32).clamp(0.0, 1.0)).unwrap_or(1.0);
             match &s.turn {
@@ -756,6 +951,10 @@ impl PageView {
                     snapshot.translate(&graphene::Point::new(t.dir * (1.0 - p) * w, 0.0));
                     snapshot.append_node(&current);
                     snapshot.restore();
+                }
+                _ if s.at_end => {
+                    s.turn = None;
+                    snapshot.append_node(&current);
                 }
                 _ => {
                     s.turn = None;
@@ -804,8 +1003,27 @@ impl PageView {
         }
         let animate = self.with(|s| {
             let Some(layout) = &s.layout else { return false };
+            if s.at_end {
+                // Back from the end page to the last page of the text; forward does nothing.
+                if delta > 0 {
+                    return false;
+                }
+                s.turn = s.end.clone().map(|from| Turn { from, dir: -1.0, start: None });
+                s.at_end = false;
+                return true;
+            }
             let from = s.nodes.get(&s.page).cloned();
             let target = s.page as i64 + delta as i64;
+            if let Some(p) = &mut s.pill {
+                p.turns += delta;
+            }
+            if delta > 0 && target as usize >= layout.pages.len() && s.chapter + 1 == s.book.chapters.len() {
+                // Past the book's last page: the end page; the position stays at the last page.
+                s.at_end = true;
+                s.turn = from.map(|from| Turn { from, dir: 1.0, start: None });
+                s.focus = None;
+                return true;
+            }
             if target >= 0 && (target as usize) < layout.pages.len() {
                 s.page = target as usize;
                 s.locator = layout.page_start(s.page);
@@ -862,6 +1080,7 @@ impl PageView {
     pub fn chapter(&self, delta: i32) {
         self.with(|s| {
             let target = (s.chapter as i64 + delta as i64).clamp(0, s.book.chapters.len() as i64 - 1) as usize;
+            s.at_end = false;
             s.chapter = target;
             s.locator = Locator { chapter: target, ..Locator::default() };
             s.turn = None;
@@ -885,6 +1104,7 @@ impl PageView {
                 s.locator = layout.page_start(s.page);
                 s.turn = None;
                 s.focus = None;
+                s.at_end = false;
             }
         });
         self.moved();
@@ -960,6 +1180,14 @@ fn content_node(
         let mut ink = rgba(text);
         ink.set_alpha(RULES[rule.strength as usize]);
         snapshot.append_color(&ink, &rect(rule.rect));
+    }
+    for stroke in &content.strokes {
+        let ink = match stroke.ink {
+            Ink::Text => rgba(text),
+            Ink::Link => rgba(link),
+            Ink::Secondary => secondary,
+        };
+        snapshot.append_color(&ink, &rect(stroke.rect));
     }
     for run in &content.runs {
         let ink = match run.ink {

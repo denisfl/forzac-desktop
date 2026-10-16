@@ -1,6 +1,6 @@
 //! Pagination (a port of the Android `Paginator`) and page contents.
 
-use super::{Area, BlockLayout, Content, GlyphRun, Group, Ink, PageStyle, Rect, Typesetter};
+use super::{Area, BlockLayout, Content, GlyphRun, Group, Ink, PageStyle, Rect, Stroke, Typesetter};
 use crate::fonts::Face;
 use crate::model::{Block, Book, Chapter, Locator};
 
@@ -41,6 +41,7 @@ pub struct PageContent {
     pub images: Vec<PageImage>,
     pub rules: Vec<Rule>,
     pub areas: Vec<Area>,
+    pub strokes: Vec<Stroke>,
 }
 
 /// A chapter typeset for one page style.
@@ -115,11 +116,11 @@ impl ChapterLayout {
             && let Some(title) = &self.title
         {
             let y = style.margin_top / 2.0 + size * 0.35;
-            out.runs.push(label(typesetter, title, size, style.width / 2.0, y, width));
+            out.runs.push(label(typesetter, title, Ink::Secondary, size, style.width / 2.0, y, width));
         }
         let foot = format!("{} / {} · {}%", i + 1, self.pages.len(), (self.progress(i) * 100.0).round() as u32);
         let y = style.height - style.margin_bottom / 2.0 + size * 0.35;
-        out.runs.push(label(typesetter, &foot, size, style.width / 2.0, y, width));
+        out.runs.push(label(typesetter, &foot, Ink::Secondary, size, style.width / 2.0, y, width));
         out
     }
 
@@ -279,23 +280,41 @@ fn mark_block(
     from: Locator,
     to: Locator,
 ) {
-    let Content::Text(t) = &b.content else { return };
-    let inside = |offset: u32| (block, offset as usize) >= (from.block, from.offset) && (block, offset as usize) < (to.block, to.offset);
-    for line in lines.clone() {
-        let span = t.lines[line]
-            .glyphs
+    let inside = |offset: usize| (block, offset) >= (from.block, from.offset) && (block, offset) < (to.block, to.offset);
+    // The glyphs of one line inside the range, as one rectangle; `shift` is where the line's text starts in the block.
+    let span = |line: &super::Line, shift: usize| {
+        line.glyphs
             .iter()
-            .filter(|g| inside(g.0))
-            .fold(None, |span: Option<(f32, f32)>, &(_, x, w)| Some(span.map_or((x, x + w), |(a, b)| (a.min(x), b.max(x + w)))));
-        if let Some((a, b)) = span {
-            let y = top + (line - lines.start) as f32 * t.line_height;
-            out.push(Rect { x: left + a, y, w: b - a, h: t.line_height });
+            .filter(|g| inside(g.0 as usize + shift))
+            .fold(None, |span: Option<(f32, f32)>, &(_, x, w)| Some(span.map_or((x, x + w), |(a, b)| (a.min(x), b.max(x + w)))))
+    };
+    match &b.content {
+        Content::Text(t) => {
+            for line in lines.clone() {
+                if let Some((a, b)) = span(&t.lines[line], 0) {
+                    let y = top + (line - lines.start) as f32 * t.line_height;
+                    out.push(Rect { x: left + a, y, w: b - a, h: t.line_height });
+                }
+            }
         }
+        // A table row's text is its cells joined by line breaks (`Table::cell_starts`).
+        Content::Row { cells, .. } => {
+            for cell in cells {
+                for (n, line) in cell.text.lines.iter().enumerate() {
+                    if let Some((a, b)) = span(line, cell.offset) {
+                        let y = top + cell.y + n as f32 * cell.text.line_height;
+                        out.push(Rect { x: left + cell.x + a, y, w: b - a, h: cell.text.line_height });
+                    }
+                }
+            }
+        }
+        _ => {}
     }
 }
 
-/// A line of secondary text centred on `center` at baseline `y`, shortened with "…" to `max_width`.
-fn label(typesetter: &mut Typesetter, text: &str, size: f32, center: f32, y: f32, max_width: f32) -> GlyphRun {
+/// A line of text in `ink` centred on `center` at baseline `y`, shortened with "…" to `max_width`.
+#[allow(clippy::too_many_arguments)]
+fn label(typesetter: &mut Typesetter, text: &str, ink: Ink, size: f32, center: f32, y: f32, max_width: f32) -> GlyphRun {
     let font = typesetter.font_of(Face::Regular);
     let scale = size / typesetter.shaper.units_per_em(font);
     let mut text = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -307,7 +326,7 @@ fn label(typesetter: &mut Typesetter, text: &str, size: f32, center: f32, y: f32
         glyphs = typesetter.shaper.shape(font, &text);
     }
     let mut x = center - width(&glyphs) / 2.0;
-    let mut run = GlyphRun { font, size, ink: Ink::Secondary, glyphs: Vec::new(), positions: Vec::new() };
+    let mut run = GlyphRun { font, size, ink, glyphs: Vec::new(), positions: Vec::new() };
     for g in glyphs.iter() {
         run.glyphs.push(g.id as u16);
         run.positions.push([x + g.x_offset as f32 * scale, y - g.y_offset as f32 * scale]);
@@ -316,23 +335,58 @@ fn label(typesetter: &mut Typesetter, text: &str, size: f32, center: f32, y: f32
     run
 }
 
+/// The end page after the book's last page: its title (set like a chapter heading), its authors and "Finished",
+/// centred in a window of `style`, without running head or foot.
+pub fn end_page(book: &Book, style: &PageStyle, typesetter: &mut Typesetter) -> PageContent {
+    let mut out = PageContent::default();
+    let size = style.text_size;
+    let heading = Block::Heading { text: crate::model::StyledText { text: book.title.clone(), styles: Vec::new() }, level: 1 };
+    let title = typesetter.layout(&heading, book);
+    let title_height = title.as_ref().map_or(0.0, BlockLayout::height);
+    let lh = typesetter.line_height;
+    let authors = book.authors.join(", ");
+    // Title, a line, the authors, two lines, "Finished".
+    let height = title_height + if authors.is_empty() { 0.0 } else { 2.0 * lh } + 3.0 * lh;
+    let mut y = ((style.height - height) / 2.0).max(style.margin_top);
+    if let Some(title) = &title {
+        draw_block(&mut out, title, 0..title.line_count(), style.margin_h + title.x, y);
+        y += title_height + lh;
+    }
+    let (center, width) = (style.width / 2.0, style.text_width());
+    if !authors.is_empty() {
+        out.runs.push(label(typesetter, &authors, Ink::Text, size, center, y + size, width));
+        y += 2.0 * lh;
+    }
+    out.runs.push(label(typesetter, "Finished", Ink::Secondary, size * 0.85, center, y + size, width));
+    out
+}
+
 /// Note `id` typeset as one tall page at `style`'s width: its text (the shell shows the title as the panel's label), the
 /// chapter start not lowered. Draw it with `render_body`; images are the book's.
 pub fn layout_note(book: &Book, id: &str, style: &PageStyle, typesetter: &mut Typesetter) -> Option<ChapterLayout> {
-    let note = book.notes.get(id)?;
-    let blocks = note.blocks.clone();
+    Some(layout_blocks(book, book.notes.get(id)?.blocks.clone(), style, typesetter))
+}
+
+/// The short target of link `key` (`Book::preview`) typeset like a note, for the note sheet.
+pub fn layout_preview(book: &Book, key: &str, style: &PageStyle, typesetter: &mut Typesetter) -> Option<ChapterLayout> {
+    Some(layout_blocks(book, book.preview(key)?.to_vec(), style, typesetter))
+}
+
+/// `blocks` of `book` typeset as one tall page, the start not lowered.
+fn layout_blocks(book: &Book, blocks: Vec<Block>, style: &PageStyle, typesetter: &mut Typesetter) -> ChapterLayout {
     let images = blocks
         .iter()
         .filter_map(|b| if let Block::Image { id } = b { book.images.get_key_value(id) } else { None })
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     let note_book = Book { language: book.language.clone(), images, chapters: vec![Chapter { title: None, blocks }], ..Book::default() };
-    Some(paginate_from(&note_book, 0, style, typesetter, 0.0))
+    paginate_from(&note_book, 0, style, typesetter, 0.0)
 }
 
 fn push_line(out: &mut PageContent, line: &super::Line, x: f32, y: f32) {
     out.runs.extend(line.runs.iter().map(|r| r.offset(x, y)));
     out.areas.extend(line.areas.iter().map(|a| Area { rect: a.rect.offset(x, y), target: a.target.clone() }));
+    out.strokes.extend(line.strokes.iter().map(|s| Stroke { rect: s.rect.offset(x, y), ink: s.ink }));
 }
 
 /// Paginates a chapter: a port of the Android `Paginator`, which needs only line counts and heights from its layouts.

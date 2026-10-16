@@ -221,11 +221,47 @@ Every gap, unclear and "Not planned" row with its proposal. The maintainer accep
 
 ## By-hand pass
 
-Done at the end of `android-parity` (its tasks, group 6) on the Raspberry Pi 5 (labwc, over VNC) and the M1 MacBook
-Pro, against every row above whose status is "same" or whose decision lands in `android-parity`. One line per row that
-did not pass, with what was seen; "nothing new" when every row passed.
+Done at the end of `android-parity` (its tasks, groups 5 and 6) on the Raspberry Pi 5 and the M1 MacBook Pro, on
+2026-10-16, with the build of this change. The Pi's desktop (labwc, Raspberry Pi OS 13, GTK 4.18) was driven over SSH
+with `wtype` and watched with `grim`; timings came from `scripts/pi-headless.sh` at 1920×1200, 120 Hz. The Mac was
+driven with mouse clicks and arrow keys (synthetic letter keys did not reach the app, so letter shortcuts were reached
+through the menus).
+
+**Timings on the Pi 5.** First page after opening "Колыбель для кошки" (warm): 151–158 ms with the default, `ngl` and
+`gl` renderers (Vulkan 165–170 ms after a first start of 2.35 s, its shader cache). Page turns (20 per run): 0 missed
+frames at 122 Hz with the default, `ngl` and `gl` renderers, 2 with Vulkan. Scrolling by a screen (20 per run): 0 missed
+frames in most runs, now and then 1–4 frames late at the first or second frame of a movement; the build before this
+change does the same (8 paired runs: 2 late frames before, 5 after — within the runs' spread). Idle: 0 CPU ticks in
+10 s.
+
+**Checked and passing, both shells:** an English book without a language is hyphenated in English (T3); code in PT Mono
+and struck-out text drawn (T6, T7); the end page after the last page in "Slide" and the end screen in "Scroll", saved
+as 100 % and back to the text with `←`/`k` (M7); a link to a short target opens in the note sheet (N6); the "← Back"
+pill after a contents jump, gone after two pages (N8); a non-book file gives "Couldn't open “photo.zip”: unsupported
+format — FB2, FB3 or EPUB needed", then the recent books (E1); after the last book window the recent books, in the
+reader's theme (P5, C10); the screen kept on while reading and released 10 minutes after the last input — the Wayland
+idle inhibitor on the Pi, the `PreventUserIdleDisplaySleep` assertion on the Mac (X2). The Pi: opening an open book
+brings its window forward (D1). The Mac: a click in the left third turns back (M2); the recent books move with the
+arrows and close with `Esc` (D2); the theme changes from the View menu (C4: the fade is too short to see on a
+screenshot); the contents open from the menu and jump.
+
+**Found and fixed in this pass:**
+
+- macOS quit when its last book window closed, before the recent books could show (P5): it now stays, and closing the
+  recent books quits.
+- macOS showed no message for a file that came with the launch (Finder, the Dock): the alert now waits for the launch.
+- The recent books' selection on macOS and the list background on GTK kept the system colours: both in the theme now.
+- GTK did not show the recent books after the last book (P5), and opening a book again after closing it showed nothing
+  and quit (D1): a closed book window stays alive while closures hold it, so it never gets `destroy`. The recent books
+  now follow the application's `window-removed`, open windows are those still in the application, and the screen
+  inhibitor is released on `close-request`.
+
+**Not checked by hand in this pass:** the Pi's side-third clicks (M2; no pointer injection over SSH; the same code path
+as the Mac's), the rows marked "same" that earlier changes had checked by hand (settings panel, search panel and
+`n`/`N`, notes and `Tab` focus, trackpad, Finder and the Dock), and the cross-fade by eye. The maintainer accepted the pass as it is
+(2026-10-16): those rows were checked by hand in the changes that made them.
 
 | Machine | Date | Build | Result |
 |---|---|---|---|
-| Raspberry Pi 5 | | | |
-| M1 MacBook Pro | | | |
+| Raspberry Pi 5 | 2026-10-16 | `android-parity`, GTK shell | Passing after the GTK fixes above; M2 not checked |
+| M1 MacBook Pro | 2026-10-16 | `android-parity`, AppKit shell | Passing after the macOS fixes above |

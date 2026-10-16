@@ -1,4 +1,5 @@
 //! Fonts: the book families (PT Serif embedded; Literata, Source Serif and PT Sans from the assets directory, all OFL),
+//! PT Mono for code,
 //! fallback fonts for characters a family lacks, and shaping with HarfRust.
 //!
 //! Fonts are numbered for the whole process: ids 0–3 are the embedded PT Serif faces, later ids are faces of the other
@@ -135,6 +136,13 @@ impl Family {
         faces.lock().unwrap().insert((self, face), id);
         id
     }
+}
+
+/// The monospace face for code (PT Mono Regular from the assets); `None` when its file cannot be read. It has one
+/// style: code in emphasis or strong stays regular rather than synthesised.
+pub fn mono() -> Option<FontId> {
+    static MONO: OnceLock<Option<FontId>> = OnceLock::new();
+    *MONO.get_or_init(|| register_instance(&assets()?.join("fonts/pt-mono/Regular.ttf"), 0, None, Some(Face::Regular)))
 }
 
 static ASSETS: OnceLock<PathBuf> = OnceLock::new();

@@ -19,7 +19,7 @@ mod page_view;
 mod panels;
 mod settings_sheet;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -56,6 +56,19 @@ type SharedStore = Rc<RefCell<Store>>;
 const RECENT: usize = 20;
 /// The reading position is saved this long after the last turn.
 const SAVE_DELAY: Duration = Duration::from_secs(1);
+/// The screen stays on this long after the last key, turn, scroll or click in a book window.
+const KEEP_AWAKE: Duration = Duration::from_secs(10 * 60);
+
+thread_local! {
+    /// The open book windows by the canonical path of their file: opening a book again brings its window forward.
+    static WINDOWS: RefCell<Vec<(PathBuf, glib::WeakRef<gtk::ApplicationWindow>)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A book window still open: closed windows may outlive their closing (references in closures), but they leave the
+/// application.
+fn open_book_window(w: &glib::WeakRef<gtk::ApplicationWindow>) -> Option<gtk::ApplicationWindow> {
+    w.upgrade().filter(|w| w.application().is_some())
+}
 
 fn main() -> glib::ExitCode {
     let start = Instant::now();
@@ -91,6 +104,16 @@ fn main() -> glib::ExitCode {
             }
         }
     });
+    // After the last book window, the recent books (as on macOS); closing them quits. Shown while the window is being
+    // removed, so the application never runs out of windows.
+    if !options.stateless() {
+        let (opts, st) = (options.clone(), store.clone());
+        app.connect_window_removed(move |app, window| {
+            if app.windows().is_empty() && !window.has_css_class("forzac-recent") {
+                recent_window(app, &opts, &st);
+            }
+        });
+    }
     let opts = options.clone();
     app.connect_activate(move |app| recent_window(app, &opts, &store));
     let mut run_args = vec![args[0].clone()];
@@ -98,12 +121,59 @@ fn main() -> glib::ExitCode {
     app.run_with_args(&run_args)
 }
 
-fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &SharedStore) {
+/// Why a file cannot be read, in the Android app's words (without PDF).
+fn reason(e: forzac_core::Error) -> &'static str {
+    match e {
+        forzac_core::Error::NotABook => "unsupported format — FB2, FB3 or EPUB needed",
+        forzac_core::Error::Damaged => "the file is damaged",
+        forzac_core::Error::Protected => "the book is DRM-protected and can't be opened",
+        forzac_core::Error::NoText => "the book has no text",
+        forzac_core::Error::Unavailable => "the file is unavailable",
+    }
+}
+
+/// Says why `path` cannot be opened; then, when no book is open, the recent books follow.
+fn cannot_open(app: &gtk::Application, path: &Path, e: forzac_core::Error, options: &Options, store: &SharedStore) {
+    let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
+    let message = format!("Couldn't open “{name}”: {}", reason(e));
+    eprintln!("{message}");
+    if options.stateless() {
+        return;
+    }
+    // The dialog is not a window of the application: hold it, or it would quit before the message shows.
+    let hold = app.hold();
+    let parent = app.active_window();
+    let (app, options, store) = (app.clone(), options.clone(), store.clone());
+    gtk::AlertDialog::builder().message(message).modal(true).build().choose(parent.as_ref(), gio::Cancellable::NONE, move |_| {
+        if !has_book_window() {
+            recent_window(&app, &options, &store);
+        }
+        drop(hold);
+    });
+}
+
+/// Whether a book window is open.
+fn has_book_window() -> bool {
+    WINDOWS.with(|w| w.borrow().iter().any(|(_, w)| open_book_window(w).is_some()))
+}
+
+/// Opens `path` in a window of its own (or brings its open window forward); false when it cannot be read.
+fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &SharedStore) -> bool {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_owned());
+    let open = WINDOWS.with(|w| {
+        let mut w = w.borrow_mut();
+        w.retain(|(_, win)| open_book_window(win).is_some());
+        w.iter().find(|(p, _)| *p == canonical).and_then(|(_, win)| open_book_window(win))
+    });
+    if let Some(window) = open {
+        window.present();
+        return true;
+    }
     let book = match forzac_core::open(path) {
         Ok(book) => book,
         Err(e) => {
-            eprintln!("{}: not a readable book ({e:?})", path.display());
-            return;
+            cannot_open(app, path, e, options, store);
+            return false;
         }
     };
     let parsed = options.start.elapsed();
@@ -275,11 +345,14 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
         view,
         move |open| match open {
             Open::Note(id) => *note.borrow_mut() = panels::note(&overlay, &view, &id),
+            Open::Preview(key) => *note.borrow_mut() = panels::preview(&overlay, &view, &key),
             Open::External(url) => gtk::UriLauncher::new(&url).launch(Some(&window), gio::Cancellable::NONE, |_| {}),
         }
     ));
     if !stateless {
         remember_position(&view, &window, path, store);
+        keep_awake(app, &window);
+        WINDOWS.with(|w| w.borrow_mut().push((canonical, window.downgrade())));
     }
 
     if options.measure || options.png.is_some() || options.turns > 0 || options.scrolls > 0 {
@@ -326,6 +399,66 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
     }
     window.present();
     view.grab_focus();
+    true
+}
+
+/// Keeps the screen from blanking while the reader reads in `window`: for `KEEP_AWAKE` after the last key, turn,
+/// scroll or click, and only while the window is active.
+fn keep_awake(app: &gtk::Application, window: &gtk::ApplicationWindow) {
+    let cookie: Rc<Cell<Option<u32>>> = Rc::default();
+    let timer: Rc<RefCell<Option<glib::SourceId>>> = Rc::default();
+    let release: Rc<dyn Fn()> = {
+        let (app, cookie) = (app.downgrade(), cookie.clone());
+        Rc::new(move || {
+            if let (Some(app), Some(c)) = (app.upgrade(), cookie.take()) {
+                app.uninhibit(c);
+            }
+        })
+    };
+    let touch: Rc<dyn Fn()> = {
+        let (app, window, timer, release) = (app.downgrade(), window.downgrade(), timer.clone(), release.clone());
+        Rc::new(move || {
+            let (Some(app), Some(window)) = (app.upgrade(), window.upgrade()) else { return };
+            if !window.is_active() {
+                return;
+            }
+            if cookie.get().is_none() {
+                cookie.set(Some(app.inhibit(Some(&window), gtk::ApplicationInhibitFlags::IDLE, Some("Reading a book"))));
+            }
+            if let Some(id) = timer.borrow_mut().take() {
+                id.remove();
+            }
+            let (t, release) = (timer.clone(), release.clone());
+            *timer.borrow_mut() = Some(glib::timeout_add_local_once(KEEP_AWAKE, move || {
+                t.borrow_mut().take(); // fired: the id is no longer valid
+                release();
+            }));
+        })
+    };
+    let input = gtk::EventControllerLegacy::new();
+    input.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let t = touch.clone();
+    input.connect_event(move |_, event| {
+        use gtk::gdk::EventType;
+        if matches!(
+            event.event_type(),
+            EventType::KeyPress | EventType::ButtonPress | EventType::Scroll | EventType::TouchpadSwipe | EventType::TouchBegin
+        ) {
+            t();
+        }
+        glib::Propagation::Proceed
+    });
+    window.add_controller(input);
+    let (t, r) = (touch.clone(), release.clone());
+    window.connect_is_active_notify(move |w| if w.is_active() { t() } else { r() });
+    window.connect_close_request(move |_| {
+        if let Some(id) = timer.borrow_mut().take() {
+            id.remove();
+        }
+        release();
+        glib::Propagation::Proceed
+    });
+    touch(); // opening a book is reading
 }
 
 fn report_turns(view: &PageView) {
@@ -395,6 +528,7 @@ t  T    theme
 f  F11    full screen
 ?    this help
 q  Ctrl+W    close
+click    the left or right third of the page turns it
 
 Forzac is free. Support it: forzac.truenrth.app";
 
@@ -404,7 +538,7 @@ fn remember_position(view: &PageView, window: &gtk::ApplicationWindow, path: &Pa
         let (view, store, path) = (view.downgrade(), store.clone(), path.to_owned());
         Rc::new(move || {
             let Some(view) = view.upgrade() else { return };
-            if let Err(e) = store.borrow_mut().save_position(&view.book(), &path, view.locator()) {
+            if let Err(e) = store.borrow_mut().save_position(&view.book(), &path, view.locator(), view.finished()) {
                 eprintln!("cannot save the reading state: {e}");
             }
         })
@@ -432,8 +566,10 @@ fn remember_position(view: &PageView, window: &gtk::ApplicationWindow, path: &Pa
     save(); // an opened book is a recent book, even if it is closed without turning a page
 }
 
-/// The recent books, the last opened first; `Enter` opens one where it was left.
+/// The recent books, the last opened first, in the reader's theme; `Enter` opens one where it was left.
 fn recent_window(app: &gtk::Application, options: &Options, store: &SharedStore) {
+    fonts::add_interface_fonts();
+    panels::set_theme(Settings::load(&store.borrow()).theme_index(appearance::dark()));
     let books: Vec<(PathBuf, String, String)> = store
         .borrow()
         .recent(RECENT)
@@ -450,6 +586,8 @@ fn recent_window(app: &gtk::Application, options: &Options, store: &SharedStore)
     if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
         window.set_decorated(false);
     }
+    window.add_css_class("forzac-panel");
+    window.add_css_class("forzac-recent");
     let list = gtk::ListBox::new();
     list.set_selection_mode(gtk::SelectionMode::Browse);
     for (_, title, detail) in &books {
@@ -459,9 +597,10 @@ fn recent_window(app: &gtk::Application, options: &Options, store: &SharedStore)
         row.set_margin_start(16);
         row.set_margin_end(16);
         let t = gtk::Label::new(Some(title));
-        t.add_css_class("heading");
+        t.add_css_class("book-title");
         let d = gtk::Label::new(Some(detail));
-        d.add_css_class("dim-label");
+        d.add_css_class("book-meta");
+        d.add_css_class("muted");
         for label in [&t, &d] {
             label.set_xalign(0.0);
             label.set_ellipsize(gtk::pango::EllipsizeMode::End);
@@ -472,15 +611,16 @@ fn recent_window(app: &gtk::Application, options: &Options, store: &SharedStore)
     if books.is_empty() {
         let empty = gtk::Label::new(Some("No books yet.\n\nOpen one from your file manager, or run\nforzac book.epub"));
         empty.set_justify(gtk::Justification::Center);
-        empty.add_css_class("dim-label");
+        empty.add_css_class("muted");
         window.set_child(Some(&empty));
     } else {
         let scrolled = gtk::ScrolledWindow::builder().child(&list).hscrollbar_policy(gtk::PolicyType::Never).build();
         window.set_child(Some(&scrolled));
         let (app, options, store, w) = (app.clone(), options.clone(), store.clone(), window.clone());
         list.connect_row_activated(move |_, row| {
-            if let Some((path, ..)) = books.get(row.index() as usize) {
-                open_window(&app, path, &options, &store);
+            if let Some((path, ..)) = books.get(row.index() as usize)
+                && open_window(&app, path, &options, &store)
+            {
                 w.close();
             }
         });

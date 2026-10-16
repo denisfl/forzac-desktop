@@ -279,3 +279,85 @@ fn marks_cover_a_match_on_its_line() {
     assert!((flow[0].x - m.x).abs() < 0.01);
     assert!(layout.marks(0, &style, crate::model::Locator { chapter: 1, ..hit.start }, hit.end).is_empty(), "another chapter");
 }
+
+#[test]
+fn code_is_monospace_and_keeps_its_indentation() {
+    fonts::set_assets(std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../assets")));
+    let mono = fonts::mono().expect("PT Mono in the assets");
+    let style = PageStyle::for_window(600.0, 900.0, 20.0);
+    let mut t = typesetter(style);
+    let code = Block::Paragraph { text: StyledText { text: "fn main() {\n    run();\n}".into(), styles: vec![] }, kind: Kind::Code };
+    let b = book(vec![code]);
+    let layout = t.layout(&b.chapters[0].blocks[0], &b).unwrap();
+    let text = text_of(&layout);
+    assert_eq!(text.lines.len(), 3);
+    assert!(text.lines.iter().flat_map(|l| &l.runs).all(|r| r.font == mono), "every glyph from PT Mono");
+    // Four spaces of PT Mono at 0.85 × 20 px: 0.6 em each.
+    let x = text.lines[1].runs[0].positions[0][0];
+    assert!((x - 4.0 * 0.6 * 17.0).abs() < 1.0, "indented by {x}");
+
+    // Inline code: PT Mono inside a serif paragraph.
+    let styled =
+        StyledText { text: "Call run() now".into(), styles: vec![StyleRange { start: 5, end: 10, style: Style::Code, target: None }] };
+    let b = book(vec![Block::Paragraph { text: styled, kind: Kind::Body }]);
+    let layout = t.layout(&b.chapters[0].blocks[0], &b).unwrap();
+    let runs = &text_of(&layout).lines[0].runs;
+    assert!(runs.iter().any(|r| r.font == mono && (r.size - 18.0).abs() < 0.01), "inline code at 0.9");
+    assert!(runs.iter().any(|r| r.font != mono));
+}
+
+#[test]
+fn strikethrough_is_a_stroke_per_line() {
+    let style = PageStyle::for_window(600.0, 900.0, 20.0);
+    let mut t = typesetter(style);
+    let struck = |start: usize, end: usize| StyledText {
+        text: TEXT.into(),
+        styles: vec![StyleRange { start, end, style: Style::Strikethrough, target: None }],
+    };
+    // Two words on the first line: one stroke over both, in the text's ink, near the middle of the lower case.
+    let two_words = "Слезы навернулись".len();
+    let b = book(vec![Block::Paragraph { text: struck(0, two_words), kind: Kind::Body }]);
+    let layout = t.layout(&b.chapters[0].blocks[0], &b).unwrap();
+    let lines = &text_of(&layout).lines;
+    assert_eq!(lines[0].strokes.len(), 1);
+    let s = lines[0].strokes[0];
+    assert_eq!(s.ink, Ink::Text);
+    assert!(s.rect.y < 0.0 && s.rect.y > -10.0 && s.rect.w > 100.0, "{s:?}");
+    // The whole paragraph: one stroke on every line.
+    let b = book(vec![Block::Paragraph { text: struck(0, TEXT.len()), kind: Kind::Body }]);
+    let layout = t.layout(&b.chapters[0].blocks[0], &b).unwrap();
+    assert!(text_of(&layout).lines.iter().all(|l| l.strokes.len() == 1));
+    // And on the page.
+    let page = paginate(&b, 0, &style, &mut t).render_body(0, &style);
+    assert_eq!(page.strokes.len(), text_of(&layout).lines.len());
+}
+
+#[test]
+fn a_match_in_a_table_cell_is_marked_in_the_cell() {
+    let style = PageStyle::for_window(600.0, 900.0, 20.0);
+    let mut t = typesetter(style);
+    let table = Arc::new(Table { rows: vec![vec![cell("Свойство", false), cell("Реляционная", false)]] });
+    let b = book(vec![paragraph("Текст"), Block::TableRow { table: table.clone(), row: 0 }]);
+    let layout = paginate(&b, 0, &style, &mut t);
+    let start = table.cell_starts(0)[1];
+    let at = |offset| crate::model::Locator { chapter: 0, block: 1, offset };
+    let marks = layout.marks(0, &style, at(start), at(start + "Реляционная".len()));
+    assert_eq!(marks.len(), 1);
+    // In the second column, right of the first cell.
+    assert!(marks[0].x > style.margin_h + 100.0, "{:?}", marks[0]);
+}
+
+#[test]
+fn the_end_page_shows_the_title_authors_and_finished() {
+    let style = PageStyle::for_window(600.0, 900.0, 20.0);
+    let mut t = typesetter(style);
+    let mut b = book(vec![paragraph(TEXT)]);
+    b.title = "Погребение ангела".into();
+    b.authors = vec!["Евгений Гришковец".into()];
+    let page = end_page(&b, &style, &mut t);
+    let ys: Vec<f32> = page.runs.iter().map(|r| r.positions[0][1]).collect();
+    assert!(ys.windows(2).all(|w| w[0] < w[1]), "title, authors, then Finished: {ys:?}");
+    assert!(ys[0] > 300.0 && *ys.last().unwrap() < 600.0, "in the middle of the window: {ys:?}");
+    assert_eq!(page.runs.last().unwrap().ink, Ink::Secondary);
+    assert!(page.areas.is_empty() && page.images.is_empty());
+}

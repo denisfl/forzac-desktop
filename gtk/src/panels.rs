@@ -59,6 +59,7 @@ impl Theme {
              .forzac-panel .muted {{ color: {muted}; }}
              .forzac-sheet {{ background-color: {sheet}; box-shadow: 0 -1px 0 {line}, 0 -12px 32px alpha(black, 0.08); }}
              .forzac-side {{ background-color: {paper}; box-shadow: -1px 0 0 {line}, -12px 0 32px alpha(black, 0.08); }}
+             window.forzac-recent {{ background-color: {paper}; }}
              .forzac-panel .grabber, .forzac-panel .rule, .forzac-panel .divider {{ background-color: {line}; }}
              .forzac-panel .segmented {{ border: 1px solid {line}; }}
              .forzac-panel .chip {{ border: 1px solid {line}; }}
@@ -113,6 +114,9 @@ const STATIC_CSS: &str = "
         font-family: 'PT Serif'; font-size: 8px; font-weight: 700; }
     .forzac-panel listview, .forzac-panel row, .forzac-panel scrolledwindow { background: none; color: inherit; padding: 0; }
     .forzac-panel row:focus-visible { outline: none; }
+    .forzac-panel, .forzac-sheet, .forzac-side { transition: color 200ms, background-color 200ms, box-shadow 200ms; }
+    .forzac-recent .book-title { font-size: 15px; }
+    .forzac-recent list { background: none; }
 ";
 
 /// Lower case and "ё" as "е", for filtering the contents.
@@ -720,9 +724,24 @@ impl SearchPanel {
 /// grabber, "NOTE" with the note's title, then the note typeset by the core. `Esc`, `Enter` or `q` closes it.
 /// Returns the sheet, so a click on the page can close it.
 pub fn note(overlay: &gtk::Overlay, view: &PageView, id: &str) -> Option<gtk::Box> {
-    crate::fonts::add_interface_fonts();
     let width = overlay.width().min(SHEET_WIDTH);
     let (node, height) = view.note(id, (width - 48) as f32)?;
+    let title = view.book().notes.get(id).and_then(|n| n.title.clone()).filter(|t| !t.trim().is_empty());
+    let label = ["Note", title.as_deref().unwrap_or("")].join(" ").trim().to_uppercase();
+    Some(sheet(overlay, view, Some(&label), node, height, width))
+}
+
+/// The short target of link `key` in the note sheet, without a label: a figure, a table or a paragraph the link points
+/// to, shown over the page as on Android (`Book.preview`).
+pub fn preview(overlay: &gtk::Overlay, view: &PageView, key: &str) -> Option<gtk::Box> {
+    let width = overlay.width().min(SHEET_WIDTH);
+    let (node, height) = view.preview(key, (width - 48) as f32)?;
+    Some(sheet(overlay, view, None, node, height, width))
+}
+
+/// A bottom sheet with `node` (`height` high), under `label` when there is one.
+fn sheet(overlay: &gtk::Overlay, view: &PageView, label: Option<&str>, node: gsk::RenderNode, height: f32, width: i32) -> gtk::Box {
+    crate::fonts::add_interface_fonts();
     let panel = gtk::Box::new(gtk::Orientation::Vertical, 12);
     panel.add_css_class("forzac-panel");
     panel.add_css_class("forzac-sheet");
@@ -731,12 +750,13 @@ pub fn note(overlay: &gtk::Overlay, view: &PageView, id: &str) -> Option<gtk::Bo
     panel.set_halign(gtk::Align::Center);
     panel.set_width_request(width);
     panel.append(&grabber());
-    let title = view.book().notes.get(id).and_then(|n| n.title.clone()).filter(|t| !t.trim().is_empty());
-    let label = gtk::Label::new(Some(&["Note", title.as_deref().unwrap_or("")].join(" ").trim().to_uppercase()));
-    label.add_css_class("note-label");
-    label.add_css_class("muted");
-    label.set_xalign(0.0);
-    panel.append(&label);
+    if let Some(label) = label {
+        let label = gtk::Label::new(Some(label));
+        label.add_css_class("note-label");
+        label.add_css_class("muted");
+        label.set_xalign(0.0);
+        panel.append(&label);
+    }
     let note = NodeView::new(node, (width - 48) as f32, height);
     note.set_focusable(true);
     let scrolled = gtk::ScrolledWindow::builder()
@@ -756,7 +776,7 @@ pub fn note(overlay: &gtk::Overlay, view: &PageView, id: &str) -> Option<gtk::Bo
     });
     note.add_controller(keys);
     note.grab_focus();
-    Some(panel)
+    panel
 }
 
 mod imp {

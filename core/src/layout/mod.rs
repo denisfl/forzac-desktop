@@ -11,7 +11,7 @@ mod table;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-pub use page::{ChapterLayout, Page, PageContent, PageImage, Rule, layout_note, paginate};
+pub use page::{ChapterLayout, Page, PageContent, PageImage, Rule, end_page, layout_note, layout_preview, paginate};
 
 use crate::fonts::{self, Face, Family, FontId, Glyph, Shaper};
 use crate::hyphen::Hyphenator;
@@ -113,6 +113,13 @@ impl GlyphRun {
     }
 }
 
+/// A line through struck-out text: a filled rectangle in an ink.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Stroke {
+    pub rect: Rect,
+    pub ink: Ink,
+}
+
 /// A note marker or a link on the page.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Area {
@@ -136,6 +143,8 @@ enum Group {
 struct Line {
     runs: Vec<GlyphRun>,
     areas: Vec<Area>,
+    /// Lines through struck-out text.
+    strokes: Vec<Stroke>,
     /// Each glyph's text offset (bytes into the block), x and advance: where a range of the text is, for marks.
     glyphs: Vec<(u32, f32, f32)>,
 }
@@ -155,11 +164,12 @@ impl TextLayout {
     }
 }
 
-/// A cell of a table row, its top-left corner relative to the row.
+/// A cell of a table row, its top-left corner relative to the row, and where its text starts in the row's text.
 struct Cell {
     text: TextLayout,
     x: f32,
     y: f32,
+    offset: usize,
 }
 
 enum Content {
@@ -245,11 +255,13 @@ struct Piece {
     glyphs: Arc<[Glyph]>,
 }
 
-/// A run of one style: face, size, raise, ink and target.
+/// A run of one style: face (or the monospace face), size, raise, ink, target and strikethrough.
 struct Segment {
     start: usize,
     end: usize,
     face: Face,
+    mono: bool,
+    strike: bool,
     size: f32,
     rise: f32,
     ink: Ink,
@@ -270,6 +282,8 @@ struct Spec {
     keep_with_next: bool,
     italic: bool,
     bold: bool,
+    /// Code: the monospace face.
+    mono: bool,
     scale: f32,
     line_scale: f32,
 }
@@ -285,18 +299,26 @@ pub struct Typesetter {
     pub line_height: f32,
     /// The fonts of the four faces in the style's family.
     faces: [FontId; 4],
+    /// The monospace font for code; the regular face when it cannot be read.
+    mono: FontId,
 }
 
 impl Typesetter {
     pub fn new(style: PageStyle, hyphenator: Option<Arc<Hyphenator>>) -> Self {
         let line_height = (style.text_size * style.line_height).floor();
         let faces = Face::ALL.map(|f| style.family.face(f));
-        Typesetter { style, shaper: Shaper::new(), hyphenator, tables: HashMap::new(), line_height, faces }
+        let mono = fonts::mono().unwrap_or(faces[0]);
+        Typesetter { style, shaper: Shaper::new(), hyphenator, tables: HashMap::new(), line_height, faces, mono }
     }
 
     /// The font of `face` in the style's family.
     fn font_of(&self, face: Face) -> FontId {
         self.faces[face as usize]
+    }
+
+    /// The font a segment is set in.
+    fn segment_font(&self, seg: &Segment) -> FontId {
+        if seg.mono { self.mono } else { self.font_of(seg.face) }
     }
 
     pub fn style(&self) -> &PageStyle {
@@ -321,6 +343,7 @@ impl Typesetter {
             keep_with_next: false,
             italic: false,
             bold: false,
+            mono: false,
             scale: 1.0,
             line_scale: 1.0,
         }
@@ -408,6 +431,7 @@ impl Typesetter {
                         group: Group::Kind(Kind::Code),
                         space_before: half,
                         space_after: half,
+                        mono: true,
                         scale: 0.85,
                         ..base
                     },
@@ -453,21 +477,23 @@ impl Typesetter {
     /// A paragraph set into lines of `spec.width`.
     fn text(&mut self, text: &StyledText, spec: &Spec) -> TextLayout {
         let size = self.style.text_size * spec.scale;
-        let segments = segments(text, size, spec.italic, spec.bold);
+        let segments = segments(text, size, spec.italic, spec.bold, spec.mono);
         let indent = if spec.indent { self.style.text_size * 1.5 } else { 0.0 };
-        let (items, meta, pieces) = self.items(&text.text, &segments, indent, spec.justify, spec.hyphenate);
+        let (items, meta, pieces) = self.items(&text.text, &segments, indent, spec.justify, spec.hyphenate, spec.mono);
         let breaks = knuth_plass::break_lines(&items, |_| spec.width);
         let (lines, starts) = self.lines(&items, &meta, &pieces, &segments, &breaks, spec);
 
         let line_height = (size * self.style.line_height * spec.line_scale).floor();
-        let face = self.font_of(segments.first().map(|s| s.face).unwrap_or(Face::Regular));
+        let face = segments.first().map_or(self.font_of(Face::Regular), |s| self.segment_font(s));
         let (asc, desc) = self.shaper.line_metrics(face);
         let units = size / self.shaper.units_per_em(face);
         let baseline = (line_height - (asc - desc) * units) / 2.0 + asc * units;
         TextLayout { lines, starts, line_height, baseline }
     }
 
-    /// The paragraph as boxes (syllables), glue (spaces) and penalties (hyphenation points, breaks after dashes).
+    /// The paragraph as boxes (syllables), glue (spaces) and penalties (hyphenation points, breaks after dashes). In
+    /// `code` the spaces that start a line are boxes, so its indentation stays.
+    #[allow(clippy::too_many_arguments)]
     fn items(
         &mut self,
         text: &str,
@@ -475,6 +501,7 @@ impl Typesetter {
         indent: f32,
         justify: bool,
         hyphenate: bool,
+        code: bool,
     ) -> (Vec<Item>, Vec<Meta>, Vec<Piece>) {
         let mut items = Vec::new();
         let mut meta = Vec::new();
@@ -495,8 +522,12 @@ impl Typesetter {
             }
             if c == ' ' {
                 let seg = &segments[segment_at(segments, i)];
-                let space = self.width_of(self.font_of(seg.face), " ", seg.size);
-                if justify {
+                let space = self.width_of(self.segment_font(seg), " ", seg.size);
+                let line_start = text[..i].trim_end_matches(' ').is_empty() || text[..i].trim_end_matches(' ').ends_with('\n');
+                if code && line_start {
+                    items.push(Item::Box { width: space });
+                    meta.push(Meta::Plain);
+                } else if justify {
                     items.push(Item::Glue { width: space, stretch: space * 0.5, shrink: space * 0.33 });
                     meta.push(Meta::Plain);
                 } else {
@@ -527,7 +558,7 @@ impl Typesetter {
     fn word_pieces(&mut self, text: &str, segments: &[Segment], (start, end): (usize, usize), pieces: &mut Vec<Piece>) {
         for (index, seg) in segments.iter().enumerate().filter(|(_, s)| s.start < end && s.end > start) {
             let (a, b) = (seg.start.max(start), seg.end.min(end));
-            let base = self.font_of(seg.face);
+            let base = self.segment_font(seg);
             // Nearly always the book face has every character: no glyph 0 (.notdef), and the shape is cached.
             let whole = self.piece(text, a, b, base, seg, index);
             if whole.glyphs.iter().all(|g| g.id != 0) {
@@ -620,7 +651,7 @@ impl Typesetter {
                 } else if cut == Cut::Hyphen {
                     let index = first_piece + word_pieces.iter().rposition(|p| p.start < pos).unwrap_or(0);
                     let piece = &pieces[index];
-                    let width = self.width_of(self.font_of(segments[piece.segment].face), "-", piece.size);
+                    let width = self.width_of(self.segment_font(&segments[piece.segment]), "-", piece.size);
                     items.push(Item::Penalty { width, penalty, flagged: true });
                     meta.push(Meta::Hyphen(index));
                 } else {
@@ -685,7 +716,7 @@ impl Typesetter {
             if let (Item::Penalty { width, flagged: true, .. }, Meta::Hyphen(index)) = (items[br.index], meta[br.index]) {
                 let piece = &pieces[index];
                 let seg = &segments[piece.segment];
-                let font = self.font_of(seg.face);
+                let font = self.segment_font(seg);
                 let scale = piece.size / self.shaper.units_per_em(font);
                 for g in self.shaper.shape(font, "-").iter() {
                     let at = [x + g.x_offset as f32 * scale, -piece.rise - g.y_offset as f32 * scale];
@@ -701,6 +732,7 @@ impl Typesetter {
             if shift != 0.0 {
                 line.runs.iter_mut().flat_map(|r| r.positions.iter_mut()).for_each(|p| p[0] += shift);
                 line.areas.iter_mut().for_each(|a| a.rect.x += shift);
+                line.strokes.iter_mut().for_each(|s| s.rect.x += shift);
             }
             lines.push(line);
             starts.push(line_start.unwrap_or(prev_end));
@@ -735,8 +767,8 @@ fn segment_at(segments: &[Segment], at: usize) -> usize {
     segments.iter().position(|s| at >= s.start && at < s.end).unwrap_or(segments.len() - 1)
 }
 
-/// Runs of one style: cut at every style range edge.
-fn segments(text: &StyledText, size: f32, italic: bool, bold: bool) -> Vec<Segment> {
+/// Runs of one style: cut at every style range edge. `mono`: the whole paragraph is code.
+fn segments(text: &StyledText, size: f32, italic: bool, bold: bool, mono: bool) -> Vec<Segment> {
     let len = text.text.len();
     let mut cuts = vec![0, len];
     for r in &text.styles {
@@ -761,11 +793,21 @@ fn segments(text: &StyledText, size: f32, italic: bool, bold: bool) -> Vec<Segme
             };
             let note = range(Style::NoteRef).and_then(|r| r.target.clone()).map(Target::Note);
             let link = range(Style::Link).and_then(|r| r.target.clone()).map(Target::Link);
+            // Inline code at 0.9, as on Android; a code paragraph is already set smaller.
+            let code = has(Style::Code) && !mono;
             Segment {
                 start: s,
                 end: e,
                 face: Face::of(italic || has(Style::Emphasis), bold || has(Style::Strong)),
-                size: if small { size * 0.7 } else { size },
+                mono: mono || code,
+                strike: has(Style::Strikethrough),
+                size: if small {
+                    size * 0.7
+                } else if code {
+                    size * 0.9
+                } else {
+                    size
+                },
                 rise,
                 ink: if link.is_some() { Ink::Link } else { Ink::Text },
                 target: note.or(link),
@@ -773,7 +815,17 @@ fn segments(text: &StyledText, size: f32, italic: bool, bold: bool) -> Vec<Segme
         })
         .collect();
     if out.is_empty() {
-        out.push(Segment { start: 0, end: 0, face: Face::of(italic, bold), size, rise: 0.0, ink: Ink::Text, target: None });
+        out.push(Segment {
+            start: 0,
+            end: 0,
+            face: Face::of(italic, bold),
+            mono,
+            strike: false,
+            size,
+            rise: 0.0,
+            ink: Ink::Text,
+            target: None,
+        });
     }
     out
 }
@@ -806,6 +858,17 @@ fn draw(line: &mut Line, pieces: &[Piece], segments: &[Segment], a: usize, b: us
             );
             let advance = g.advance as f32 * p.scale;
             line.glyphs.push(((p.start + g.cluster as usize) as u32, x, advance));
+            if seg.strike {
+                // Through the middle of the lower case, across the spaces between struck words.
+                let h = (p.size * 0.06).max(1.0);
+                let rect = Rect { x, y: -p.rise - p.size * 0.27 - h / 2.0, w: advance, h };
+                match line.strokes.last_mut() {
+                    Some(s) if s.ink == seg.ink && s.rect.y == rect.y && s.rect.x + s.rect.w >= x - 2.0 * p.size => {
+                        s.rect.w = x + advance - s.rect.x
+                    }
+                    _ => line.strokes.push(Stroke { rect, ink: seg.ink }),
+                }
+            }
             if let Some(target) = &seg.target {
                 let rect = Rect { x, y: -p.rise - p.ascent, w: advance, h: p.ascent + p.descent };
                 match line.areas.last_mut() {
