@@ -7,7 +7,7 @@ book=${1:?usage: ci/arch-check.sh book.fb2.zip}
 out=${OUT:-/src/target-png}
 cd ~
 git config --global --add safe.directory /src
-git -C /src archive --prefix=forzac-desktop-0.1.0/ -o forzac-0.1.0.tar.gz HEAD
+git -C /src archive --prefix=forzac-desktop-0.1.0/ -o "$HOME/forzac-0.1.0.tar.gz" HEAD
 cp /src/data/PKGBUILD .
 sed -i 's|^source=.*|source=("forzac-0.1.0.tar.gz")|' PKGBUILD
 time makepkg -f --noconfirm >makepkg.log 2>&1 || { tail -30 makepkg.log; exit 1; }
