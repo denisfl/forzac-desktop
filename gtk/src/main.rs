@@ -172,6 +172,14 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
     // The contents panel is built in the first pause in reading (a second without turning), so `o` only shows it and
     // the building never delays a page turn.
     let contents: Rc<RefCell<Option<Rc<panels::Contents>>>> = Rc::default();
+    let search: Rc<RefCell<Option<Rc<panels::SearchPanel>>>> = Rc::default();
+    let open_search: Rc<dyn Fn()> = {
+        let (search, overlay, view) = (search.clone(), overlay.clone(), view.clone());
+        Rc::new(move || {
+            let s = search.borrow_mut().get_or_insert_with(|| panels::SearchPanel::new(&overlay, &view)).clone();
+            s.open(&view);
+        })
+    };
     let open_contents: Rc<dyn Fn()> = {
         let (contents, overlay, view) = (contents.clone(), overlay.clone(), view.clone());
         Rc::new(move || {
@@ -200,7 +208,7 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             }
         ),
     );
-    view.add_controller(shortcuts(&view, &help, open_contents, open_settings, &window, save_style));
+    view.add_controller(shortcuts(&view, &help, open_contents, open_settings, open_search, &window, save_style));
     view.connect_open(glib::clone!(
         #[weak]
         overlay,
@@ -324,6 +332,7 @@ o    contents  (/ filters)
 Tab  Shift+Tab    notes and links on the page, Enter opens
 Ctrl+O    back after a jump
 s    settings
+/  n  N    search, next / previous match
 +  −  0    text size, default size
 t  T    theme
 f  F11    full screen
@@ -455,6 +464,7 @@ fn shortcuts(
     help: &gtk::Label,
     open_contents: Rc<dyn Fn()>,
     open_settings: Rc<dyn Fn()>,
+    open_search: Rc<dyn Fn()>,
     window: &gtk::ApplicationWindow,
     save_style: Rc<dyn Fn()>,
 ) -> gtk::ShortcutController {
@@ -504,6 +514,11 @@ fn shortcuts(
     );
     add("o", Box::new(move || open_contents()));
     add("s", Box::new(move || open_settings()));
+    add("slash", Box::new(move || open_search()));
+    let v = view.clone();
+    add("n", Box::new(move || v.next_match(1)));
+    let v = view.clone();
+    add("<Shift>n", Box::new(move || v.next_match(-1)));
     let v = view.clone();
     add("h|Left|<Shift>space|Page_Up|BackSpace", Box::new(move || v.turn(-1)));
     let v = view.clone();
@@ -562,10 +577,11 @@ fn shortcuts(
     add(
         "Escape",
         Box::new(move || {
+            // The help, else the focused marker or link, else the match highlight.
             if h.is_visible() {
                 h.set_visible(false);
-            } else {
-                v.unfocus();
+            } else if !v.unfocus() {
+                v.clear_match();
             }
         }),
     );

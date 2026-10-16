@@ -7,7 +7,7 @@ import QuartzCore
 
 /// What the view asks its window for.
 enum Command {
-    case contents, settings, help, closePanels, note(String)
+    case contents, settings, search, help, closePanels, note(String)
 }
 
 final class PageView: NSView {
@@ -37,6 +37,9 @@ final class PageView: NSView {
     private var focus: Int?
     /// Where jumps started, the latest last (`⌃O`).
     private var back: [ForzacLocator] = []
+    /// The matches of the last search gone to (start, end), and the one highlighted (`n`/`N` move it).
+    private var matches: [(ForzacLocator, ForzacLocator)] = []
+    private var currentMatch: Int?
     /// Horizontal trackpad scrolling not yet turned into a page turn, and whether this swipe already turned one.
     private var swipe: (CGFloat, Bool) = (0, false)
 
@@ -494,10 +497,68 @@ final class PageView: NSView {
         drawFocus()
     }
 
+    // MARK: Search
+
+    /// Goes to match `i` of `all` (remembered for the way back) and highlights it.
+    func goToMatch(_ all: [(ForzacLocator, ForzacLocator)], _ i: Int) {
+        guard all.indices.contains(i) else { return }
+        matches = all
+        currentMatch = i
+        go(to: all[i].0)
+    }
+
+    /// The next (`delta` 1) or previous (−1) match of the last search; without a highlight, from the reading position.
+    func nextMatch(_ delta: Int) {
+        let before = { (a: ForzacLocator, b: ForzacLocator) in (a.chapter, a.block, a.offset) < (b.chapter, b.block, b.offset) }
+        let here = locator
+        let i = currentMatch.map { $0 + delta } ?? (delta > 0 ? matches.firstIndex { !before($0.0, here) } : matches.lastIndex { before($0.0, here) })
+        guard let i, matches.indices.contains(i) else { return }
+        currentMatch = i
+        go(to: matches[i].0, remember: false)
+    }
+
+    /// Removes the match highlight; false when there was none.
+    @discardableResult
+    func clearMatch() -> Bool {
+        let had = currentMatch != nil
+        currentMatch = nil
+        drawFocus()
+        return had
+    }
+
+    /// The highlighted match's rectangles on screen, y down: on the page, or in the column's current and next chapter.
+    private func matchRects() -> [CGRect] {
+        guard let i = currentMatch, let (from, to) = matches[safe: i] else { return [] }
+        var rects = [ForzacRect](repeating: ForzacRect(x: 0, y: 0, w: 0, h: 0), count: 8)
+        var out: [CGRect] = []
+        func add(_ n: UInt32, dy: CGFloat) {
+            out += rects[0..<Int(n)].map { CGRect(x: CGFloat($0.x), y: CGFloat($0.y) + dy, width: CGFloat($0.w), height: CGFloat($0.h)) }
+        }
+        if scrolling {
+            var top = -offset.rounded()
+            for c in [chapter, chapter + 1] where c < forzac_chapter_count(doc) {
+                let height = forzac_flow_height(doc, c)
+                if from.chapter == c { add(forzac_flow_marks(doc, c, 0, height, from, to, &rects, 8), dy: top) }
+                top += CGFloat(height) + gap
+            }
+        } else if from.chapter == chapter {
+            add(forzac_marks(doc, page, from, to, &rects, 8), dy: 0)
+        }
+        return out
+    }
+
     private func drawFocus() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         focusLayer.sublayers = nil
+        // The match: soft bars in the ink, Android's selection colour.
+        for m in matchRects() {
+            let r = CALayer()
+            r.backgroundColor = color(palette.ink, alpha: 0.14)
+            r.cornerRadius = 4
+            r.frame = CGRect(x: m.minX - 2, y: bounds.height - m.maxY, width: m.width + 4, height: m.height)
+            focusLayer.addSublayer(r)
+        }
         let areas = visibleAreas()
         if let f = focus, let stop = stops(areas)[safe: f] {
             let h = bounds.height
@@ -599,7 +660,9 @@ final class PageView: NSView {
         case 0x01: onCommand?(.settings)                                                      // s
         case 0x03: window?.toggleFullScreen(nil)                                              // f
         case 0x2C where shift: onCommand?(.help)                                              // ?
-        case 0x35: unfocus(); onCommand?(.closePanels)                                         // Esc
+        case 0x2C: onCommand?(.search)                                                        // /
+        case 0x35: if focus == nil { clearMatch() } else { unfocus() }; onCommand?(.closePanels) // Esc
+        case 0x2D: nextMatch(shift ? -1 : 1)                                                   // n N
         case 0x0C: window?.performClose(nil)                                                  // q
         default: super.keyDown(with: e)
         }

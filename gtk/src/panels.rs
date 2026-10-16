@@ -5,8 +5,9 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use forzac_core::Locator;
+use forzac_core::search::Hit;
 use gtk::subclass::prelude::*;
-use gtk::{gdk, glib, graphene, gsk, prelude::*};
+use gtk::{gdk, gio, glib, graphene, gsk, prelude::*};
 
 use crate::icons::{self, Icon};
 use crate::page_view::{PageView, Palette, THEMES};
@@ -65,6 +66,7 @@ impl Theme {
              .forzac-panel .segment.selected, .forzac-panel .chip.selected {{ background-color: {ink}; border-color: {ink}; color: {sheet}; }}
              .forzac-panel .keys {{ outline: 2px solid alpha({ink}, 0.55); }}
              .forzac-panel .dot {{ background-color: {ink}; }}
+             .forzac-panel .snippet {{ color: alpha({ink}, 0.78); }}
              .forzac-panel .search {{ background-color: {sheet}; border: 1px solid {line}; }}
              .forzac-panel .search text placeholder {{ color: {muted}; }}
              .forzac-panel row:selected {{ background-color: alpha({ink}, 0.07); color: {ink}; }}
@@ -103,6 +105,7 @@ const STATIC_CSS: &str = "
     .forzac-panel .book-title { font-family: 'PT Serif'; font-size: 18px; font-weight: 600; }
     .forzac-panel .book-meta, .forzac-panel .position { font-size: 13px; font-feature-settings: 'tnum'; }
     .forzac-panel .entry { font-family: 'PT Serif'; font-size: 16px; }
+    .forzac-panel .snippet { font-family: 'PT Serif'; font-size: 16px; line-height: 1.44; }
     .forzac-panel .entry.current { font-weight: 700; }
     .forzac-panel .dot { min-width: 6px; min-height: 6px; border-radius: 3px; }
     .forzac-panel .search { min-height: 44px; border-radius: 22px; padding: 0 14px; font-size: 15px; }
@@ -467,6 +470,242 @@ fn panel_width(width: i32) -> i32 {
 /// The entry index an item of the contents model stands for.
 fn index_of(item: &glib::Object) -> Option<usize> {
     item.downcast_ref::<gtk::StringObject>()?.string().parse().ok()
+}
+
+/// The search panel, laid out like the contents: the field, the count, then the matches (a snippet with the match in
+/// bold, the section and the position). The book is searched as the reader types, on a worker thread. `Enter` or a
+/// click goes to a match (remembered for `Ctrl+O`), `↓` moves into the list, `j`/`k` move in it, `Esc` clears the field
+/// or closes the panel.
+pub struct SearchPanel {
+    panel: gtk::Box,
+    field: gtk::Text,
+    list: gtk::ListView,
+    selection: gtk::SingleSelection,
+    model: gtk::StringList,
+    count: gtk::Label,
+    hits: RefCell<Rc<Vec<Hit>>>,
+    /// The query of the search running or shown, so a slower older search does not overwrite a newer one.
+    query: RefCell<String>,
+}
+
+impl SearchPanel {
+    pub fn new(overlay: &gtk::Overlay, view: &PageView) -> Rc<Self> {
+        crate::fonts::add_interface_fonts();
+        let model = gtk::StringList::new(&[]);
+        let selection = gtk::SingleSelection::new(Some(model.clone()));
+        let hits: RefCell<Rc<Vec<Hit>>> = RefCell::default();
+
+        let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        panel.add_css_class("forzac-panel");
+        panel.add_css_class("forzac-side");
+        panel.set_halign(gtk::Align::End);
+        panel.set_visible(false);
+
+        // The field, with the search icon and a clear button.
+        let field_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        field_row.add_css_class("search");
+        field_row.set_margin_start(20);
+        field_row.set_margin_end(20);
+        field_row.set_margin_top(16);
+        let icon = Icon::new(icons::SEARCH, 18);
+        icon.add_css_class("muted");
+        field_row.append(&icon);
+        let field = gtk::Text::new();
+        field.set_placeholder_text(Some("Search in book"));
+        field.set_hexpand(true);
+        field_row.append(&field);
+        let clear = gtk::Button::new();
+        clear.set_child(Some(&Icon::new(icons::X, 18)));
+        clear.set_focusable(false);
+        field_row.append(&clear);
+        panel.append(&field_row);
+        let count = gtk::Label::new(None);
+        count.add_css_class("book-meta");
+        count.add_css_class("muted");
+        count.set_xalign(0.0);
+        count.set_margin_start(20);
+        count.set_margin_top(14);
+        count.set_margin_bottom(6);
+        panel.append(&count);
+
+        let factory = gtk::SignalListItemFactory::new();
+        factory.connect_setup(|_, item| {
+            let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
+            row.set_margin_start(20);
+            row.set_margin_end(20);
+            row.set_margin_top(12);
+            row.set_margin_bottom(12);
+            let snippet = gtk::Label::new(None);
+            snippet.add_css_class("snippet");
+            snippet.set_xalign(0.0);
+            snippet.set_wrap(true);
+            snippet.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+            let place = gtk::Label::new(None);
+            place.add_css_class("position");
+            place.add_css_class("muted");
+            place.set_xalign(0.0);
+            place.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            row.append(&snippet);
+            row.append(&place);
+            item.downcast_ref::<gtk::ListItem>().unwrap().set_child(Some(&row));
+        });
+        let list = gtk::ListView::new(Some(selection.clone()), Some(factory.clone()));
+        let scrolled = gtk::ScrolledWindow::builder().child(&list).hscrollbar_policy(gtk::PolicyType::Never).vexpand(true).build();
+        panel.append(&scrolled);
+        overlay.add_overlay(&panel);
+
+        let this = Rc::new(SearchPanel {
+            panel,
+            field: field.clone(),
+            list: list.clone(),
+            selection,
+            model,
+            count,
+            hits,
+            query: RefCell::default(),
+        });
+        let weak = Rc::downgrade(&this);
+        let view_weak = view.downgrade();
+        let with = move |f: &dyn Fn(&Rc<SearchPanel>, &PageView)| {
+            if let (Some(p), Some(v)) = (weak.upgrade(), view_weak.upgrade()) {
+                f(&p, &v);
+            }
+        };
+
+        let w = with.clone();
+        factory.connect_bind(move |_, item| {
+            let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+            let (Some(i), Some(row)) = (item.item().as_ref().and_then(index_of), item.child().and_downcast::<gtk::Box>()) else { return };
+            w(&|p, v| {
+                let hits = p.hits.borrow();
+                let Some(hit) = hits.get(i) else { return };
+                let ink = format!("#{:06x}", THEMES[v.theme()].ink);
+                let (a, m, b) = (&hit.snippet[..hit.matched.start], &hit.snippet[hit.matched.clone()], &hit.snippet[hit.matched.end..]);
+                let markup = format!(
+                    "{}<span foreground=\"{ink}\" weight=\"bold\">{}</span>{}",
+                    glib::markup_escape_text(a),
+                    glib::markup_escape_text(m),
+                    glib::markup_escape_text(b)
+                );
+                let snippet = row.first_child().and_downcast::<gtk::Label>().unwrap();
+                snippet.set_markup(&markup);
+                let place = snippet.next_sibling().and_downcast::<gtk::Label>().unwrap();
+                let percent = format!("{}%", (hit.position * 100.0).round() as u32);
+                place.set_text(&hit.section.as_ref().map_or(percent.clone(), |s| format!("{s} · {percent}")));
+            })
+        });
+
+        // Searched as the reader types, a moment after the last key, on a worker thread.
+        let pending: Rc<RefCell<Option<glib::SourceId>>> = Rc::default();
+        let w = with.clone();
+        field.connect_changed(move |field| {
+            if let Some(id) = pending.borrow_mut().take() {
+                id.remove();
+            }
+            let query = field.text().to_string();
+            let (w, p) = (w.clone(), pending.clone());
+            *pending.borrow_mut() = Some(glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
+                p.borrow_mut().take();
+                w(&|panel, view| panel.search(view, query.clone()));
+            }));
+        });
+        let w = with.clone();
+        clear.connect_clicked(move |_| w(&|p, _| p.field.set_text("")));
+        let w = with.clone();
+        list.connect_activate(move |_, _| w(&|p, v| p.pick(v)));
+        let w = with.clone();
+        field.connect_activate(move |_| w(&|p, v| p.pick(v)));
+
+        let keys = gtk::ShortcutController::new();
+        let w = with.clone();
+        shortcut(&keys, "j", move || w(&|p, _| p.step(1)));
+        let w = with.clone();
+        shortcut(&keys, "k", move || w(&|p, _| p.step(-1)));
+        let w = with.clone();
+        shortcut(&keys, "slash", move || w(&|p, _| p.focus_field()));
+        let w = with.clone();
+        shortcut(&keys, "Escape|q", move || w(&|p, v| p.close(v)));
+        list.add_controller(keys);
+
+        let field_keys = gtk::ShortcutController::new();
+        let w = with.clone();
+        shortcut(&field_keys, "Escape", move || {
+            w(&|p, v| {
+                if p.field.text().is_empty() { p.close(v) } else { p.field.set_text("") }
+            })
+        });
+        shortcut(&field_keys, "Down", move || with(&|p, _| p.select(p.selection.selected())));
+        field.add_controller(field_keys);
+        this
+    }
+
+    /// Shows the panel with the field focused, the last query selected.
+    pub fn open(&self, view: &PageView) {
+        self.panel.set_width_request(panel_width(view.parent().map_or(0, |p| p.width())));
+        self.panel.set_visible(true);
+        self.focus_field();
+    }
+
+    fn focus_field(&self) {
+        self.field.grab_focus();
+        self.field.select_region(0, -1);
+    }
+
+    fn close(&self, view: &PageView) {
+        self.panel.set_visible(false);
+        view.grab_focus();
+    }
+
+    fn search(self: &Rc<Self>, view: &PageView, query: String) {
+        *self.query.borrow_mut() = query.clone();
+        let (book, weak, q) = (view.book(), Rc::downgrade(self), query.clone());
+        glib::spawn_future_local(async move {
+            let Ok(hits) = gio::spawn_blocking(move || forzac_core::search::search(&book, &q)).await else { return };
+            if let Some(panel) = weak.upgrade() {
+                panel.show(query, hits);
+            }
+        });
+    }
+
+    fn show(&self, query: String, hits: Vec<Hit>) {
+        if *self.query.borrow() != query {
+            return; // a newer query is running
+        }
+        let count = match hits.len() {
+            _ if query.trim().chars().count() < 2 => String::new(),
+            0 => "No matches".to_owned(),
+            1 => "1 match".to_owned(),
+            n => format!("{n} matches"),
+        };
+        self.count.set_text(&count);
+        let n = hits.len();
+        *self.hits.borrow_mut() = Rc::new(hits);
+        let indices: Vec<String> = (0..n).map(|i| i.to_string()).collect();
+        self.model.splice(0, self.model.n_items(), &indices.iter().map(String::as_str).collect::<Vec<_>>());
+    }
+
+    fn select(&self, position: u32) {
+        if position < self.selection.n_items() {
+            self.list.scroll_to(position, gtk::ListScrollFlags::FOCUS | gtk::ListScrollFlags::SELECT, None);
+        }
+    }
+
+    fn step(&self, delta: i64) {
+        let n = self.selection.n_items() as i64;
+        if n > 0 {
+            self.select((self.selection.selected() as i64 + delta).clamp(0, n - 1) as u32);
+        }
+    }
+
+    fn pick(&self, view: &PageView) {
+        let hits = self.hits.borrow().clone();
+        if hits.is_empty() {
+            return;
+        }
+        let i = (self.selection.selected() as usize).min(hits.len() - 1);
+        self.close(view);
+        view.go_to_match(hits, i);
+    }
 }
 
 /// Note `id` in a bottom sheet over the page, as the Android note (`NoteSheet.kt`, the design's `Footnote.dc.html`): a

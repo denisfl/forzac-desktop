@@ -55,6 +55,8 @@ Tests: `cargo test -p forzac-core`. Measurements on a Linux desktop: `scripts/me
 | `]` `[` | next / previous chapter |
 | `g` `G` `Home` `End` | chapter start / end |
 | `o` | contents (`/` filters, `Enter` jumps) |
+| `/` (macOS also `⌘F`) | search in the book: case and ё/е do not matter; `Enter` goes to a match |
+| `n` `N` (macOS also `⌘G` `⇧⌘G`) | next / previous match; `Esc` clears the highlight |
 | `Tab` `Shift+Tab`, then `Enter` | note markers and links on the page (or click them) |
 | `Ctrl+O` (macOS also `⌘[`) | back after a jump |
 | `s` | settings: theme, font, text size, line spacing, alignment, margins, pages (`j` `k` choose, `h` `l` change; macOS also `⌘,`) |
@@ -65,7 +67,7 @@ Tests: `cargo test -p forzac-core`. Measurements on a Linux desktop: `scripts/me
 | `q` `Ctrl+W` (macOS: `⌘W`) | close |
 
 A wheel step turns a page; one touchpad swipe turns one page; in Scroll mode the wheel and touchpad scroll smoothly.
-Keys work in any keyboard layout. Planned: `/` `n` `N` search, `b` bookmark.
+Keys work in any keyboard layout. Planned: `b` bookmark.
 
 ## Default reader on Linux
 

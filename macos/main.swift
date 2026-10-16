@@ -22,6 +22,7 @@ o    contents  (/ filters)
 Tab  Shift+Tab    notes and links on the page, Return opens
 ⌃O  ⌘[    back after a jump
 s  ⌘,    settings
+/  ⌘F    search;  n  N  ⌘G  ⇧⌘G    next / previous match
 +  −  0    text size, default size
 t  T    theme
 f  ⌃⌘F    full screen
@@ -43,6 +44,7 @@ final class Reader: NSObject, NSWindowDelegate {
     private let help = NSTextField(labelWithString: helpText)
     private var settingsSheet: SettingsSheet?
     private var contents: ContentsPanel?
+    private var search: SearchPanel?
     private weak var note: NoteSheet?
     private let state: OpaquePointer?
     private var saveTimer: Timer?
@@ -128,6 +130,21 @@ final class Reader: NSObject, NSWindowDelegate {
             }
             closePanels()
             contents?.open()
+        case .search:
+            if search == nil {
+                let panel = SearchPanel(view: view)
+                container.addSubview(panel)
+                let share = panel.widthAnchor.constraint(equalTo: container.widthAnchor, multiplier: 0.45)
+                share.priority = NSLayoutConstraint.Priority(490) // below the window's own size: the panel never resizes it
+                NSLayoutConstraint.activate([
+                    panel.topAnchor.constraint(equalTo: container.topAnchor), panel.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+                    panel.trailingAnchor.constraint(equalTo: container.trailingAnchor), share,
+                    panel.widthAnchor.constraint(greaterThanOrEqualToConstant: 280), panel.widthAnchor.constraint(lessThanOrEqualToConstant: 460),
+                ])
+                search = panel
+            }
+            closePanels()
+            search?.open()
         case .note(let id):
             closePanels()
             guard let sheet = NoteSheet(view: view, id: id, windowSize: container.bounds.size) else { return }
@@ -147,6 +164,7 @@ final class Reader: NSObject, NSWindowDelegate {
         help.isHidden = true
         settingsSheet?.isHidden = true
         contents?.isHidden = true
+        search?.isHidden = true
         note?.removeFromSuperview()
     }
 
@@ -369,6 +387,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func showSettings(_ sender: Any?) { key?.run(.settings) }
     @objc func showContents(_ sender: Any?) { key?.run(.contents) }
+    @objc func find(_ sender: Any?) { key?.run(.search) }
+    @objc func findNext(_ sender: Any?) { key?.view.nextMatch(1) }
+    @objc func findPrevious(_ sender: Any?) { key?.view.nextMatch(-1) }
     @objc func toggleScroll(_ sender: Any?) { key?.view.step(6, 1) }
     @objc func nextTheme(_ sender: Any?) { key?.view.step(0, 1) }
     @objc func biggerText(_ sender: Any?) { key?.view.step(2, 1) }
@@ -430,6 +451,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recentItem.submenu = recentMenu
         let close = NSMenuItem(title: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         submenu("File", [item("Open…", #selector(openDocument(_:)), "o"), recentItem, .separator(), close])
+        submenu("Edit", [
+            item("Find…", #selector(find(_:)), "f"), item("Find Next", #selector(findNext(_:)), "g"),
+            item("Find Previous", #selector(findPrevious(_:)), "g", [.command, .shift]),
+        ])
         let fullScreen = NSMenuItem(title: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
         fullScreen.keyEquivalentModifierMask = [.control, .command]
         submenu("View", [

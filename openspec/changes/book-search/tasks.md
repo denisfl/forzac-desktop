@@ -7,11 +7,11 @@
 
 ## 2. Shells
 
-- [ ] 2.1 GTK: the search panel, live search on a worker, `Enter`/click, highlight in Slide and Scroll, `n`/`N`, `Esc`
-- [ ] 2.2 macOS: the same, `⌘F`, a menu item
-- [ ] 2.3 Help and README
+- [x] 2.1 GTK: the search panel, live search on a worker, `Enter`/click, highlight in Slide and Scroll, `n`/`N`, `Esc`
+- [x] 2.2 macOS: the same, `⌘F`, a menu item
+- [x] 2.3 Help and README
 
 ## 3. Verification
 
-- [ ] 3.1 fmt, clippy, tests; time of a whole-book search on the Pi
-- [ ] 3.2 Pi and Mac: the panel in three themes, a match highlighted in Slide and Scroll, `n`/`N` across chapters
+- [x] 3.1 fmt, clippy, tests; time of a whole-book search on the Pi
+- [x] 3.2 Pi and Mac: the panel in three themes, a match highlighted in Slide and Scroll, `n`/`N` across chapters

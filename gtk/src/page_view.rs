@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use forzac_core::hyphen::Hyphenator;
 use forzac_core::model::LinkTarget;
+use forzac_core::search::Hit;
 use forzac_core::settings::{Setting, Settings, Turning};
 use forzac_core::{
     Area, Block, Book, ChapterLayout, Ink, Locator, PageContent, PageStyle, Rect, Target, Typesetter, fonts, layout_note, paginate,
@@ -150,6 +151,8 @@ pub struct State {
     focus: Option<usize>,
     /// Where jumps started, the latest last.
     back: Vec<Locator>,
+    /// The matches of the last search gone to, and the one highlighted (`n`/`N` move it; `None`: no highlight).
+    search: Option<(Rc<Vec<Hit>>, Option<usize>)>,
     turn: Option<Turn>,
     mode: Mode,
     /// "Scroll": the column's offset, tiles and movement.
@@ -246,6 +249,7 @@ impl PageView {
             areas: HashMap::new(),
             focus: None,
             back: Vec::new(),
+            search: None,
             turn: None,
             mode: Mode::Slide,
             column: scroll::Column::default(),
@@ -431,6 +435,59 @@ impl PageView {
             }
         });
         self.show(at);
+    }
+
+    /// Goes to match `i` of `hits` (remembered for `back`) and highlights it.
+    pub fn go_to_match(&self, hits: Rc<Vec<Hit>>, i: usize) {
+        let Some(at) = hits.get(i).map(|h| h.start) else { return };
+        self.with(|s| s.search = Some((hits, Some(i))));
+        self.go_to(at);
+    }
+
+    /// Goes to the next (`delta` 1) or previous (−1) match of the last search, if there is one.
+    pub fn next_match(&self, delta: i32) {
+        let at = self.with(|s| {
+            let (hits, current) = s.search.as_mut()?;
+            // Without a highlight: from the reading position.
+            let here = s.locator;
+            let i = match *current {
+                Some(i) => i as i64 + delta as i64,
+                None if delta > 0 => hits.iter().position(|h| h.start >= here)? as i64,
+                None => hits.iter().rposition(|h| h.start < here)? as i64,
+            };
+            let hit = hits.get(usize::try_from(i).ok()?)?;
+            *current = Some(i as usize);
+            Some(hit.start)
+        });
+        if let Some(at) = at {
+            self.show(at);
+        }
+    }
+
+    /// Removes the match highlight; false when there was none.
+    pub fn clear_match(&self) -> bool {
+        let had = self.with(|s| s.search.as_mut().and_then(|(_, current)| current.take()).is_some());
+        self.queue_draw();
+        had
+    }
+
+    /// The highlighted match, if it is in `chapter`.
+    fn highlighted(s: &State, chapter: usize) -> Option<(Locator, Locator)> {
+        let (hits, current) = s.search.as_ref()?;
+        let hit = hits.get((*current)?)?;
+        (hit.start.chapter == chapter).then_some((hit.start, hit.end))
+    }
+
+    /// Draws `rects` (a match) as soft bars in the ink, Android's selection colour.
+    fn draw_marks(s: &State, snapshot: &gtk::Snapshot, rects: &[forzac_core::Rect], dy: f32) {
+        let mut ink = rgba(THEMES[s.theme].ink);
+        ink.set_alpha(0.14);
+        for r in rects {
+            let bounds = graphene::Rect::new(r.x - 2.0, r.y + dy, r.w + 4.0, r.h);
+            snapshot.push_rounded_clip(&gsk::RoundedRect::from_rect(bounds, 4.0));
+            snapshot.append_color(&ink, &bounds);
+            snapshot.pop();
+        }
     }
 
     /// Returns to where the last jump started; false when there is none.
@@ -703,6 +760,9 @@ impl PageView {
                 _ => {
                     s.turn = None;
                     snapshot.append_node(&current);
+                    if let (Some((from, to)), Some(layout), Some(style)) = (Self::highlighted(s, s.chapter), &s.layout, &s.style) {
+                        Self::draw_marks(s, snapshot, &layout.marks(s.page, style, from, to), 0.0);
+                    }
                     // The focused marker or link (all its lines): a soft box in the link ink, over the cached page.
                     let areas = s.areas.get(&s.page);
                     if let (Some(areas), Some(f)) = (areas, s.focus)

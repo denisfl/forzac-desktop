@@ -742,3 +742,261 @@ final class NoteSheet: SheetView {
         if let view { view.window?.makeFirstResponder(view) }
     }
 }
+
+// MARK: - Search
+
+/// The search panel, laid out like the contents: the field, the count, then the matches (a snippet with the match in
+/// bold, the section and the position). The book is searched as the reader types, on a background queue. `Return` or a
+/// double-click goes to a match (remembered for `⌃O`), `↓` moves into the list, `j`/`k` move in it, `Esc` clears the
+/// field or closes the panel.
+final class SearchPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
+    struct Hit {
+        let start, end: ForzacLocator
+        let snippet: NSAttributedString
+        let place: String
+    }
+
+    private weak var view: PageView?
+    private let book: OpaquePointer
+    private var hits: [Hit] = []
+    /// The query of the search running or shown: a slower older search does not overwrite a newer one.
+    private var query = ""
+    private var pending: DispatchWorkItem?
+    private let field = LayerView()
+    private let searchIcon = IconView(Icons.search, size: 18)
+    private let input = NSTextField()
+    private let clear = FlatButton(IconView(Icons.x, size: 18))
+    private let count = label("", interfaceFont(13), 0)
+    private let table = SearchTable()
+    private let scroll = NSScrollView()
+    private var palette = themes[0]
+
+    init(view: PageView) {
+        self.view = view
+        book = forzac_book(view.doc)
+        super.init()
+        layer!.shadowOpacity = 1
+        layer!.shadowRadius = 16
+
+        fixed(field, height: 44)
+        field.layer!.cornerRadius = 22
+        field.layer!.borderWidth = 1
+        input.isBordered = false
+        input.drawsBackground = false
+        input.focusRingType = .none
+        input.font = interfaceFont(15)
+        input.delegate = self
+        fixed(clear, width: 28, height: 28)
+        clear.onClick = { [weak self] in
+            self?.input.stringValue = ""
+            self?.changed()
+        }
+        for v in [searchIcon, input, clear] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            field.addSubview(v)
+        }
+        NSLayoutConstraint.activate([
+            searchIcon.leadingAnchor.constraint(equalTo: field.leadingAnchor, constant: 14), searchIcon.centerYAnchor.constraint(equalTo: field.centerYAnchor),
+            searchIcon.widthAnchor.constraint(equalToConstant: 18), searchIcon.heightAnchor.constraint(equalToConstant: 18),
+            input.leadingAnchor.constraint(equalTo: searchIcon.trailingAnchor, constant: 10), input.trailingAnchor.constraint(equalTo: clear.leadingAnchor, constant: -6),
+            input.centerYAnchor.constraint(equalTo: field.centerYAnchor),
+            clear.trailingAnchor.constraint(equalTo: field.trailingAnchor, constant: -8), clear.centerYAnchor.constraint(equalTo: field.centerYAnchor),
+        ])
+
+        table.addTableColumn(NSTableColumn(identifier: .init("hit")))
+        table.headerView = nil
+        table.backgroundColor = .clear
+        table.intercellSpacing = .zero
+        table.dataSource = self
+        table.delegate = self
+        table.target = self
+        table.doubleAction = #selector(pick)
+        table.panel = self
+        scroll.documentView = table
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+
+        for v in [field, count, scroll] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(v)
+        }
+        NSLayoutConstraint.activate([
+            field.topAnchor.constraint(equalTo: topAnchor, constant: 16), field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
+            field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
+            count.topAnchor.constraint(equalTo: field.bottomAnchor, constant: 14), count.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
+            scroll.topAnchor.constraint(equalTo: count.bottomAnchor, constant: 6), scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor), scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    deinit { forzac_book_release(book) }
+
+    func colour(_ p: Palette) {
+        palette = p
+        layer!.backgroundColor = color(p.paper)
+        layer!.shadowColor = color(0x000000, alpha: 0.08)
+        field.layer!.backgroundColor = color(p.sheet)
+        field.layer!.borderColor = color(p.line)
+        searchIcon.tint = nsColor(p.muted)
+        clear.colour(p)
+        input.textColor = nsColor(p.ink)
+        input.placeholderAttributedString = NSAttributedString(string: "Search in book", attributes: [.foregroundColor: nsColor(p.muted), .font: interfaceFont(15)])
+        count.textColor = nsColor(p.muted)
+        table.selectionColor = color(p.ink, alpha: 0.07)
+        if !query.isEmpty { search(query) } // the snippets carry the theme's ink
+    }
+
+    /// Shows the panel with the field focused and the last query selected.
+    func open() {
+        guard let view else { return }
+        colour(view.palette)
+        isHidden = false
+        window?.makeFirstResponder(input)
+        input.currentEditor()?.selectAll(nil)
+    }
+
+    func dismiss() {
+        isHidden = true
+        if let view { window?.makeFirstResponder(view) }
+    }
+
+    func focusField() { window?.makeFirstResponder(input) }
+
+    /// A moment after the last key: the book is searched for the field's text.
+    private func changed() {
+        pending?.cancel()
+        let q = input.stringValue
+        let work = DispatchWorkItem { [weak self] in self?.search(q) }
+        pending = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+
+    private func search(_ q: String) {
+        query = q
+        let book = UInt(bitPattern: book)
+        let ink = palette.ink
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let search = forzac_search(OpaquePointer(bitPattern: book), q) else { return }
+            var n: UInt32 = 0
+            let list = forzac_search_hits(search, &n)!
+            let hits = (0..<Int(n)).map { SearchPanel.hit(list[$0], ink: ink) }
+            forzac_search_free(search)
+            DispatchQueue.main.async {
+                guard let self, self.query == q else { return }
+                self.show(hits, searched: q.trimmingCharacters(in: .whitespaces).count >= 2)
+            }
+        }
+    }
+
+    /// A match as shown: the snippet in the book serif at 78 % ink with the match in full ink and bold.
+    private static func hit(_ h: ForzacHit, ink: UInt32) -> Hit {
+        let bytes = Array(UnsafeBufferPointer(start: UnsafeRawPointer(h.snippet).assumingMemoryBound(to: UInt8.self), count: strlen(h.snippet)))
+        let (a, b) = (Int(h.match_start), Int(h.match_end))
+        let part = { (r: Range<Int>) in String(decoding: bytes[r], as: UTF8.self) }
+        let style = NSMutableParagraphStyle()
+        style.minimumLineHeight = 23
+        style.maximumLineHeight = 23
+        let plain: [NSAttributedString.Key: Any] = [.font: bookFont("PT Serif", 16), .foregroundColor: nsColor(ink, alpha: 0.78), .paragraphStyle: style]
+        let bold: [NSAttributedString.Key: Any] = [.font: bookFont("PT Serif", 16, bold: true), .foregroundColor: nsColor(ink), .paragraphStyle: style]
+        let text = NSMutableAttributedString(string: part(0..<a), attributes: plain)
+        text.append(NSAttributedString(string: part(a..<b), attributes: bold))
+        text.append(NSAttributedString(string: part(b..<bytes.count), attributes: plain))
+        let percent = "\(Int((h.position * 100).rounded()))%"
+        let place = h.section.map { "\(String(cString: $0)) · \(percent)" } ?? percent
+        return Hit(start: h.start, end: h.end, snippet: text, place: place)
+    }
+
+    private func show(_ found: [Hit], searched: Bool) {
+        hits = found
+        count.stringValue = !searched ? "" : found.isEmpty ? "No matches" : found.count == 1 ? "1 match" : "\(found.count) matches"
+        table.reloadData()
+        if !hits.isEmpty { select(0) }
+    }
+
+    func select(_ row: Int) {
+        guard !hits.isEmpty else { return }
+        let row = min(max(0, row), hits.count - 1)
+        table.selectRowIndexes([row], byExtendingSelection: false)
+        table.scrollRowToVisible(row)
+    }
+
+    @objc func pick() {
+        guard let view, !hits.isEmpty else { return }
+        let i = min(max(0, table.selectedRow), hits.count - 1)
+        dismiss()
+        view.goToMatch(hits.map { ($0.start, $0.end) }, i)
+    }
+
+    func moveIntoList() {
+        window?.makeFirstResponder(table)
+        select(max(0, table.selectedRow))
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { hits.count }
+
+    private var textWidth: CGFloat { max(100, (table.bounds.width > 0 ? table.bounds.width : 400) - 40) }
+
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        let h = hits[row].snippet.boundingRect(with: NSSize(width: textWidth, height: 1000), options: [.usesLineFragmentOrigin]).height
+        return ceil(h) + 4 + 18 + 24
+    }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        let hit = hits[row]
+        let snippet = NSTextField(labelWithAttributedString: hit.snippet)
+        snippet.maximumNumberOfLines = 0
+        snippet.cell?.wraps = true
+        snippet.preferredMaxLayoutWidth = textWidth
+        let place = label(hit.place, interfaceFont(13), palette.muted)
+        place.lineBreakMode = .byTruncatingTail
+        let column = NSStackView(views: [snippet, place])
+        column.orientation = .vertical
+        column.alignment = .leading
+        column.spacing = 4
+        column.edgeInsets = NSEdgeInsets(top: 12, left: 20, bottom: 12, right: 20)
+        return column
+    }
+
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        let r = ContentsRow()
+        r.selection = table.selectionColor
+        return r
+    }
+
+    func controlTextDidChange(_ obj: Notification) { changed() }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        switch selector {
+        case #selector(NSResponder.cancelOperation(_:)):
+            if input.stringValue.isEmpty { dismiss() } else { input.stringValue = ""; changed() }
+            return true
+        case #selector(NSResponder.moveDown(_:)):
+            moveIntoList()
+            return true
+        case #selector(NSResponder.insertNewline(_:)):
+            pick()
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+/// The list of matches: `j`/`k` move, `Return` goes, `/` back to the field, `Esc` closes.
+final class SearchTable: NSTableView {
+    weak var panel: SearchPanel?
+    var selectionColor = color(0x000000, alpha: 0.07)
+
+    override func keyDown(with e: NSEvent) {
+        switch e.shortcutKey {
+        case 0x26: panel?.select(selectedRow + 1)                         // j
+        case 0x28: panel?.select(selectedRow - 1)                         // k
+        case 0x24, 0x4C: panel?.pick()                                     // Return
+        case 0x2C where !e.modifierFlags.contains(.shift): panel?.focusField() // /
+        case 0x35, 0x0C: panel?.dismiss()                                  // Esc q
+        default: super.keyDown(with: e)
+        }
+    }
+}

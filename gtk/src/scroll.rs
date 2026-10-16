@@ -353,6 +353,18 @@ impl PageView {
             snapshot.append_node(node);
             snapshot.restore();
         });
+        // The match highlighted: in the current chapter or the next one, where it reaches into the window.
+        for (chapter, top) in [
+            (s.chapter, -s.column.offset.round()),
+            (s.chapter + 1, -s.column.offset.round() + s.layout.as_ref().map_or(0.0, |l| l.flow_height()) + gap(s)),
+        ] {
+            if let Some((from, to)) = Self::highlighted(s, chapter)
+                && let Some(l) = layout(s, chapter, false)
+            {
+                let marks = l.flow_marks(0.0, l.flow_height(), &style, from, to);
+                Self::draw_marks(s, snapshot, &marks, top);
+            }
+        }
         // The focused marker or link.
         if s.focus.is_some() {
             let areas = Self::visible_areas(s, h).to_vec();
