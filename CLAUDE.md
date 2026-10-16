@@ -59,4 +59,5 @@ task list, archived with `openspec archive` when done (`/opsx:propose`, `/opsx:a
 - **Surgical changes.** Touch only what the task needs; match the surrounding style; remove only what your change made
   unused.
 - **Goal-driven.** Define how success is verified: a failing test for a bug, a measurement for performance, a
-  screenshot for UI. Performance and UI are verified on hardware (Pi 5, Omarchy, Mac), not in containers.
+  screenshot for UI. Performance and UI are verified on hardware (the Pi 5 and the M1 MacBook Pro; there is no Omarchy machine — see
+  `docs/roadmap.md`), not in containers.

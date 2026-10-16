@@ -7,6 +7,22 @@ and get refined in each change's design.
 Linux comes first: Omarchy and the Raspberry Pi 5 are the primary audience. macOS follows once the reader is complete
 on Linux, so the shared core API is settled before the second shell catches up.
 
+## Test hardware
+
+Plans count only on what is at hand:
+
+- **Raspberry Pi 5** (8 GB, Raspberry Pi OS 13 trixie, labwc, Wayland) — the Linux reference: performance budgets,
+  the GTK shell, the `.deb`. Measured through a headless 1920×1200 output at 120 Hz (`scripts/pi-headless.sh`) and
+  looked at over VNC (`scripts/pi-vnc.sh`).
+- **MacBook Pro 13" M1** (macOS 14, 60 Hz display, battery) — the AppKit shell, battery and idle measurements,
+  smoothness at 60 Hz.
+- **Containers** on the Mac (`ci/`) — Arch x86_64 (`makepkg`, install, `xdg-open` under headless sway), Fedora,
+  Debian. They prove that packages build and install, not how the app looks or performs.
+
+Not at hand: an Omarchy machine (x86_64 with Hyprland), a real 120 Hz display, a ProMotion Mac. Hyprland runs neither
+in containers nor in a VM on this Mac (see the spike). Until Omarchy users confirm it, Omarchy support means "built and
+installed in CI, not checked on hardware", and the README says so.
+
 ## Milestone 0.2 — a book you can read every day on Linux
 
 FB2 comes before typesetting: notes, images, links and tables have to be in the model before they can be drawn.
@@ -22,14 +38,23 @@ FB2 comes before typesetting: notes, images, links and tables have to be in the 
 | 7 | `page-turning` | The "Slide" mode specified, plus "Scroll" (continuous); switching with `m` | Both modes keep the reading position | 1 w |
 | 8 | `reader-settings` | The preset settings of the Android app (theme, font, size, line spacing, alignment, margins) in a keyboard panel (`s`); light/dark from the system by default | Changing any setting keeps the reading position | 1 w |
 | 9 | `book-search` | Search in the book (`/`, `n`, `N`), ё/е and case insensitive | A search jumps to the match and highlights it | 4–5 d |
-| 10 | `linux-integration` | AUR package, `.desktop` and MIME, `xdg-open`, one process per user, icon, help and the support link | `yay -S forzac` on Omarchy, then `xdg-open book.fb2` opens Forzac | 3–4 d |
+| 10 | `linux-integration` | AUR package, `.desktop` and MIME, `xdg-open`, one process per user, icon, help and the support link | On the Pi 5 the `.deb` installs and `xdg-open book.fb2` opens Forzac; in the Arch x86_64 container `makepkg -si` installs and `xdg-mime query default` reports Forzac | 3–4 d |
 
 ## Milestone 0.3 — macOS
 
 | # | Change | What | Done when | Size |
 |---|---|---|---|---|
 | 11 | `macos-app` | The AppKit shell catches up with 5–8 and the panels; opening from Finder; trackpad | Feature parity with the Linux shell on an Apple Silicon Mac | 2–3 w |
-| 11a | `macos-release` | A signed, notarised `.app`, a DMG, a Homebrew cask (needs a Developer ID) | `brew install --cask forzac` opens without a warning | 2–3 d |
+| 11a | `macos-release` | An ad-hoc signed `.app` in a DMG to download from forzac.truenrth.app, with first-open instructions (no Developer ID, App Store or Homebrew) | On a fresh Mac user account the DMG from the site opens by following the instructions | 1–2 d |
+
+## Milestone 0.4 — the same reader as on Android, tested on the Pi 5 and the Mac
+
+Nothing is published (repository, AUR, `.deb`, DMG) before this milestone is done: the desktop app still differs from
+the Android app in features and behaviour.
+
+| # | Change | What | Done when | Size |
+|---|---|---|---|---|
+| 11b | `android-parity` | A list of every difference from the Android app in features and behaviour; each one decided as intended (keyboard first, no PDF, …) or a gap; gaps closed here or split into their own changes; a by-hand pass on the Pi 5 and the Mac | No undecided difference is left; the by-hand pass finds nothing new | 2–3 d for the list, then by its size |
 
 ## Milestone 1.0
 
@@ -37,7 +62,7 @@ FB2 comes before typesetting: notes, images, links and tables have to be in the 
 |---|---|---|---|---|
 | 12 | `localization` | Interface in English and Russian | Every screen checked in both languages | 2–3 d |
 | 13 | `bookmarks` | Bookmarks (`b`) and their list in the contents panel | A bookmark survives re-layout and restart | 3–4 d |
-| 14 | `release-1-0` | Performance budgets checked on the Pi 5, an Omarchy laptop and a Mac; release notes; packages published | Budgets met on all three | 3–4 d |
+| 14 | `release-1-0` | Performance budgets checked on the Pi 5 and the Mac; x86_64 packages checked in containers; release notes; packages published | Budgets met on the Pi 5 and the Mac | 3–4 d |
 
 Total: about 14–18 weeks.
 
@@ -45,4 +70,4 @@ Total: about 14–18 weeks.
 
 PDF; text selection and quotes (mouse-first on desktop; revisit after 1.0); a library screen with import and covers
 (books open in place; recent books are enough); dictionaries; formulas (MathML); fixed-layout EPUB; Flatpak (AUR and
-Homebrew first); following the Omarchy theme colours (a possible later change).
+the `.deb` first); a Developer ID, notarisation, Homebrew and the App Store; following the Omarchy theme colours (a possible later change).

@@ -6,12 +6,14 @@ packages.
 
 ## What Changes
 
-- Performance budgets as requirements: first page after opening a book (warm) under 200 ms on the Pi 5 and under
-  150 ms on an Omarchy laptop and a Mac; 0 missed frames inside page-turn animations at 120 Hz; 0 CPU ticks over 10 s
-  while idle; layout of a chapter under 50 ms on the Pi 5.
+- Performance budgets as requirements, on the test hardware in `docs/roadmap.md`: first page after opening a book
+  (warm) under 200 ms on the Pi 5 and under 150 ms on the M1 Mac; 0 missed frames inside page-turn animations at
+  120 Hz on the Pi 5's headless output and at 60 Hz on the Mac's display; 0 CPU ticks over 10 s while idle on both;
+  layout of a chapter under 50 ms on the Pi 5.
+- x86_64 Linux and Hyprland are not measured on hardware; the release notes say so and ask Omarchy users for reports.
 - The measurement scripts (`scripts/measure.sh`, `scripts/pi-headless.sh`) produce the evidence attached to the
   release.
-- Release notes, version 1.0.0, packages published (AUR, Raspberry Pi OS `.deb`, Homebrew cask).
+- Release notes, version 1.0.0, packages published (AUR, Raspberry Pi OS `.deb`, the macOS DMG on forzac.truenrth.app).
 
 ## Capabilities
 

@@ -11,7 +11,8 @@ opens in nvim on Omarchy unless `perl-file-mimeinfo` is present.
 - `.desktop` file (`app.truenrth.forzac`), a MIME type for FB3, the matching Wayland app id; a post-install hint with
   the `xdg-mime default` command.
 - One process per user: opening another book while Forzac runs opens a new window in the same process.
-- Tiling compositors: no client-side title bar on Hyprland; sensible initial size.
+- Tiling compositors: no client-side title bar on Hyprland; sensible initial size. Checked on labwc (Pi 5) and headless
+  sway; Hyprland itself is unverified (no hardware for it).
 - Icon, help on `?` with the single "support" line.
 - A Debian package for Raspberry Pi OS (arm64), built by CI.
 
