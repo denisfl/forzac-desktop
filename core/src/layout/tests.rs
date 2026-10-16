@@ -251,3 +251,31 @@ fn the_column_holds_every_line_once_and_places_round_trip() {
     assert!(ys.windows(2).all(|w| w[0] < w[1]) && *ys.last().unwrap() < ch.flow_height());
     assert_eq!(ch.flow_locator(1e9), ch.flow_locator(ch.flow_height()), "past the end: the last line");
 }
+
+#[test]
+fn marks_cover_a_match_on_its_line() {
+    let text = "Слово перед. Пепперберг дальше идёт текст и ещё текст, чтобы строк было несколько.";
+    let b = book(vec![paragraph(text), paragraph(TEXT)]);
+    let style = PageStyle::for_window(600.0, 800.0, 20.0);
+    let mut t = typesetter(style);
+    let layout = paginate(&b, 0, &style, &mut t);
+    let hit = &crate::search::search(&b, "пепперберг")[0];
+    let marks = layout.marks(0, &style, hit.start, hit.end);
+    assert_eq!(marks.len(), 1, "one line");
+    let m = marks[0];
+    assert!(m.w > 60.0 && m.w < 200.0 && m.x > style.margin_h, "{m:?}");
+    // The match's glyphs lie inside the mark: the page's runs have glyphs there on that line.
+    let page = layout.render(0, &style, &mut t);
+    let inside = page
+        .runs
+        .iter()
+        .flat_map(|r| &r.positions)
+        .filter(|p| p[0] >= m.x - 0.5 && p[0] < m.x + m.w && p[1] > m.y && p[1] <= m.y + m.h)
+        .count();
+    assert!(inside >= "Пепперберг".chars().count(), "{inside}");
+    // In the column the same mark, without the page's top margin.
+    let flow = layout.flow_marks(0.0, layout.flow_height(), &style, hit.start, hit.end);
+    assert_eq!(flow.len(), 1);
+    assert!((flow[0].x - m.x).abs() < 0.01);
+    assert!(layout.marks(0, &style, crate::model::Locator { chapter: 1, ..hit.start }, hit.end).is_empty(), "another chapter");
+}

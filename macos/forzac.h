@@ -109,7 +109,30 @@ float forzac_note(ForzacDocument *doc, const char *id, float width, const Forzac
 const char *forzac_note_title(ForzacDocument *doc, const char *id);
 // 1 a place (*at), 2 a note (*text its id), 3 outside the book (*text the address); 0 unknown.
 uint8_t forzac_link(ForzacDocument *doc, const char *key, ForzacLocator *at, const char **text);
+// Rectangles over the text [from, to) (a search match) on a page of the current chapter, or between heights of a
+// chapter's column; up to `capacity` into `out`, returns how many.
+uint32_t forzac_marks(ForzacDocument *doc, uint32_t page, ForzacLocator from, ForzacLocator to, ForzacRect *out, uint32_t capacity);
+uint32_t forzac_flow_marks(ForzacDocument *doc, uint32_t chapter, float y0, float y1, ForzacLocator from, ForzacLocator to,
+                           ForzacRect *out, uint32_t capacity);
 void forzac_close(ForzacDocument *doc);
+
+// Search: a handle to the book for another thread, then the matches (owned until freed).
+typedef struct ForzacBook ForzacBook;
+typedef struct ForzacSearch ForzacSearch;
+typedef struct {
+    ForzacLocator start;
+    ForzacLocator end;
+    const char *snippet;
+    uint32_t match_start;   // bytes of the snippet
+    uint32_t match_end;
+    const char *section;    // NULL when there is none
+    float position;         // share of the book before it, 0-1
+} ForzacHit;
+ForzacBook *forzac_book(const ForzacDocument *doc);
+void forzac_book_release(ForzacBook *book);
+ForzacSearch *forzac_search(const ForzacBook *book, const char *query);
+const ForzacHit *forzac_search_hits(const ForzacSearch *search, uint32_t *count);
+void forzac_search_free(ForzacSearch *search);
 
 void forzac_set_assets(const char *dir);
 void forzac_set_fallback(ForzacFallback provider);

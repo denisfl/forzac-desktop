@@ -1,9 +1,9 @@
 ## 1. Core
 
-- [ ] 1.1 `search`: the Android rules (normalisation, soft hyphens, spaces, two characters), snippets, section and
+- [x] 1.1 `search`: the Android rules (normalisation, soft hyphens, spaces, two characters), snippets, section and
       position; tests ported from `SearchTest.kt`
-- [ ] 1.2 Lines keep glyph text offsets; `marks` for a page and for a column range; tests
-- [ ] 1.3 C ABI: search results, marks for a page and a column range
+- [x] 1.2 Lines keep glyph text offsets; `marks` for a page and for a column range; tests
+- [x] 1.3 C ABI: search results, marks for a page and a column range
 
 ## 2. Shells
 

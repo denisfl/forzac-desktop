@@ -136,6 +136,8 @@ enum Group {
 struct Line {
     runs: Vec<GlyphRun>,
     areas: Vec<Area>,
+    /// Each glyph's text offset (bytes into the block), x and advance: where a range of the text is, for marks.
+    glyphs: Vec<(u32, f32, f32)>,
 }
 
 /// Lines of a paragraph set at one width.
@@ -803,6 +805,7 @@ fn draw(line: &mut Line, pieces: &[Piece], segments: &[Segment], a: usize, b: us
                 [x + g.x_offset as f32 * p.scale, -p.rise - g.y_offset as f32 * p.scale],
             );
             let advance = g.advance as f32 * p.scale;
+            line.glyphs.push(((p.start + g.cluster as usize) as u32, x, advance));
             if let Some(target) = &seg.target {
                 let rect = Rect { x, y: -p.rise - p.ascent, w: advance, h: p.ascent + p.descent };
                 match line.areas.last_mut() {

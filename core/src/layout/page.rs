@@ -144,25 +144,56 @@ impl ChapterLayout {
     /// its slice, by at most a line, an image or a table row).
     pub fn render_flow(&self, y0: f32, y1: f32, style: &PageStyle) -> PageContent {
         let mut out = PageContent::default();
-        for (b, &top) in self.blocks.iter().zip(&self.flow) {
+        for (i, lines, top) in self.flow_lines(y0, y1) {
+            let b = &self.blocks[i];
+            draw_block(&mut out, b, lines, style.margin_h + b.x, top);
+        }
+        out
+    }
+
+    /// The block layouts and their lines whose tops lie between column heights `y0` and `y1`, with the first line's top
+    /// below `y0`.
+    fn flow_lines(&self, y0: f32, y1: f32) -> Vec<(usize, std::ops::Range<usize>, f32)> {
+        let mut out = Vec::new();
+        for (i, (b, &top)) in self.blocks.iter().zip(&self.flow).enumerate() {
             if top >= y1 || top + b.height() <= y0 {
                 continue;
             }
-            let lines = match &b.content {
+            let (lines, line_top) = match &b.content {
                 Content::Text(t) => {
                     let first = ((y0 - top) / t.line_height).ceil().max(0.0) as usize;
                     let last = (((y1 - top) / t.line_height).ceil().max(0.0) as usize).min(t.lines.len());
-                    first..last.max(first)
+                    (first..last.max(first), top + first as f32 * t.line_height)
                 }
                 _ if top < y0 => continue,
-                _ => 0..1,
+                _ => (0..1, top),
             };
-            let first = lines.start;
-            let line_top = match &b.content {
-                Content::Text(t) => top + first as f32 * t.line_height,
-                _ => top,
-            };
-            draw_block(&mut out, b, lines, style.margin_h + b.x, line_top - y0);
+            out.push((i, lines, line_top - y0));
+        }
+        out
+    }
+
+    /// Rectangles over the text `[from, to)` (a search match) on page `i`, in page coordinates: one per line.
+    pub fn marks(&self, i: usize, style: &PageStyle, from: Locator, to: Locator) -> Vec<Rect> {
+        let mut out = Vec::new();
+        if from.chapter == self.chapter {
+            for s in &self.pages[i].slices {
+                if let Some(b) = self.blocks.get(s.layout) {
+                    mark_block(&mut out, b, s.block, s.line_start..s.line_end, style.margin_h + b.x, style.margin_top + s.top, from, to);
+                }
+            }
+        }
+        out
+    }
+
+    /// The same between column heights `y0` and `y1`, in the coordinates `render_flow` draws in.
+    pub fn flow_marks(&self, y0: f32, y1: f32, style: &PageStyle, from: Locator, to: Locator) -> Vec<Rect> {
+        let mut out = Vec::new();
+        if from.chapter == self.chapter {
+            for (i, lines, top) in self.flow_lines(y0, y1) {
+                let b = &self.blocks[i];
+                mark_block(&mut out, b, self.block_index[i], lines, style.margin_h + b.x, top, from, to);
+            }
         }
         out
     }
@@ -231,6 +262,34 @@ fn draw_block(out: &mut PageContent, b: &BlockLayout, lines: std::ops::Range<usi
                     out.rules.push(Rule { rect: Rect { x: left, y: y - h / 2.0, w: *width, h }, strength });
                 }
             }
+        }
+    }
+}
+
+/// Rectangles over the text `[from, to)` in lines `lines` of block layout `b` (model block `block`), the first line's top
+/// at `top`: one per line, a line high.
+#[allow(clippy::too_many_arguments)]
+fn mark_block(
+    out: &mut Vec<Rect>,
+    b: &BlockLayout,
+    block: usize,
+    lines: std::ops::Range<usize>,
+    left: f32,
+    top: f32,
+    from: Locator,
+    to: Locator,
+) {
+    let Content::Text(t) = &b.content else { return };
+    let inside = |offset: u32| (block, offset as usize) >= (from.block, from.offset) && (block, offset as usize) < (to.block, to.offset);
+    for line in lines.clone() {
+        let span = t.lines[line]
+            .glyphs
+            .iter()
+            .filter(|g| inside(g.0))
+            .fold(None, |span: Option<(f32, f32)>, &(_, x, w)| Some(span.map_or((x, x + w), |(a, b)| (a.min(x), b.max(x + w)))));
+        if let Some((a, b)) = span {
+            let y = top + (line - lines.start) as f32 * t.line_height;
+            out.push(Rect { x: left + a, y, w: b - a, h: t.line_height });
         }
     }
 }

@@ -147,3 +147,26 @@ fn typeset_all(book: &Book, c: &mut Counts) {
         c.pages += layout.pages.len();
     }
 }
+
+/// A common word searched in every book of the corpus: the slowest whole-book search, against the budget of 100 ms on a
+/// Raspberry Pi 5 (`FORZAC_SEARCH_BUDGET_MS`, by default 100).
+#[test]
+fn whole_book_search_is_fast() {
+    let Some(books) = corpus() else { return };
+    let budget: u128 = std::env::var("FORZAC_SEARCH_BUDGET_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(100);
+    let mut slowest = (0, String::new(), 0, 0);
+    for path in &books {
+        let Ok(book) = forzac_core::open(path) else { continue };
+        let text: usize = book.chapters.iter().flat_map(|c| &c.blocks).map(Block::text_len).sum();
+        for word in ["что", "the"] {
+            let t = std::time::Instant::now();
+            let hits = forzac_core::search::search(&book, word).len();
+            let ms = t.elapsed().as_millis();
+            if ms >= slowest.0 {
+                slowest = (ms, path.file_name().unwrap().to_string_lossy().into_owned(), text, hits);
+            }
+        }
+    }
+    println!("slowest search: {} ms, {} ({} KB of text, {} matches)", slowest.0, slowest.1, slowest.2 / 1024, slowest.3);
+    assert!(slowest.0 <= budget, "{} ms over {budget} ms", slowest.0);
+}

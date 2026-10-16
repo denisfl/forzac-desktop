@@ -150,3 +150,32 @@ fn a_variable_family_reports_its_axes() {
         forzac_close(doc);
     }
 }
+
+#[test]
+fn search_and_marks_through_the_c_functions() {
+    unsafe {
+        let doc = forzac_open(c(book_file().to_str().unwrap()).as_ptr());
+        let book = forzac_book(doc);
+        // Searched on another thread, as the shell does (pointers as addresses to cross the thread).
+        let address = book as usize;
+        let search = std::thread::spawn(move || forzac_search(address as *const BookRef, c("СОБАЧКОЙ").as_ptr()) as usize).join().unwrap()
+            as *mut Search;
+        forzac_book_release(book);
+        let mut n = 0;
+        let hits = std::slice::from_raw_parts(forzac_search_hits(search, &mut n), n as usize);
+        assert_eq!(hits.len(), 18, "once in each of 6 paragraphs of 3 chapters");
+        let h = &hits[0];
+        let snippet = string(h.snippet).unwrap();
+        assert_eq!(&snippet[h.match_start as usize..h.match_end as usize], "собачкой");
+        assert_eq!(string(h.section).as_deref(), Some("Глава 1"));
+        let settings = forzac_settings_default();
+        forzac_paginate(doc, h.start.chapter, 600.0, 800.0, &settings);
+        let page = forzac_page_of(doc, h.start);
+        let mut rects = [ForzacRect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 }; 4];
+        assert_eq!(forzac_marks(doc, page, h.start, h.end, rects.as_mut_ptr(), 4), 1);
+        assert!(rects[0].w > 40.0);
+        assert_eq!(forzac_flow_marks(doc, h.start.chapter, 0.0, 100_000.0, h.start, h.end, rects.as_mut_ptr(), 4), 1);
+        forzac_search_free(search);
+        forzac_close(doc);
+    }
+}

@@ -160,7 +160,8 @@ pub struct ForzacTocEntry {
 const KEPT_LAYOUTS: usize = 5;
 
 pub struct Document {
-    book: Book,
+    /// Shared with searches running on other threads.
+    book: Arc<Book>,
     path: PathBuf,
     title: CString,
     authors: CString,
@@ -283,7 +284,7 @@ pub unsafe extern "C" fn forzac_open(path: *const c_char) -> *mut Document {
     let authors = cstring(&book.authors.join(", "));
     let hyphenator = Hyphenator::for_language(book.language.as_deref()).map(Arc::new);
     Box::into_raw(Box::new(Document {
-        book,
+        book: Arc::new(book),
         path: PathBuf::from(path),
         title,
         authors,
@@ -542,6 +543,146 @@ pub unsafe extern "C" fn forzac_link(doc: *mut Document, key: *const c_char, at:
         *text = doc.text(s.as_deref());
     }
     kind
+}
+
+/// Rectangles over the text `[from, to)` (a search match) on `page` of the current chapter: up to `capacity` into
+/// `out`, one per line; returns how many.
+///
+/// # Safety
+/// `doc` from [`forzac_open`] after [`forzac_paginate`]; `out` writable for `capacity` rectangles.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_marks(
+    doc: *mut Document,
+    page: u32,
+    from: ForzacLocator,
+    to: ForzacLocator,
+    out: *mut ForzacRect,
+    capacity: u32,
+) -> u32 {
+    let doc = unsafe { &mut *doc };
+    let (Some(style), current) = (doc.style, doc.current) else { return 0 };
+    let Some(layout) = doc.layout(current) else { return 0 };
+    let marks = layout.marks((page as usize).min(layout.pages.len() - 1), &style, from.into(), to.into());
+    unsafe { copy_rects(&marks, out, capacity) }
+}
+
+/// The same between heights `y0` and `y1` of `chapter`'s column, in the coordinates [`forzac_flow`] draws in.
+///
+/// # Safety
+/// `doc` from [`forzac_open`] after [`forzac_paginate`]; `out` writable for `capacity` rectangles.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn forzac_flow_marks(
+    doc: *mut Document,
+    chapter: u32,
+    y0: f32,
+    y1: f32,
+    from: ForzacLocator,
+    to: ForzacLocator,
+    out: *mut ForzacRect,
+    capacity: u32,
+) -> u32 {
+    let doc = unsafe { &mut *doc };
+    let Some(style) = doc.style else { return 0 };
+    let Some(layout) = doc.layout(chapter as usize) else { return 0 };
+    let marks = layout.flow_marks(y0, y1, &style, from.into(), to.into());
+    unsafe { copy_rects(&marks, out, capacity) }
+}
+
+/// # Safety
+/// `out` writable for `capacity` rectangles.
+unsafe fn copy_rects(rects: &[Rect], out: *mut ForzacRect, capacity: u32) -> u32 {
+    let n = rects.len().min(capacity as usize);
+    for (i, r) in rects.iter().take(n).enumerate() {
+        unsafe { *out.add(i) = (*r).into() };
+    }
+    n as u32
+}
+
+/// The document's book, for searching on another thread; release it with [`forzac_book_release`].
+pub struct BookRef(Arc<Book>);
+
+/// # Safety
+/// `doc` must come from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_book(doc: *const Document) -> *mut BookRef {
+    Box::into_raw(Box::new(BookRef(unsafe { &*doc }.book.clone())))
+}
+
+/// # Safety
+/// `book` must come from [`forzac_book`]; it is invalid afterwards.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_book_release(book: *mut BookRef) {
+    if !book.is_null() {
+        drop(unsafe { Box::from_raw(book) });
+    }
+}
+
+/// A search match: the text `[start, end)`, a snippet with the match at bytes `[match_start, match_end)`, the section
+/// (null when there is none) and the share of the book before it.
+#[repr(C)]
+pub struct ForzacHit {
+    pub start: ForzacLocator,
+    pub end: ForzacLocator,
+    pub snippet: *const c_char,
+    pub match_start: u32,
+    pub match_end: u32,
+    pub section: *const c_char,
+    pub position: f32,
+}
+
+/// A search's matches, owned by the caller until [`forzac_search_free`].
+pub struct Search {
+    hits: Vec<ForzacHit>,
+    _strings: Vec<CString>,
+}
+
+/// Searches `book` for `query` (the rules of [`crate::search`]); any thread. The matches are read with
+/// [`forzac_search_hits`] and freed with [`forzac_search_free`].
+///
+/// # Safety
+/// `book` from [`forzac_book`]; `query` a valid NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_search(book: *const BookRef, query: *const c_char) -> *mut Search {
+    let hits = crate::search::search(&unsafe { &*book }.0, &unsafe { str(query) });
+    let mut strings = Vec::with_capacity(hits.len() * 2);
+    let mut out = Vec::with_capacity(hits.len());
+    for h in &hits {
+        let snippet = cstring(&h.snippet);
+        let section = h.section.as_deref().map(cstring);
+        out.push(ForzacHit {
+            start: h.start.into(),
+            end: h.end.into(),
+            snippet: snippet.as_ptr(),
+            match_start: h.matched.start as u32,
+            match_end: h.matched.end as u32,
+            section: section.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
+            position: h.position,
+        });
+        strings.push(snippet);
+        strings.extend(section);
+    }
+    Box::into_raw(Box::new(Search { hits: out, _strings: strings }))
+}
+
+/// The matches of `search`, valid until it is freed.
+///
+/// # Safety
+/// `search` from [`forzac_search`]; `count` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_search_hits(search: *const Search, count: *mut u32) -> *const ForzacHit {
+    let s = unsafe { &*search };
+    unsafe { *count = s.hits.len() as u32 };
+    s.hits.as_ptr()
+}
+
+/// # Safety
+/// `search` from [`forzac_search`]; it is invalid afterwards.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_search_free(search: *mut Search) {
+    if !search.is_null() {
+        drop(unsafe { Box::from_raw(search) });
+    }
 }
 
 /// Where the bundled assets are (`fonts/<family>/…`): the families other than PT Serif are read from there.
