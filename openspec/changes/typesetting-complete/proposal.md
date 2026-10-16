@@ -7,8 +7,8 @@ quality before the reader is usable.
 
 ## What Changes
 
-- Images: decoded and scaled in the core (one logical pixel per image pixel, never wider than the column or taller
-  than the page), drawn by the shells as textures; never split across pages.
+- Images: scaled in the core from their header dimensions (one logical pixel per image pixel, never wider than the
+  column or taller than the page), decoded and drawn by the shells with the platform decoders; never split across pages.
 - Footnote markers and links: superscript markers, link ranges; the core reports their positions on the page so shells
   can activate them (used by `reader-navigation`).
 - Tables: column widths by content, smaller sizes when they do not fit, rows kept together (port of `TableColumns`).
@@ -29,7 +29,7 @@ quality before the reader is usable.
 
 ## Impact
 
-`core/src/layout.rs` grows into a module; new image decoding (pure Rust) and fallback-font selection in the core; the
+`core/src/layout.rs` grows into a module; image dimensions and fallback-font selection in the core; the
 glyph-run output gains image runs and active areas; both shells draw images. The C ABI grows accordingly.
 
 ## Non-goals

@@ -4,7 +4,8 @@
 // scale and slides pages with Core Animation, which runs in the window server: no app work per frame, ProMotion and
 // Low Power Mode handled by the system, nothing drawn while idle.
 //
-// Spike flags: --measure (time to the first presented page), --png out.png (first page), --chapter N.
+// Spike flags: --measure (time to the first presented page), --png out.png (first page), --chapter N, --page N (the
+// page of the chapter --png saves).
 
 import AppKit
 import CoreText
@@ -15,34 +16,76 @@ let processStart = Date()
 /// Text size presets, logical pixels: steps, not a slider.
 let textSizes: [Float] = [16, 18, 20, 22, 24, 27, 30]
 
-/// Background and ink of the six themes (the Android app's palettes).
-let themes: [(String, UInt32, UInt32)] = [
-    ("Light", 0xFAFAFA, 0x1C1C1C), ("Sepia", 0xF4ECD8, 0x5B4636), ("Dark", 0x121212, 0xCFCFCF),
-    ("Dawn", 0xFAF4ED, 0x575279), ("Wave", 0x1F1F28, 0xDCD7BA), ("Forest", 0x2D353B, 0xD3C6AA),
+/// Background, ink and link ink of the six themes (the Android app's palettes).
+let themes: [(String, UInt32, UInt32, UInt32)] = [
+    ("Light", 0xFAFAFA, 0x1C1C1C, 0x94621F), ("Sepia", 0xF4ECD8, 0x5B4636, 0x8A5A1C), ("Dark", 0x121212, 0xCFCFCF, 0xC49A52),
+    ("Dawn", 0xFAF4ED, 0x575279, 0x8F5E1D), ("Wave", 0x1F1F28, 0xDCD7BA, 0xDCA561), ("Forest", 0x2D353B, 0xD3C6AA, 0xDBBC7F),
 ]
 
-func color(_ rgb: UInt32) -> CGColor {
-    CGColor(srgbRed: CGFloat((rgb >> 16) & 0xFF) / 255, green: CGFloat((rgb >> 8) & 0xFF) / 255, blue: CGFloat(rgb & 0xFF) / 255, alpha: 1)
+/// Opacity of the ink for secondary text (the page number) and for table rules by strength.
+let secondaryAlpha: CGFloat = 0.6
+let ruleAlpha: [CGFloat] = [0, 0.35, 0.6, 0.9]
+
+func color(_ rgb: UInt32, alpha: CGFloat = 1) -> CGColor {
+    CGColor(srgbRed: CGFloat((rgb >> 16) & 0xFF) / 255, green: CGFloat((rgb >> 8) & 0xFF) / 255, blue: CGFloat(rgb & 0xFF) / 255, alpha: alpha)
 }
 
-/// The bundled faces, created from the very bytes the core shaped with: glyph ids match by construction.
+/// The bundled regular face, created from the very bytes the core shaped with: glyph ids match by construction.
+func bundled(_ font: UInt16) -> CGFont {
+    var len = 0
+    let ptr = forzac_font_data(font, &len)!
+    let data = Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: ptr), count: len, deallocator: .none)
+    return CGFont(CGDataProvider(data: data as CFData)!)!
+}
+
+/// The face at `index` of a font file (a collection holds several).
+func descriptor(path: String, index: Int) -> CTFontDescriptor? {
+    let all = CTFontManagerCreateFontDescriptorsFromURL(URL(fileURLWithPath: path) as CFURL) as? [CTFontDescriptor] ?? []
+    return index < all.count ? all[index] : all.first
+}
+
+/// The core's fallback provider: the font Core Text cascades to for the character, as a file and face index.
+let fallbackBase = CTFontCreateWithGraphicsFont(bundled(0), 12, nil, nil)
+let fallback: ForzacFallback = { ch, path, capacity, index in
+    guard let scalar = Unicode.Scalar(ch) else { return false }
+    let s = String(Character(scalar)) as CFString
+    let font = CTFontCreateForString(fallbackBase, s, CFRange(location: 0, length: CFStringGetLength(s)))
+    var chars = Array(String(Character(scalar)).utf16)
+    var glyphs = [CGGlyph](repeating: 0, count: chars.count)
+    guard CTFontGetGlyphsForCharacters(font, &chars, &glyphs, chars.count),
+          let url = CTFontCopyAttribute(font, kCTFontURLAttribute) as? URL else { return false }
+    let file = url.path
+    let name = CTFontCopyPostScriptName(font) as String
+    let faces = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor] ?? []
+    let i = faces.firstIndex { (CTFontDescriptorCopyAttribute($0, kCTFontNameAttribute) as? String) == name } ?? 0
+    let bytes = Array(file.utf8)
+    guard bytes.count < capacity else { return false }
+    for (k, b) in bytes.enumerated() { path![k] = CChar(bitPattern: b) }
+    path![bytes.count] = 0
+    index!.pointee = UInt32(i)
+    return true
+}
+
+/// Fonts by the core's id: the bundled faces from their bytes, fallback fonts from the files the core shaped with.
 final class Fonts {
-    private let graphics: [CGFont]
+    private var graphics: [UInt16: CGFont] = [:]
     private var cache: [Int: CTFont] = [:]
 
-    init() {
-        graphics = (0..<4).map { face in
-            var len = 0
-            let ptr = forzac_font_data(UInt8(face), &len)!
-            let data = Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: ptr), count: len, deallocator: .none)
-            return CGFont(CGDataProvider(data: data as CFData)!)!
-        }
-    }
-
-    func font(face: UInt8, size: Float) -> CTFont {
-        let key = Int(face) << 24 | Int(size * 64)
+    func font(_ id: UInt16, size: Float) -> CTFont? {
+        let key = Int(id) << 24 | Int(size * 64)
         if let f = cache[key] { return f }
-        let f = CTFontCreateWithGraphicsFont(graphics[Int(face)], CGFloat(size), nil, nil)
+        var f: CTFont?
+        if id < 4 {
+            let g = graphics[id] ?? bundled(id)
+            graphics[id] = g
+            f = CTFontCreateWithGraphicsFont(g, CGFloat(size), nil, nil)
+        } else {
+            var buf = [CChar](repeating: 0, count: 4096)
+            var index: UInt32 = 0
+            if forzac_font_file(id, &buf, buf.count, &index), let d = descriptor(path: String(cString: buf), index: Int(index)) {
+                f = CTFontCreateWithFontDescriptor(d, CGFloat(size), nil)
+            }
+        }
         cache[key] = f
         return f
     }
@@ -60,6 +103,8 @@ final class PageView: NSView {
     var theme = 0
     var laidOutFor: (CGSize, Int, UInt32)?
     var images: [UInt32: CGImage] = [:]
+    /// Decoded book images by the address of their bytes (the document keeps them).
+    var pictures: [UnsafeRawPointer: CGImage] = [:]
     let current = CALayer()
     let previous = CALayer()
     var onFirstFrame: ((PageView) -> Void)?
@@ -106,6 +151,7 @@ final class PageView: NSView {
         toLast = false
         laidOutFor = (size, sizeStep, chapter)
         images = [:]
+        pictures = [:]
     }
 
     /// The page as a bitmap at the backing scale, drawn with Core Text.
@@ -118,14 +164,31 @@ final class PageView: NSView {
         ctx.scaleBy(x: s, y: s)
         ctx.setFillColor(color(themes[theme].1))
         ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
-        ctx.setFillColor(color(themes[theme].2))
         ctx.setAllowsFontSubpixelPositioning(true)
         ctx.setShouldSubpixelPositionFonts(true)
-        var runs: UnsafePointer<ForzacRun>?
-        let n = forzac_page_runs(doc, index, &runs)
-        for r in 0..<Int(n) {
-            let run = runs![r]
-            let font = fonts.font(face: run.face, size: run.size)
+        ctx.interpolationQuality = .high
+        let (_, _, text, link) = themes[theme]
+        let page = forzac_page(doc, index)
+        // Core Graphics is y up: flip the page's y-down rectangles.
+        func flipped(_ r: ForzacRect) -> CGRect { CGRect(x: CGFloat(r.x), y: h - CGFloat(r.y + r.h), width: CGFloat(r.w), height: CGFloat(r.h)) }
+        for i in 0..<Int(page.image_count) {
+            let image = page.images[i]
+            let key = UnsafeRawPointer(image.bytes!)
+            if pictures[key] == nil {
+                let data = Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: key), count: image.len, deallocator: .none)
+                if let source = CGImageSourceCreateWithData(data as CFData, nil) { pictures[key] = CGImageSourceCreateImageAtIndex(source, 0, nil) }
+            }
+            if let picture = pictures[key] { ctx.draw(picture, in: flipped(image.rect)) }
+        }
+        for i in 0..<Int(page.rule_count) {
+            let rule = page.rules[i]
+            ctx.setFillColor(color(text, alpha: ruleAlpha[Int(rule.strength)]))
+            ctx.fill(flipped(rule.rect))
+        }
+        for r in 0..<Int(page.run_count) {
+            let run = page.runs[r]
+            guard let font = fonts.font(run.font, size: run.size) else { continue }
+            ctx.setFillColor(run.ink == 1 ? color(link) : color(text, alpha: run.ink == 2 ? secondaryAlpha : 1))
             let count = Int(run.count)
             // Core Graphics is y up: flip the page's y-down coordinates.
             let points = (0..<count).map { i in CGPoint(x: CGFloat(run.positions[2 * i]), y: h - CGFloat(run.positions[2 * i + 1])) }
@@ -295,6 +358,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if self.args.contains("--measure") {
                     print(String(format: "startup: parsed %.1f ms, first page presented %.1f ms, pages in chapter %d", parsed * 1000, Date().timeIntervalSince(processStart) * 1000, v.pageCount))
                 }
+                if let p = self.value(after: "--page").flatMap({ UInt32($0) }) { v.page = min(p, v.pageCount - 1) }
                 if let png { v.savePNG(png) }
                 NSApp.terminate(nil)
             }
@@ -313,6 +377,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 // Standard menu: ⌘Q, ⌘W, ⌃⌘F come from AppKit for free.
+forzac_set_fallback(fallback)
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 let menu = NSMenu()

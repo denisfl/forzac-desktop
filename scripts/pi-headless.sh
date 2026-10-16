@@ -10,13 +10,13 @@ out=${3:-$PWD/pi-out}
 mkdir -p "$out"
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 cfg=$(mktemp -d)   # empty labwc config: no panel, no autostart
-before=$(ls "$XDG_RUNTIME_DIR" | grep -E '^wayland-[0-9]+$' || true)
 WLR_BACKENDS=headless WLR_RENDERER=gles2 WLR_HEADLESS_OUTPUTS=1 WLR_LIBINPUT_NO_DEVICES=1 \
   WAYLAND_DISPLAY= labwc -C "$cfg" >"$out/labwc.log" 2>&1 &
 labwc_pid=$!
 trap 'kill $labwc_pid 2>/dev/null; rm -rf "$cfg"' EXIT
 sleep 2
-socket=$(comm -13 <(echo "$before" | sort) <(ls "$XDG_RUNTIME_DIR" | grep -E '^wayland-[0-9]+$' | sort) | head -1)
+# The socket created after the config directory: a stale socket name of an earlier compositor may be reused.
+socket=$(basename "$(find "$XDG_RUNTIME_DIR" -maxdepth 1 -type s -name 'wayland-*' -newer "$cfg" | head -1)")
 export WAYLAND_DISPLAY=$socket
 output=$(wlr-randr | head -1 | awk '{print $1}')
 echo "compositor: labwc headless on $socket, output $output, $(uname -m), GTK $(dpkg-query -W -f='${Version}' libgtk-4-1 2>/dev/null)"

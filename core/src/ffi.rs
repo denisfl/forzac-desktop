@@ -1,15 +1,15 @@
 //! C ABI for the macOS shell (Swift). Small on purpose; the full version may move to UniFFI.
 //!
-//! A document owns the book, the typesetter and the current chapter layout. Pointers returned by
-//! [`forzac_page_runs`] stay valid until the next call on the same document.
+//! A document owns the book, the typesetter and the current chapter layout. Pointers in a [`ForzacPage`] stay valid
+//! until the next call on the same document.
 
-use std::ffi::{CStr, c_char};
-use std::path::Path;
-use std::rc::Rc;
+use std::ffi::{CStr, CString, c_char};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use crate::fonts::Face;
+use crate::fonts::{self, FontId, FontSource};
 use crate::hyphen::Hyphenator;
-use crate::layout::{ChapterLayout, GlyphRun, PageStyle, Typesetter, paginate};
+use crate::layout::{ChapterLayout, PageContent, PageStyle, Rect, Target, Typesetter, paginate};
 use crate::model::Book;
 
 #[repr(C)]
@@ -22,8 +22,10 @@ pub struct ForzacStyle {
 
 #[repr(C)]
 pub struct ForzacRun {
-    /// [`Face`] as a number: 0 regular, 1 italic, 2 bold, 3 bold italic.
-    pub face: u8,
+    /// Font id: 0–3 the bundled faces (regular, italic, bold, bold italic), later ids fallback fonts.
+    pub font: u16,
+    /// 0 text, 1 link, 2 secondary.
+    pub ink: u8,
     pub size: f32,
     pub count: u32,
     pub glyphs: *const u16,
@@ -31,15 +33,69 @@ pub struct ForzacRun {
     pub positions: *const f32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ForzacRect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl From<Rect> for ForzacRect {
+    fn from(r: Rect) -> Self {
+        ForzacRect { x: r.x, y: r.y, w: r.w, h: r.h }
+    }
+}
+
+/// An image: the file's bytes (owned by the document, the same pointer for the same image) and where to draw it.
+#[repr(C)]
+pub struct ForzacImage {
+    pub bytes: *const u8,
+    pub len: usize,
+    pub rect: ForzacRect,
+}
+
+/// A table rule; `strength` 1 light, 2 medium, 3 heavy.
+#[repr(C)]
+pub struct ForzacRule {
+    pub rect: ForzacRect,
+    pub strength: u8,
+}
+
+/// A note marker (`kind` 0, `target` the note id) or a link (`kind` 1, `target` the link key).
+#[repr(C)]
+pub struct ForzacArea {
+    pub rect: ForzacRect,
+    pub kind: u8,
+    pub target: *const c_char,
+}
+
+#[repr(C)]
+pub struct ForzacPage {
+    pub runs: *const ForzacRun,
+    pub run_count: u32,
+    pub images: *const ForzacImage,
+    pub image_count: u32,
+    pub rules: *const ForzacRule,
+    pub rule_count: u32,
+    pub areas: *const ForzacArea,
+    pub area_count: u32,
+}
+
 pub struct Document {
     book: Book,
-    title: std::ffi::CString,
-    hyphenator: Option<Rc<Hyphenator>>,
+    title: CString,
+    hyphenator: Option<Arc<Hyphenator>>,
     style: Option<PageStyle>,
     typesetter: Option<Typesetter>,
     chapter: Option<ChapterLayout>,
-    runs: Vec<GlyphRun>,
-    ffi_runs: Vec<ForzacRun>,
+    page: PageContent,
+    runs: Vec<ForzacRun>,
+    images: Vec<ForzacImage>,
+    rules: Vec<ForzacRule>,
+    areas: Vec<ForzacArea>,
+    targets: Vec<CString>,
 }
 
 /// Opens a book; null when the file is not a readable book.
@@ -50,8 +106,8 @@ pub struct Document {
 pub unsafe extern "C" fn forzac_open(path: *const c_char) -> *mut Document {
     let Ok(path) = unsafe { CStr::from_ptr(path) }.to_str() else { return std::ptr::null_mut() };
     let Ok(book) = crate::open(Path::new(path)) else { return std::ptr::null_mut() };
-    let title = std::ffi::CString::new(book.title.replace('\0', "")).unwrap_or_default();
-    let hyphenator = Hyphenator::for_language(book.language.as_deref()).map(Rc::new);
+    let title = CString::new(book.title.replace('\0', "")).unwrap_or_default();
+    let hyphenator = Hyphenator::for_language(book.language.as_deref()).map(Arc::new);
     Box::into_raw(Box::new(Document {
         book,
         title,
@@ -59,8 +115,12 @@ pub unsafe extern "C" fn forzac_open(path: *const c_char) -> *mut Document {
         style: None,
         typesetter: None,
         chapter: None,
+        page: PageContent::default(),
         runs: Vec::new(),
-        ffi_runs: Vec::new(),
+        images: Vec::new(),
+        rules: Vec::new(),
+        areas: Vec::new(),
+        targets: Vec::new(),
     }))
 }
 
@@ -98,29 +158,62 @@ pub unsafe extern "C" fn forzac_paginate(doc: *mut Document, chapter: u32, style
     count
 }
 
-/// Glyph runs of `page` of the last paginated chapter; returns the run count and sets `*out`.
+/// What to draw on `page` of the last paginated chapter.
 ///
 /// # Safety
-/// `doc` must come from [`forzac_open`] after [`forzac_paginate`]; `out` must be writable.
+/// `doc` must come from [`forzac_open`] after [`forzac_paginate`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn forzac_page_runs(doc: *mut Document, page: u32, out: *mut *const ForzacRun) -> u32 {
+pub unsafe extern "C" fn forzac_page(doc: *mut Document, page: u32) -> ForzacPage {
     let doc = unsafe { &mut *doc };
-    let (Some(chapter), Some(style), Some(t)) = (&doc.chapter, &doc.style, doc.typesetter.as_mut()) else { return 0 };
-    let page = (page as usize).min(chapter.pages.len() - 1);
-    doc.runs = chapter.render(page, style, t);
-    doc.ffi_runs = doc
+    if let (Some(chapter), Some(style), Some(t)) = (&doc.chapter, &doc.style, doc.typesetter.as_mut()) {
+        doc.page = chapter.render((page as usize).min(chapter.pages.len() - 1), style, t);
+    }
+    let p = &doc.page;
+    doc.runs = p
         .runs
         .iter()
         .map(|r| ForzacRun {
-            face: r.face as u8,
+            font: r.font.0,
+            ink: r.ink as u8,
             size: r.size,
             count: r.glyphs.len() as u32,
             glyphs: r.glyphs.as_ptr(),
             positions: r.positions.as_ptr().cast(),
         })
         .collect();
-    unsafe { *out = doc.ffi_runs.as_ptr() };
-    doc.ffi_runs.len() as u32
+    let book = &doc.book;
+    doc.images = p
+        .images
+        .iter()
+        .filter_map(|i| book.images.get(&i.id).map(|b| ForzacImage { bytes: b.bytes.as_ptr(), len: b.bytes.len(), rect: i.rect.into() }))
+        .collect();
+    doc.rules = p.rules.iter().map(|r| ForzacRule { rect: r.rect.into(), strength: r.strength }).collect();
+    let (kinds, targets): (Vec<u8>, Vec<CString>) = p
+        .areas
+        .iter()
+        .map(|a| match &a.target {
+            Target::Note(id) => (0, CString::new(id.as_str()).unwrap_or_default()),
+            Target::Link(key) => (1, CString::new(key.as_str()).unwrap_or_default()),
+        })
+        .unzip();
+    doc.targets = targets;
+    doc.areas = p
+        .areas
+        .iter()
+        .zip(kinds)
+        .zip(&doc.targets)
+        .map(|((a, kind), target)| ForzacArea { rect: a.rect.into(), kind, target: target.as_ptr() })
+        .collect();
+    ForzacPage {
+        runs: doc.runs.as_ptr(),
+        run_count: doc.runs.len() as u32,
+        images: doc.images.as_ptr(),
+        image_count: doc.images.len() as u32,
+        rules: doc.rules.as_ptr(),
+        rule_count: doc.rules.len() as u32,
+        areas: doc.areas.as_ptr(),
+        area_count: doc.areas.len() as u32,
+    }
 }
 
 /// Reading position: chapter, block, byte offset in the block. Pages are derived from it.
@@ -155,15 +248,60 @@ pub unsafe extern "C" fn forzac_page_of(doc: *const Document, at: ForzacLocator)
     chapter.page_of(crate::model::Locator { chapter: at.chapter as usize, block: at.block as usize, offset: at.offset as usize }) as u32
 }
 
-/// The bundled font file for `face`, so the shell rasterises exactly what was shaped.
+/// The bundled font file of `font`, so the shell rasterises exactly what was shaped; null for a fallback font.
 ///
 /// # Safety
 /// `len` must be writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn forzac_font_data(face: u8, len: *mut usize) -> *const u8 {
-    let data = Face::ALL.get(face as usize).copied().unwrap_or(Face::Regular).data();
+pub unsafe extern "C" fn forzac_font_data(font: u16, len: *mut usize) -> *const u8 {
+    let Some(face) = FontId(font).face() else { return std::ptr::null() };
+    let data = face.data();
     unsafe { *len = data.len() };
     data.as_ptr()
+}
+
+/// The file of fallback font `font`: copies its path (NUL-terminated) into `path` and sets `*index` to the face index
+/// in a collection. False for a bundled face, an unknown id or a path longer than `capacity`.
+///
+/// # Safety
+/// `path` must be writable for `capacity` bytes and `index` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_font_file(font: u16, path: *mut c_char, capacity: usize, index: *mut u32) -> bool {
+    let Some(FontSource::File { path: file, index: i }) = fonts::font_source(FontId(font)) else { return false };
+    let bytes = file.as_os_str().as_encoded_bytes();
+    if bytes.len() >= capacity {
+        return false;
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), path.cast(), bytes.len());
+        *path.add(bytes.len()) = 0;
+        *index = i;
+    }
+    true
+}
+
+/// Whether `font` has colour glyphs (emoji), to be drawn in their own colours.
+#[unsafe(no_mangle)]
+pub extern "C" fn forzac_font_is_color(font: u16) -> bool {
+    fonts::font_is_color(FontId(font))
+}
+
+/// Finds a font file with character `ch`: writes its NUL-terminated path into `path` (`capacity` bytes) and its face
+/// index into `*index`; returns false when there is none.
+pub type ForzacFallback = extern "C" fn(ch: u32, path: *mut c_char, capacity: usize, index: *mut u32) -> bool;
+
+/// Sets where fallback fonts come from, before the first paginate.
+#[unsafe(no_mangle)]
+pub extern "C" fn forzac_set_fallback(provider: ForzacFallback) {
+    fonts::set_fallback_provider(Box::new(move |ch| {
+        let mut buf = vec![0u8; 4096];
+        let mut index = 0;
+        if !provider(ch as u32, buf.as_mut_ptr().cast(), buf.len(), &mut index) {
+            return None;
+        }
+        let path = CStr::from_bytes_until_nul(&buf).ok()?.to_str().ok()?;
+        Some((PathBuf::from(path), index))
+    }));
 }
 
 /// # Safety

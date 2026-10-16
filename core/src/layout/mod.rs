@@ -1,16 +1,22 @@
-//! Typesetting: blocks → lines (Knuth–Plass with Liang hyphenation over HarfRust-shaped words) → pages → positioned
-//! glyph runs that a shell draws as is.
+//! Typesetting: blocks → lines (Knuth–Plass with Liang hyphenation over HarfRust-shaped words) → pages → page contents
+//! (positioned glyph runs, images, table rules, active areas) that a shell draws as is.
 //!
 //! Rules follow the Android app: 1.5 em first-line indent, justified body text with hyphenation, ragged verse and
 //! headings without it, fixed line height for vertical rhythm, no lone line at the top or bottom of a page, a heading
-//! kept with the next block, the chapter start lowered by two lines.
+//! kept with the next block, the chapter start lowered by two lines, images and table rows never split.
 
-use std::rc::Rc;
+mod page;
+mod table;
 
-use crate::fonts::{Face, Glyph, Shaper};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+pub use page::{ChapterLayout, Page, PageContent, PageImage, Rule, paginate};
+
+use crate::fonts::{self, Face, FontId, Glyph, Shaper};
 use crate::hyphen::Hyphenator;
 use crate::knuth_plass::{self, INFINITY, Item};
-use crate::model::{Block, Book, Kind, Locator, Style, StyledText};
+use crate::model::{Block, Book, Kind, Style, StyledText};
 
 /// Page geometry and text parameters, in logical pixels.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -42,30 +48,122 @@ impl PageStyle {
     }
 }
 
-/// Glyphs of one face and size. Positions are glyph origins on the baseline, y down.
+/// Which theme colour a run is drawn in; the shell maps it, so typesetting does not depend on the theme.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum Ink {
+    Text = 0,
+    Link = 1,
+    Secondary = 2,
+}
+
+/// What an active area on a page leads to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Target {
+    /// A note id in `Book::notes`.
+    Note(String),
+    /// A key in `Book::links`.
+    Link(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl Rect {
+    fn offset(self, dx: f32, dy: f32) -> Rect {
+        Rect { x: self.x + dx, y: self.y + dy, ..self }
+    }
+}
+
+/// Glyphs of one font, size and ink. Positions are glyph origins on the baseline, y down.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GlyphRun {
-    pub face: Face,
+    pub font: FontId,
     pub size: f32,
+    pub ink: Ink,
     pub glyphs: Vec<u16>,
     pub positions: Vec<[f32; 2]>,
 }
 
-/// Blocks of one group (verse lines, epigraph paragraphs) go without spacing between them.
+impl GlyphRun {
+    fn offset(&self, dx: f32, dy: f32) -> GlyphRun {
+        GlyphRun { positions: self.positions.iter().map(|p| [p[0] + dx, p[1] + dy]).collect(), ..self.clone() }
+    }
+}
+
+/// A note marker or a link on the page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Area {
+    pub rect: Rect,
+    pub target: Target,
+}
+
+/// Blocks of one group (verse lines, epigraph paragraphs, rows of one table) go without spacing between them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Group {
     Kind(Kind),
     EmptyLine,
+    /// Rows of the table at this address.
+    Table(usize),
+    /// Never shares spacing with a neighbour (images).
+    Alone,
 }
 
-/// A typeset block: lines of fixed height; glyph positions relative to the block's left edge and the line baseline.
-pub struct BlockLayout {
-    lines: Vec<Vec<GlyphRun>>,
-    /// Byte offset in the block text where each line starts: page start → [`Locator`].
-    line_starts: Vec<usize>,
-    x: f32,
+/// One line: its runs and active areas relative to the line's left edge and baseline.
+#[derive(Debug, Clone, Default)]
+struct Line {
+    runs: Vec<GlyphRun>,
+    areas: Vec<Area>,
+}
+
+/// Lines of a paragraph set at one width.
+struct TextLayout {
+    lines: Vec<Line>,
+    /// Byte offset in the block text where each line starts: page start → `Locator`.
+    starts: Vec<usize>,
     line_height: f32,
     baseline: f32,
+}
+
+impl TextLayout {
+    fn height(&self) -> f32 {
+        self.lines.len() as f32 * self.line_height
+    }
+}
+
+/// A cell of a table row, its top-left corner relative to the row.
+struct Cell {
+    text: TextLayout,
+    x: f32,
+    y: f32,
+}
+
+enum Content {
+    Text(TextLayout),
+    Empty,
+    Image {
+        id: String,
+        w: f32,
+        h: f32,
+    },
+    /// Rule strengths: 0 none, 1 light between rows, 2 medium under the header, 3 heavy above and below the table.
+    Row {
+        cells: Vec<Cell>,
+        rules: (u8, u8),
+        height: f32,
+        width: f32,
+    },
+}
+
+/// A typeset block.
+pub struct BlockLayout {
+    content: Content,
+    x: f32,
     group: Group,
     space_before: f32,
     space_after: f32,
@@ -74,7 +172,24 @@ pub struct BlockLayout {
 
 impl BlockLayout {
     fn height(&self) -> f32 {
-        if self.lines.is_empty() { self.line_height } else { self.lines.len() as f32 * self.line_height }
+        match &self.content {
+            Content::Text(t) => t.height(),
+            Content::Empty => 0.0,
+            Content::Image { h, .. } => *h,
+            Content::Row { height, .. } => *height,
+        }
+    }
+
+    /// Images and table rows are never split between pages.
+    fn atomic(&self) -> bool {
+        matches!(self.content, Content::Image { .. } | Content::Row { .. })
+    }
+
+    fn line_count(&self) -> usize {
+        match &self.content {
+            Content::Text(t) => t.lines.len(),
+            _ => 1,
+        }
     }
 }
 
@@ -92,28 +207,37 @@ enum Meta {
     Indent,
     /// Text `[start, end)` of the paragraph.
     Text(usize, usize),
-    /// A hyphenation point: the hyphen is drawn in this face and size when the line breaks here.
-    Hyphen(Face, f32),
+    /// A hyphenation point: the hyphen is drawn in the style of this piece when the line breaks here.
+    Hyphen(usize),
 }
 
-/// A word, or the part of it in one style, shaped as a whole: kerning inside the word is kept across syllables.
+/// A word, or the part of it in one style and one font, shaped as a whole: kerning inside the word is kept across
+/// syllables.
 struct Piece {
     start: usize,
-    face: Face,
+    font: FontId,
     size: f32,
     rise: f32,
     scale: f32,
-    glyphs: Rc<[Glyph]>,
+    /// Ascender and descender in pixels, for the active area of a marker or link.
+    ascent: f32,
+    descent: f32,
+    segment: usize,
+    glyphs: Arc<[Glyph]>,
 }
 
+/// A run of one style: face, size, raise, ink and target.
 struct Segment {
     start: usize,
     end: usize,
     face: Face,
     size: f32,
     rise: f32,
+    ink: Ink,
+    target: Option<Target>,
 }
 
+#[derive(Clone, Copy)]
 struct Spec {
     width: f32,
     x: f32,
@@ -131,28 +255,34 @@ struct Spec {
     line_scale: f32,
 }
 
-/// Lays out blocks for one page style. Holds the shaping caches; not thread-safe.
+/// Lays out blocks for one page style. Holds the shaping caches; one per thread.
 pub struct Typesetter {
     style: PageStyle,
     shaper: Shaper,
-    hyphenator: Option<Rc<Hyphenator>>,
+    hyphenator: Option<Arc<Hyphenator>>,
+    /// Column geometry per table, by the table's address: computed once per table.
+    tables: HashMap<usize, Arc<table::Geometry>>,
     /// Body line height: the unit of vertical spacing.
     pub line_height: f32,
 }
 
 impl Typesetter {
-    pub fn new(style: PageStyle, hyphenator: Option<Rc<Hyphenator>>) -> Self {
+    pub fn new(style: PageStyle, hyphenator: Option<Arc<Hyphenator>>) -> Self {
         let line_height = (style.text_size * style.line_height).floor();
-        Typesetter { style, shaper: Shaper::new(), hyphenator, line_height }
+        Typesetter { style, shaper: Shaper::new(), hyphenator, tables: HashMap::new(), line_height }
     }
 
-    /// `None` for blocks the typesetter does not draw yet (images, tables: `typesetting-complete`).
-    pub fn layout(&mut self, block: &Block) -> Option<BlockLayout> {
-        let w = self.style.text_width();
-        let lh = self.line_height;
-        let half = lh / 2.0;
-        let base = Spec {
-            width: w,
+    pub fn style(&self) -> &PageStyle {
+        &self.style
+    }
+
+    pub fn hyphenator(&self) -> Option<Arc<Hyphenator>> {
+        self.hyphenator.clone()
+    }
+
+    fn base_spec(&self) -> Spec {
+        Spec {
+            width: self.style.text_width(),
             x: 0.0,
             align: Align::Left,
             justify: false,
@@ -166,21 +296,27 @@ impl Typesetter {
             bold: false,
             scale: 1.0,
             line_scale: 1.0,
-        };
+        }
+    }
+
+    /// `None` for a block that takes no room: an image that is missing or cannot be read.
+    pub fn layout(&mut self, block: &Block, book: &Book) -> Option<BlockLayout> {
+        let w = self.style.text_width();
+        let lh = self.line_height;
+        let half = lh / 2.0;
+        let base = self.base_spec();
         let justify = self.style.justify;
         match block {
-            Block::Image { .. } | Block::TableRow { .. } => None,
             Block::EmptyLine => Some(BlockLayout {
-                lines: Vec::new(),
-                line_starts: Vec::new(),
+                content: Content::Empty,
                 x: 0.0,
-                line_height: lh,
-                baseline: 0.0,
                 group: Group::EmptyLine,
                 space_before: 0.0,
                 space_after: 0.0,
                 keep_with_next: false,
             }),
+            Block::Image { id } => self.image(id, book),
+            Block::TableRow { table, row } => Some(self.table_row(table, *row)),
             Block::Heading { text, level } => Some(self.make(
                 text,
                 Spec {
@@ -254,30 +390,54 @@ impl Typesetter {
         }
     }
 
-    fn make(&mut self, text: &StyledText, spec: Spec) -> BlockLayout {
-        let size = self.style.text_size * spec.scale;
-        let segments = segments(text, size, spec.italic, spec.bold);
-        let indent = if spec.indent { self.style.text_size * 1.5 } else { 0.0 };
-        let (items, meta, pieces) = self.items(&text.text, &segments, indent, spec.justify, spec.hyphenate);
-        let breaks = knuth_plass::break_lines(&items, |_| spec.width);
-        let (lines, line_starts) = self.lines(&items, &meta, &pieces, &breaks, &spec);
+    /// One logical pixel per image pixel, scaled down to the column and the page; never split.
+    fn image(&mut self, id: &str, book: &Book) -> Option<BlockLayout> {
+        let image = book.images.get(id)?;
+        let size = imagesize::blob_size(&image.bytes).ok()?;
+        let (iw, ih) = (size.width as f32, size.height as f32);
+        if iw <= 0.0 || ih <= 0.0 {
+            return None;
+        }
+        let scale = 1f32.min(self.style.text_width() / iw).min(self.style.text_height() / ih);
+        let (w, h) = (iw * scale, ih * scale);
+        let half = self.line_height / 2.0;
+        Some(BlockLayout {
+            content: Content::Image { id: id.to_owned(), w, h },
+            x: (self.style.text_width() - w) / 2.0,
+            group: Group::Alone,
+            space_before: half,
+            space_after: half,
+            keep_with_next: false,
+        })
+    }
 
-        let line_height = (size * self.style.line_height * spec.line_scale).floor();
-        let face = segments.first().map(|s| s.face).unwrap_or(Face::Regular);
-        let (asc, desc) = self.shaper.line_metrics(face);
-        let units = size / self.shaper.units_per_em(face);
-        let baseline = (line_height - (asc - desc) * units) / 2.0 + asc * units;
+    fn make(&mut self, text: &StyledText, spec: Spec) -> BlockLayout {
+        let layout = self.text(text, &spec);
         BlockLayout {
-            lines,
-            line_starts,
+            content: Content::Text(layout),
             x: spec.x,
-            line_height,
-            baseline,
             group: spec.group,
             space_before: spec.space_before,
             space_after: spec.space_after,
             keep_with_next: spec.keep_with_next,
         }
+    }
+
+    /// A paragraph set into lines of `spec.width`.
+    fn text(&mut self, text: &StyledText, spec: &Spec) -> TextLayout {
+        let size = self.style.text_size * spec.scale;
+        let segments = segments(text, size, spec.italic, spec.bold);
+        let indent = if spec.indent { self.style.text_size * 1.5 } else { 0.0 };
+        let (items, meta, pieces) = self.items(&text.text, &segments, indent, spec.justify, spec.hyphenate);
+        let breaks = knuth_plass::break_lines(&items, |_| spec.width);
+        let (lines, starts) = self.lines(&items, &meta, &pieces, &segments, &breaks, spec);
+
+        let line_height = (size * self.style.line_height * spec.line_scale).floor();
+        let face = segments.first().map(|s| s.face).unwrap_or(Face::Regular).id();
+        let (asc, desc) = self.shaper.line_metrics(face);
+        let units = size / self.shaper.units_per_em(face);
+        let baseline = (line_height - (asc - desc) * units) / 2.0 + asc * units;
+        TextLayout { lines, starts, line_height, baseline }
     }
 
     /// The paragraph as boxes (syllables), glue (spaces) and penalties (hyphenation points, breaks after dashes).
@@ -307,8 +467,8 @@ impl Typesetter {
                 continue;
             }
             if c == ' ' {
-                let seg = segment_at(segments, i);
-                let space = self.width_of(seg.face, " ", seg.size);
+                let seg = &segments[segment_at(segments, i)];
+                let space = self.width_of(seg.face.id(), " ", seg.size);
                 if justify {
                     items.push(Item::Glue { width: space, stretch: space * 0.5, shrink: space * 0.33 });
                     meta.push(Meta::Plain);
@@ -323,7 +483,8 @@ impl Typesetter {
                 continue;
             }
             let end = text[i..].find([' ', '\n']).map_or(text.len(), |e| i + e);
-            self.word(text, segments, i, end, hyphenate, if justify { 50.0 } else { 300.0 }, &mut items, &mut meta, &mut pieces);
+            let penalty = if justify { 50.0 } else { 300.0 };
+            self.word(text, segments, (i, end), hyphenate, penalty, &mut items, &mut meta, &mut pieces);
             i = end;
         }
         // End of paragraph: the last line is not stretched.
@@ -334,13 +495,47 @@ impl Typesetter {
         (items, meta, pieces)
     }
 
+    /// Pieces of the word `[start, end)`: one per style segment and font. Characters the book face lacks are shaped
+    /// with a fallback font (`fonts::font_for`).
+    fn word_pieces(&mut self, text: &str, segments: &[Segment], (start, end): (usize, usize), pieces: &mut Vec<Piece>) {
+        for (index, seg) in segments.iter().enumerate().filter(|(_, s)| s.start < end && s.end > start) {
+            let (a, b) = (seg.start.max(start), seg.end.min(end));
+            let base = seg.face.id();
+            // Nearly always the book face has every character: no glyph 0 (.notdef), and the shape is cached.
+            let whole = self.piece(text, a, b, base, seg, index);
+            if whole.glyphs.iter().all(|g| g.id != 0) {
+                pieces.push(whole);
+                continue;
+            }
+            let mut run_start = a;
+            let mut run_font = None;
+            for (offset, ch) in text[a..b].char_indices().chain([(b - a, '\0')]) {
+                let at = a + offset;
+                let font = if at == b { None } else { Some(fonts::font_for(base, ch)) };
+                if font != run_font {
+                    if let Some(f) = run_font.filter(|_| at > run_start) {
+                        pieces.push(self.piece(text, run_start, at, f, seg, index));
+                    }
+                    run_start = at;
+                    run_font = font;
+                }
+            }
+        }
+    }
+
+    fn piece(&mut self, text: &str, a: usize, b: usize, font: FontId, seg: &Segment, segment: usize) -> Piece {
+        let glyphs = self.shaper.shape(font, &text[a..b]);
+        let scale = seg.size / self.shaper.units_per_em(font);
+        let (asc, desc) = self.shaper.line_metrics(font);
+        Piece { start: a, font, size: seg.size, rise: seg.rise, scale, ascent: asc * scale, descent: -desc * scale, segment, glyphs }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn word(
         &mut self,
         text: &str,
         segments: &[Segment],
-        start: usize,
-        end: usize,
+        (start, end): (usize, usize),
         hyphenate: bool,
         penalty: f32,
         items: &mut Vec<Item>,
@@ -348,12 +543,7 @@ impl Typesetter {
         pieces: &mut Vec<Piece>,
     ) {
         let first_piece = pieces.len();
-        for seg in segments.iter().filter(|s| s.start < end && s.end > start) {
-            let (a, b) = (seg.start.max(start), seg.end.min(end));
-            let glyphs = self.shaper.shape(seg.face, &text[a..b]);
-            let scale = seg.size / self.shaper.units_per_em(seg.face);
-            pieces.push(Piece { start: a, face: seg.face, size: seg.size, rise: seg.rise, scale, glyphs });
-        }
+        self.word_pieces(text, segments, (start, end), pieces);
         let word_pieces = &pieces[first_piece..];
 
         // Break points inside the word: (byte offset, hyphenation?).
@@ -387,10 +577,11 @@ impl Typesetter {
             meta.push(Meta::Text(at, pos));
             if pos < end {
                 if hyphen {
-                    let piece = word_pieces.iter().rev().find(|p| p.start < pos).unwrap_or(&word_pieces[0]);
-                    let (face, size) = (piece.face, piece.size);
-                    items.push(Item::Penalty { width: self.width_of(face, "-", size), penalty, flagged: true });
-                    meta.push(Meta::Hyphen(face, size));
+                    let index = first_piece + word_pieces.iter().rposition(|p| p.start < pos).unwrap_or(0);
+                    let piece = &pieces[index];
+                    let width = self.width_of(segments[piece.segment].face.id(), "-", piece.size);
+                    items.push(Item::Penalty { width, penalty, flagged: true });
+                    meta.push(Meta::Hyphen(index));
                 } else {
                     items.push(Item::Penalty { width: 0.0, penalty: 0.0, flagged: false });
                     meta.push(Meta::Plain);
@@ -400,9 +591,9 @@ impl Typesetter {
         }
     }
 
-    fn width_of(&mut self, face: Face, s: &str, size: f32) -> f32 {
-        let scale = size / self.shaper.units_per_em(face);
-        self.shaper.shape(face, s).iter().map(|g| g.advance as f32 * scale).sum()
+    fn width_of(&mut self, font: FontId, s: &str, size: f32) -> f32 {
+        let scale = size / self.shaper.units_per_em(font);
+        self.shaper.shape(font, s).iter().map(|g| g.advance as f32 * scale).sum()
     }
 
     fn lines(
@@ -410,9 +601,10 @@ impl Typesetter {
         items: &[Item],
         meta: &[Meta],
         pieces: &[Piece],
+        segments: &[Segment],
         breaks: &[knuth_plass::Break],
         spec: &Spec,
-    ) -> (Vec<Vec<GlyphRun>>, Vec<usize>) {
+    ) -> (Vec<Line>, Vec<usize>) {
         let mut lines = Vec::new();
         let mut starts = Vec::new();
         let mut from = 0;
@@ -423,14 +615,14 @@ impl Typesetter {
             while s < br.index && !matches!(items[s], Item::Box { .. }) {
                 s += 1;
             }
-            let mut runs: Vec<GlyphRun> = Vec::new();
+            let mut line = Line::default();
             let mut x = 0.0;
             let mut line_start = None;
             for k in s..br.index {
                 match (items[k], meta[k]) {
                     (Item::Box { width }, Meta::Text(a, b)) => {
                         line_start.get_or_insert(a);
-                        draw(&mut runs, pieces, a, b, x);
+                        draw(&mut line, pieces, segments, a, b, x);
                         x += width;
                         prev_end = b;
                     }
@@ -449,10 +641,14 @@ impl Typesetter {
                     (Item::Penalty { .. }, _) => {}
                 }
             }
-            if let (Item::Penalty { width, flagged: true, .. }, Meta::Hyphen(face, size)) = (items[br.index], meta[br.index]) {
-                let scale = size / self.shaper.units_per_em(face);
-                for g in self.shaper.shape(face, "-").iter() {
-                    push_glyph(&mut runs, face, size, g.id, x + g.x_offset as f32 * scale, -(g.y_offset as f32) * scale);
+            if let (Item::Penalty { width, flagged: true, .. }, Meta::Hyphen(index)) = (items[br.index], meta[br.index]) {
+                let piece = &pieces[index];
+                let seg = &segments[piece.segment];
+                let font = seg.face.id();
+                let scale = piece.size / self.shaper.units_per_em(font);
+                for g in self.shaper.shape(font, "-").iter() {
+                    let at = [x + g.x_offset as f32 * scale, -piece.rise - g.y_offset as f32 * scale];
+                    push_glyph(&mut line.runs, font, piece.size, seg.ink, g.id, at);
                 }
                 x += width;
             }
@@ -462,9 +658,10 @@ impl Typesetter {
                 Align::Right => spec.width - x,
             };
             if shift != 0.0 {
-                runs.iter_mut().flat_map(|r| r.positions.iter_mut()).for_each(|p| p[0] += shift);
+                line.runs.iter_mut().flat_map(|r| r.positions.iter_mut()).for_each(|p| p[0] += shift);
+                line.areas.iter_mut().for_each(|a| a.rect.x += shift);
             }
-            lines.push(runs);
+            lines.push(line);
             starts.push(line_start.unwrap_or(prev_end));
             from = br.index + 1;
         }
@@ -472,8 +669,8 @@ impl Typesetter {
     }
 }
 
-fn segment_at(segments: &[Segment], at: usize) -> &Segment {
-    segments.iter().find(|s| at >= s.start && at < s.end).unwrap_or_else(|| segments.last().unwrap())
+fn segment_at(segments: &[Segment], at: usize) -> usize {
+    segments.iter().position(|s| at >= s.start && at < s.end).unwrap_or(segments.len() - 1)
 }
 
 /// Runs of one style: cut at every style range edge.
@@ -490,7 +687,8 @@ fn segments(text: &StyledText, size: f32, italic: bool, bold: bool) -> Vec<Segme
         .windows(2)
         .map(|w| {
             let (s, e) = (w[0], w[1]);
-            let has = |st: Style| text.styles.iter().any(|r| r.style == st && r.start <= s && r.end >= e);
+            let range = |st: Style| text.styles.iter().find(|r| r.style == st && r.start <= s && r.end >= e);
+            let has = |st: Style| range(st).is_some();
             let small = has(Style::Superscript) || has(Style::NoteRef) || has(Style::Subscript);
             let rise = if has(Style::Superscript) || has(Style::NoteRef) {
                 size * 0.35
@@ -499,17 +697,21 @@ fn segments(text: &StyledText, size: f32, italic: bool, bold: bool) -> Vec<Segme
             } else {
                 0.0
             };
+            let note = range(Style::NoteRef).and_then(|r| r.target.clone()).map(Target::Note);
+            let link = range(Style::Link).and_then(|r| r.target.clone()).map(Target::Link);
             Segment {
                 start: s,
                 end: e,
                 face: Face::of(italic || has(Style::Emphasis), bold || has(Style::Strong)),
                 size: if small { size * 0.7 } else { size },
                 rise,
+                ink: if link.is_some() { Ink::Link } else { Ink::Text },
+                target: note.or(link),
             }
         })
         .collect();
     if out.is_empty() {
-        out.push(Segment { start: 0, end: 0, face: Face::of(italic, bold), size, rise: 0.0 });
+        out.push(Segment { start: 0, end: 0, face: Face::of(italic, bold), size, rise: 0.0, ink: Ink::Text, target: None });
     }
     out
 }
@@ -524,215 +726,46 @@ fn span_width(pieces: &[Piece], a: usize, b: usize) -> f32 {
         .sum()
 }
 
-fn draw(runs: &mut Vec<GlyphRun>, pieces: &[Piece], a: usize, b: usize, mut x: f32) {
+/// Glyphs of text `[a, b)` at `x`; note markers and links also extend the line's active areas.
+fn draw(line: &mut Line, pieces: &[Piece], segments: &[Segment], a: usize, b: usize, mut x: f32) {
     for p in pieces {
+        let seg = &segments[p.segment];
         for g in p.glyphs.iter() {
-            if (a..b).contains(&(p.start + g.cluster as usize)) {
-                push_glyph(runs, p.face, p.size, g.id, x + g.x_offset as f32 * p.scale, -p.rise - g.y_offset as f32 * p.scale);
-                x += g.advance as f32 * p.scale;
+            if !(a..b).contains(&(p.start + g.cluster as usize)) {
+                continue;
             }
-        }
-    }
-}
-
-fn push_glyph(runs: &mut Vec<GlyphRun>, face: Face, size: f32, id: u32, x: f32, y: f32) {
-    match runs.last_mut() {
-        Some(r) if r.face == face && r.size == size => {
-            r.glyphs.push(id as u16);
-            r.positions.push([x, y]);
-        }
-        _ => runs.push(GlyphRun { face, size, glyphs: vec![id as u16], positions: vec![[x, y]] }),
-    }
-}
-
-/// Lines `[line_start, line_end)` of a block, `top` below the top of the text area.
-#[derive(Debug, Clone, Copy)]
-pub struct Slice {
-    layout: usize,
-    block: usize,
-    line_start: usize,
-    line_end: usize,
-    top: f32,
-}
-
-#[derive(Debug, Clone)]
-pub struct Page {
-    pub chapter: usize,
-    slices: Vec<Slice>,
-}
-
-/// A chapter typeset for one page style.
-pub struct ChapterLayout {
-    pub chapter: usize,
-    blocks: Vec<BlockLayout>,
-    pub pages: Vec<Page>,
-}
-
-impl ChapterLayout {
-    /// Where page `i` starts in the text: the reading position to restore after a re-layout.
-    pub fn page_start(&self, i: usize) -> Locator {
-        let s = self.pages[i].slices[0];
-        let offset = self.blocks.get(s.layout).and_then(|b| b.line_starts.get(s.line_start)).copied().unwrap_or(0);
-        Locator { chapter: self.chapter, block: s.block, offset }
-    }
-
-    /// The page that contains `at` (the last one starting at or before it).
-    pub fn page_of(&self, at: Locator) -> usize {
-        (0..self.pages.len()).rev().find(|&i| self.page_start(i) <= at).unwrap_or(0)
-    }
-
-    /// Glyph runs of page `i` in page coordinates, with the page number at the bottom.
-    pub fn render(&self, i: usize, style: &PageStyle, typesetter: &mut Typesetter) -> Vec<GlyphRun> {
-        let mut out: Vec<GlyphRun> = Vec::new();
-        for s in &self.pages[i].slices {
-            let b = &self.blocks[s.layout];
-            for line in s.line_start..s.line_end {
-                let dx = style.margin_h + b.x;
-                let dy = style.margin_top + s.top + (line - s.line_start) as f32 * b.line_height + b.baseline;
-                for run in &b.lines[line] {
-                    out.push(GlyphRun { positions: run.positions.iter().map(|p| [p[0] + dx, p[1] + dy]).collect(), ..run.clone() });
-                }
-            }
-        }
-        // Page number.
-        let label = format!("{} / {}", i + 1, self.pages.len());
-        let size = style.text_size * 0.7;
-        let scale = size / typesetter.shaper.units_per_em(Face::Regular);
-        let glyphs = typesetter.shaper.shape(Face::Regular, &label);
-        let width: f32 = glyphs.iter().map(|g| g.advance as f32 * scale).sum();
-        let mut x = (style.width - width) / 2.0;
-        let y = style.height - style.margin_bottom / 2.0 + size * 0.35;
-        let mut run = GlyphRun { face: Face::Regular, size, glyphs: Vec::new(), positions: Vec::new() };
-        for g in glyphs.iter() {
-            run.glyphs.push(g.id as u16);
-            run.positions.push([x, y]);
-            x += g.advance as f32 * scale;
-        }
-        out.push(run);
-        out
-    }
-}
-
-/// Paginates a chapter: a port of the Android `Paginator`, which needs only line counts and heights from its layouts.
-pub fn paginate(book: &Book, chapter: usize, style: &PageStyle, typesetter: &mut Typesetter) -> ChapterLayout {
-    let model = &book.chapters[chapter].blocks;
-    // Layouts paired with their block index in the chapter: blocks not drawn yet have no layout.
-    let laid: Vec<(usize, BlockLayout)> = model.iter().enumerate().filter_map(|(i, b)| typesetter.layout(b).map(|l| (i, l))).collect();
-    let blocks: Vec<&BlockLayout> = laid.iter().map(|(_, l)| l).collect();
-    let page_height = style.text_height();
-    let lh = typesetter.line_height;
-    let mut pages = Vec::new();
-    let mut slices: Vec<Slice> = Vec::new();
-    let mut y = lh * 2.0; // the chapter start is lowered, as in a printed book
-    let mut prev: Option<usize> = None;
-
-    let mut new_page = |slices: &mut Vec<Slice>, y: &mut f32, prev: &mut Option<usize>| {
-        if !slices.is_empty() {
-            pages.push(Page { chapter, slices: std::mem::take(slices) });
-        }
-        *y = 0.0;
-        *prev = None;
-    };
-
-    for (index, &block) in blocks.iter().enumerate() {
-        if block.lines.is_empty() {
-            // An empty line is not needed at the top of a page.
-            if y > 0.0 && y + block.height() <= page_height {
-                y += block.height();
-            }
-            prev = Some(index);
-            continue;
-        }
-        if y > 0.0 {
-            y += match prev.map(|p| blocks[p]) {
-                None => block.space_before,
-                Some(p) if p.group == block.group => 0.0,
-                Some(p) => p.space_after.max(block.space_before),
-            };
-        }
-        if block.keep_with_next && y > 0.0 {
-            let next = blocks.get(index + 1);
-            let keep = block.height() + lh + next.map_or(0.0, |n| n.lines.len().min(2) as f32 * n.line_height);
-            if y + keep > page_height {
-                new_page(&mut slices, &mut y, &mut prev);
-            }
-        }
-        let lines = block.lines.len();
-        let mut line = 0;
-        while line < lines {
-            let mut end = line;
-            while end < lines && (end - line + 1) as f32 * block.line_height <= page_height - y {
-                end += 1;
-            }
-            if end < lines {
-                if lines - end == 1 && end - line >= 2 {
-                    end -= 1; // no lone last line on the next page
-                }
-                let orphan = line == 0 && end == 1 && lines > 1; // no lone first line at the bottom
-                if end == line || orphan {
-                    if y > 0.0 {
-                        new_page(&mut slices, &mut y, &mut prev);
-                        continue;
+            push_glyph(
+                &mut line.runs,
+                p.font,
+                p.size,
+                seg.ink,
+                g.id,
+                [x + g.x_offset as f32 * p.scale, -p.rise - g.y_offset as f32 * p.scale],
+            );
+            let advance = g.advance as f32 * p.scale;
+            if let Some(target) = &seg.target {
+                let rect = Rect { x, y: -p.rise - p.ascent, w: advance, h: p.ascent + p.descent };
+                match line.areas.last_mut() {
+                    Some(area) if area.target == *target && area.rect.x + area.rect.w >= x - 0.5 => {
+                        area.rect.w = x + advance - area.rect.x;
                     }
-                    end = end.max(line + 1); // taller than a page: draw as is
+                    _ => line.areas.push(Area { rect, target: target.clone() }),
                 }
             }
-            slices.push(Slice { layout: index, block: laid[index].0, line_start: line, line_end: end, top: y });
-            y += (end - line) as f32 * block.line_height;
-            line = end;
-            if line < lines {
-                new_page(&mut slices, &mut y, &mut prev);
-            }
+            x += advance;
         }
-        prev = Some(index);
     }
-    new_page(&mut slices, &mut y, &mut prev);
-    if pages.is_empty() {
-        pages.push(Page { chapter, slices: vec![Slice { layout: 0, block: 0, line_start: 0, line_end: 0, top: 0.0 }] });
+}
+
+fn push_glyph(runs: &mut Vec<GlyphRun>, font: FontId, size: f32, ink: Ink, id: u32, at: [f32; 2]) {
+    match runs.last_mut() {
+        Some(r) if r.font == font && r.size == size && r.ink == ink => {
+            r.glyphs.push(id as u16);
+            r.positions.push(at);
+        }
+        _ => runs.push(GlyphRun { font, size, ink, glyphs: vec![id as u16], positions: vec![at] }),
     }
-    ChapterLayout { chapter, blocks: laid.into_iter().map(|(_, l)| l).collect(), pages }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::model::{Chapter, Kind};
-
-    fn book(paragraphs: usize) -> Book {
-        let text =
-            "Слезы навернулись у нее на глаза. Видно, ей нравилась эта распущенность, видно, ее рассердило, что я хотел пристыдить ее.";
-        let blocks = (0..paragraphs)
-            .map(|_| Block::Paragraph { text: StyledText { text: text.into(), styles: vec![] }, kind: Kind::Body })
-            .collect();
-        Book { title: "T".into(), language: Some("ru".into()), chapters: vec![Chapter { title: None, blocks }], ..Book::default() }
-    }
-
-    #[test]
-    fn justified_lines_fill_the_column() {
-        let style = PageStyle::for_window(600.0, 900.0, 20.0);
-        let mut t = Typesetter::new(style, Hyphenator::for_language(Some("ru")).map(Rc::new));
-        let b = &book(1).chapters[0].blocks[0];
-        let layout = t.layout(b).unwrap();
-        assert!(layout.lines.len() >= 3);
-        // Every line but the last ends at the right edge of the column (a hyphen included).
-        let right = |line: &Vec<GlyphRun>| line.iter().flat_map(|r| r.positions.iter()).map(|p| p[0]).fold(0.0f32, f32::max);
-        for line in &layout.lines[..layout.lines.len() - 1] {
-            assert!(right(line) > style.text_width() - 30.0 && right(line) <= style.text_width(), "line ends at {}", right(line));
-        }
-    }
-
-    #[test]
-    fn pages_hold_whole_chapter_and_find_locators() {
-        let style = PageStyle::for_window(600.0, 500.0, 20.0);
-        let b = book(30);
-        let mut t = Typesetter::new(style, Hyphenator::for_language(Some("ru")).map(Rc::new));
-        let ch = paginate(&b, 0, &style, &mut t);
-        assert!(ch.pages.len() > 3);
-        let lines: usize = ch.pages.iter().flat_map(|p| &p.slices).map(|s| s.line_end - s.line_start).sum();
-        assert_eq!(lines, ch.blocks.iter().map(|b| b.lines.len()).sum::<usize>());
-        for i in 0..ch.pages.len() {
-            assert_eq!(ch.page_of(ch.page_start(i)), i);
-        }
-        assert!(!ch.render(1, &style, &mut t).is_empty());
-    }
-}
+mod tests;

@@ -1,6 +1,6 @@
 //! Parse a book and typeset every chapter: `cargo run --release -p forzac-core --example bench -- book.fb2.zip`.
 
-use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Instant;
 
 use forzac_core::hyphen::Hyphenator;
@@ -13,11 +13,11 @@ fn main() {
     let parse = t.elapsed();
     let style = PageStyle::for_window(760.0, 980.0, 20.0);
     let t = Instant::now();
-    let hyphenator = Hyphenator::for_language(book.language.as_deref()).map(Rc::new);
+    let hyphenator = Hyphenator::for_language(book.language.as_deref()).map(Arc::new);
     let hyph = t.elapsed();
     let mut typesetter = Typesetter::new(style, hyphenator);
     let t = Instant::now();
-    let first = paginate(&book, 0, &style, &mut typesetter);
+    paginate(&book, 0, &style, &mut typesetter);
     let first_chapter = t.elapsed();
     let t = Instant::now();
     let mut pages = 0;
@@ -29,11 +29,18 @@ fn main() {
         slowest = slowest.max((started.elapsed(), c, n));
     }
     let all = t.elapsed();
-    let t = Instant::now();
-    let runs = first.render(0, &style, &mut typesetter);
-    let render = t.elapsed();
+    // Page contents: the slowest page of the slowest chapter.
+    let chapter = paginate(&book, slowest.1, &style, &mut typesetter);
+    let render = (0..chapter.pages.len())
+        .map(|i| {
+            let t = Instant::now();
+            let content = chapter.render(i, &style, &mut typesetter);
+            (t.elapsed(), content.runs.len())
+        })
+        .max()
+        .unwrap_or_default();
     println!(
-        "{}: {} chapters, {} pages | parse {:?}, hyphenation patterns {:?}, first chapter {:?} (cold), whole book {:?} (warm cache), slowest chapter {:?} (#{}, {} pages), render page {:?} ({} runs)",
+        "{}: {} chapters, {} pages | parse {:?}, hyphenation patterns {:?}, first chapter {:?} (cold), whole book {:?} (warm cache), slowest chapter {:?} (#{}, {} pages), render page at most {:?} ({} runs)",
         book.title,
         book.chapters.len(),
         pages,
@@ -44,7 +51,7 @@ fn main() {
         slowest.0,
         slowest.1,
         slowest.2,
-        render,
-        runs.len()
+        render.0,
+        render.1
     );
 }

@@ -11,7 +11,7 @@ pub mod model;
 mod typography;
 
 pub use fonts::Face;
-pub use layout::{ChapterLayout, GlyphRun, PageStyle, Typesetter, paginate};
+pub use layout::{Area, ChapterLayout, GlyphRun, Ink, PageContent, PageImage, PageStyle, Rect, Rule, Target, Typesetter, paginate};
 pub use model::{Block, Book, Chapter, Locator};
 
 /// Reads and parses a book file. The spike reads FB2 and `.fb2.zip`; EPUB and FB3 come next.

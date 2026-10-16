@@ -27,9 +27,12 @@ punctuation, a scroll layout (`page-turning`).
 Fonts get ids: 0–3 the bundled PT Serif faces, then fallback fonts registered as they are needed. When a character has
 no glyph in the run's face, the core asks a `FallbackProvider` (set by the shell) for a font file and face index that
 cover it; the file is memory-mapped, registered under a new id, and the run is split by font before shaping.
-Results are cached per character. Shells look a font up by id (`font_source(id)`: bundled bytes or a file path and
+Results are cached per character. A word is first shaped whole in the book face (a cached shape); only a word with a
+`.notdef` glyph is split by character, so the common case costs nothing (checking every character cost 15% of layout
+time on the Pi). The bundled faces are read without the registry's lock. Shells look a font up by id (`font_source(id)`: bundled bytes or a file path and
 index, plus whether it has colour glyphs):
-- GTK: fontconfig's default configuration answers the provider (`FcFontMatch` with the character in the charset);
+- GTK: fontconfig's default configuration answers the provider (`FcFontSort` for `serif` with the character in the
+  charset, first font that has it);
   fallback files are added to the shell's application-only fontconfig configuration and loaded by their family name.
 - macOS: Core Text answers (`CTFontCreateForString`, the URL attribute); the shell creates fonts from the same file.
 Without a provider (tests, the C ABI before the Mac shell registers one) missing characters keep the `.notdef` glyph.
@@ -50,5 +53,6 @@ layout. A changed style discards pending results. The macOS shell keeps synchron
 - Fallback fonts make line breaks platform-dependent for those characters → acceptable; text in the book face (all
   but 2 of 2.6 million characters in the corpus) still breaks identically.
 - Large CJK collections: memory-mapped, not read, so registering one costs little.
-- Image decoding on the main thread when a page is first drawn may cost a frame on the Pi → measure; decode on a
-  worker if it does.
+- Image decoding on the main thread when a page is first drawn may cost a frame on the Pi → the GTK worker decodes the
+  images of the current and neighbouring chapters along with their layout; only an image the worker has not reached
+  (the very first page) is decoded on the main thread.

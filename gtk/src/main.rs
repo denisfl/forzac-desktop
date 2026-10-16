@@ -5,7 +5,8 @@
 //!
 //! Spike flags: `--measure` prints the time to the first presented page and quits; `--png out.png` saves the first
 //! page as rendered by the window's renderer and quits; `--turns N` turns N pages with the animation and prints
-//! frame-interval statistics; `--chapter N` opens chapter N.
+//! frame-interval statistics; `--chapter N` opens chapter N; `--page N` goes to page N of it
+//! (for `--png` and `--turns`).
 
 mod fonts;
 mod page_view;
@@ -25,6 +26,7 @@ struct Options {
     png: Option<PathBuf>,
     turns: usize,
     chapter: usize,
+    page: usize,
 }
 
 fn main() -> glib::ExitCode {
@@ -32,11 +34,13 @@ fn main() -> glib::ExitCode {
     // The Wayland app_id comes from the program name; it must match the .desktop file name for the compositor,
     // docks and `StartupWMClass`-less matching to tie windows to Forzac.
     glib::set_prgname(Some(APP_ID));
+    fonts::install_fallback_provider();
     let args: Vec<String> = std::env::args().collect();
     let png = args.iter().position(|a| a == "--png").and_then(|i| args.get(i + 1)).map(PathBuf::from);
     let turns = args.iter().position(|a| a == "--turns").and_then(|i| args.get(i + 1)).and_then(|n| n.parse().ok()).unwrap_or(0);
     let chapter = args.iter().position(|a| a == "--chapter").and_then(|i| args.get(i + 1)).and_then(|n| n.parse().ok()).unwrap_or(0);
-    let options = Options { start, measure: args.iter().any(|a| a == "--measure"), png, turns, chapter };
+    let page = args.iter().position(|a| a == "--page").and_then(|i| args.get(i + 1)).and_then(|n| n.parse().ok()).unwrap_or(0);
+    let options = Options { start, measure: args.iter().any(|a| a == "--measure"), png, turns, chapter, page };
     let files: Vec<&String> = args
         .iter()
         .skip(1)
@@ -101,6 +105,9 @@ fn open_window(app: &gtk::Application, path: &std::path::Path, options: &Options
                     options.start.elapsed(),
                     view.page_count()
                 );
+            }
+            if options.page > 0 {
+                view.go_to_page(options.page);
             }
             if let Some(png) = &options.png {
                 save_png(view, png);

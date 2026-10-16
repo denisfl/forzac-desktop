@@ -1,35 +1,67 @@
-//! The reading surface: draws pages typeset by the core as GSK text nodes, caches each page as a render node and
-//! slides between them on the compositor's frame clock. Draws nothing while idle.
+//! The reading surface: draws pages typeset by the core as GSK text, texture and colour nodes, caches each page as a
+//! render node and slides between them on the compositor's frame clock. Draws nothing while idle.
+//!
+//! The neighbouring chapters are typeset and their images decoded on a worker thread, so a turn across a chapter
+//! boundary only draws.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use forzac_core::hyphen::Hyphenator;
-use forzac_core::{Book, ChapterLayout, Locator, PageStyle, Typesetter, paginate};
+use forzac_core::{Block, Book, ChapterLayout, Ink, Locator, PageStyle, Rect, Typesetter, fonts, paginate};
 use gtk::subclass::prelude::*;
-use gtk::{gdk, glib, graphene, gsk, prelude::*};
+use gtk::{gdk, gio, glib, graphene, gsk, prelude::*};
 
 use crate::fonts::Fonts;
 
 /// Text size presets in logical pixels: steps, not a slider.
 const TEXT_SIZES: [f32; 7] = [16.0, 18.0, 20.0, 22.0, 24.0, 27.0, 30.0];
 
-/// Background and ink of the six themes (docs: the Android app's palettes).
-pub const THEMES: [(&str, u32, u32); 6] = [
-    ("Light", 0xFAFAFA, 0x1C1C1C),
-    ("Sepia", 0xF4ECD8, 0x5B4636),
-    ("Dark", 0x121212, 0xCFCFCF),
-    ("Dawn", 0xFAF4ED, 0x575279),
-    ("Wave", 0x1F1F28, 0xDCD7BA),
-    ("Forest", 0x2D353B, 0xD3C6AA),
+/// Background, ink and link ink of the six themes (docs: the Android app's palettes).
+pub const THEMES: [(&str, u32, u32, u32); 6] = [
+    ("Light", 0xFAFAFA, 0x1C1C1C, 0x94621F),
+    ("Sepia", 0xF4ECD8, 0x5B4636, 0x8A5A1C),
+    ("Dark", 0x121212, 0xCFCFCF, 0xC49A52),
+    ("Dawn", 0xFAF4ED, 0x575279, 0x8F5E1D),
+    ("Wave", 0x1F1F28, 0xDCD7BA, 0xDCA561),
+    ("Forest", 0x2D353B, 0xD3C6AA, 0xDBBC7F),
 ];
+
+/// Opacity of the ink for secondary text (the page number) and for table rules by strength.
+const SECONDARY: f32 = 0.6;
+const RULES: [f32; 4] = [0.0, 0.35, 0.6, 0.9];
 
 /// Page turn duration, µs.
 const TURN: i64 = 200_000;
 
 fn rgba(rgb: u32) -> gdk::RGBA {
     gdk::RGBA::new(((rgb >> 16) & 0xFF) as f32 / 255.0, ((rgb >> 8) & 0xFF) as f32 / 255.0, (rgb & 0xFF) as f32 / 255.0, 1.0)
+}
+
+fn rect(r: Rect) -> graphene::Rect {
+    graphene::Rect::new(r.x, r.y, r.w, r.h)
+}
+
+/// Ids of the images in `chapters`.
+fn image_ids(book: &Book, chapters: impl Iterator<Item = usize>) -> HashSet<String> {
+    chapters
+        .filter_map(|c| book.chapters.get(c))
+        .flat_map(|c| &c.blocks)
+        .filter_map(|b| match b {
+            Block::Image { id } => Some(id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// What the worker thread produces: neighbouring chapters for a style and decoded images.
+struct Prefetched {
+    style: PageStyle,
+    layouts: Vec<ChapterLayout>,
+    typesetter: Typesetter,
+    textures: Vec<(String, Option<gdk::Texture>)>,
 }
 
 /// Runs once, after the first frame with a page is presented.
@@ -45,12 +77,19 @@ struct Turn {
 }
 
 pub struct State {
-    book: Book,
-    hyphenator: Option<Rc<Hyphenator>>,
+    book: Arc<Book>,
+    hyphenator: Option<Arc<Hyphenator>>,
     fonts: Fonts,
     chapter: usize,
     layout: Option<ChapterLayout>,
     typesetter: Option<Typesetter>,
+    /// The chapters before and after the current one, for the current style.
+    neighbours: Vec<ChapterLayout>,
+    /// The worker's typesetter between jobs (its caches stay warm); `None` while a job runs.
+    worker: Option<Typesetter>,
+    busy: bool,
+    /// Decoded images by id; `None` for one that cannot be decoded.
+    textures: HashMap<String, Option<gdk::Texture>>,
     style: Option<PageStyle>,
     page: usize,
     /// The reading position; pages are derived from it after every re-layout.
@@ -86,7 +125,9 @@ mod imp {
     impl WidgetImpl for PageView {
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             let view = self.obj();
-            view.relayout();
+            if view.relayout() {
+                view.prefetch();
+            }
             view.draw(snapshot);
             if let Some(callback) = self.on_first_frame.borrow_mut().take() {
                 // After this frame is presented.
@@ -111,21 +152,25 @@ mod imp {
 glib::wrapper! {
     pub struct PageView(ObjectSubclass<imp::PageView>)
         @extends gtk::Widget,
-        @implements gtk::Buildable, gtk::ConstraintTarget;
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
 impl PageView {
     pub fn new(book: Book, chapter: usize) -> Self {
         let view: Self = glib::Object::new();
-        let hyphenator = Hyphenator::for_language(book.language.as_deref()).map(Rc::new);
+        let hyphenator = Hyphenator::for_language(book.language.as_deref()).map(Arc::new);
         let chapter = chapter.min(book.chapters.len().saturating_sub(1));
         *view.imp().state.borrow_mut() = Some(State {
-            book,
+            book: Arc::new(book),
             hyphenator,
             fonts: Fonts::new(),
             chapter,
             layout: None,
             typesetter: None,
+            neighbours: Vec::new(),
+            worker: None,
+            busy: false,
+            textures: HashMap::new(),
             style: None,
             page: 0,
             locator: Locator { chapter, ..Locator::default() },
@@ -150,26 +195,91 @@ impl PageView {
         f(self.imp().state.borrow_mut().as_mut().unwrap())
     }
 
-    /// Typesets the current chapter when the size, text size or chapter changed; keeps the reading position.
-    fn relayout(&self) {
+    /// Typesets the current chapter when the size, text size or chapter changed (or takes it from the neighbours laid
+    /// out in the background); keeps the reading position. True when the layout changed.
+    fn relayout(&self) -> bool {
         let (w, h) = (WidgetExt::width(self) as f32, WidgetExt::height(self) as f32);
         if w <= 0.0 || h <= 0.0 {
-            return;
+            return false;
         }
         self.with(|s| {
             let style = PageStyle::for_window(w, h, TEXT_SIZES[s.size_step]);
             let fresh = s.layout.as_ref().is_some_and(|l| l.chapter == s.chapter) && s.style == Some(style);
             if fresh {
-                return;
+                return false;
             }
             if s.style != Some(style) {
                 s.typesetter = Some(Typesetter::new(style, s.hyphenator.clone()));
                 s.style = Some(style);
+                s.neighbours.clear();
+                s.layout = None;
             }
-            let layout = paginate(&s.book, s.chapter, &style, s.typesetter.as_mut().unwrap());
+            let layout = match s.neighbours.iter().position(|l| l.chapter == s.chapter) {
+                Some(i) => s.neighbours.swap_remove(i),
+                None => paginate(&s.book, s.chapter, &style, s.typesetter.as_mut().unwrap()),
+            };
             s.page = if std::mem::take(&mut s.to_last) { layout.pages.len() - 1 } else { layout.page_of(s.locator) };
-            s.layout = Some(layout);
+            if let Some(old) = s.layout.replace(layout) {
+                s.neighbours.push(old);
+            }
             s.nodes.clear();
+            true
+        })
+    }
+
+    /// Typesets the chapters next to the current one and decodes their images on a worker thread, one job at a time.
+    fn prefetch(&self) {
+        let job = self.with(|s| {
+            let style = s.style?;
+            let chapter = s.chapter;
+            s.neighbours.retain(|l| l.chapter.abs_diff(chapter) == 1);
+            let near = || (chapter.saturating_sub(1)..=chapter + 1).filter(|&c| c < s.book.chapters.len());
+            let wanted: HashSet<String> = image_ids(&s.book, near());
+            s.textures.retain(|id, _| wanted.contains(id));
+            if s.busy {
+                return None;
+            }
+            let chapters: Vec<usize> = [chapter + 1, chapter.wrapping_sub(1)]
+                .into_iter()
+                .filter(|&c| c < s.book.chapters.len() && !s.neighbours.iter().any(|l| l.chapter == c))
+                .collect();
+            let images: Vec<String> = wanted.into_iter().filter(|id| !s.textures.contains_key(id)).collect();
+            if chapters.is_empty() && images.is_empty() {
+                return None;
+            }
+            let typesetter = s.worker.take().unwrap_or_else(|| Typesetter::new(style, s.hyphenator.clone()));
+            s.busy = true;
+            Some((s.book.clone(), style, chapters, images, typesetter))
+        });
+        let Some((book, style, chapters, images, mut typesetter)) = job else { return };
+        let view = self.downgrade();
+        glib::spawn_future_local(async move {
+            let done = gio::spawn_blocking(move || {
+                if typesetter.style() != &style {
+                    typesetter = Typesetter::new(style, typesetter.hyphenator());
+                }
+                let layouts = chapters.iter().map(|&c| paginate(&book, c, &style, &mut typesetter)).collect();
+                let textures = images
+                    .into_iter()
+                    .map(|id| {
+                        let texture = book.images.get(&id).and_then(|i| gdk::Texture::from_bytes(&glib::Bytes::from(&i.bytes[..])).ok());
+                        (id, texture)
+                    })
+                    .collect();
+                Prefetched { style, layouts, typesetter, textures }
+            })
+            .await;
+            let (Some(view), Ok(done)) = (view.upgrade(), done) else { return };
+            view.with(|s| {
+                s.busy = false;
+                s.textures.extend(done.textures);
+                if s.style == Some(done.style) {
+                    let current = s.layout.as_ref().map(|l| l.chapter);
+                    s.neighbours.extend(done.layouts.into_iter().filter(|l| Some(l.chapter) != current));
+                }
+                s.worker = Some(done.typesetter);
+            });
+            view.prefetch();
         });
     }
 
@@ -178,10 +288,33 @@ impl PageView {
             return Some(n.clone());
         }
         let (layout, style, t) = (s.layout.as_ref()?, s.style?, s.typesetter.as_mut()?);
-        let runs = layout.render(page, &style, t);
-        let ink = rgba(THEMES[s.theme].2);
+        let content = layout.render(page, &style, t);
+        let (_, _, text, link) = THEMES[s.theme];
+        let mut secondary = rgba(text);
+        secondary.set_alpha(SECONDARY);
         let snapshot = gtk::Snapshot::new();
-        for run in &runs {
+        for image in &content.images {
+            // Decoded on the worker; an image the worker has not reached yet (the first page) is decoded here.
+            let book = &s.book;
+            let texture = s.textures.entry(image.id.clone()).or_insert_with(|| {
+                book.images.get(&image.id).and_then(|i| gdk::Texture::from_bytes(&glib::Bytes::from(&i.bytes[..])).ok())
+            });
+            if let Some(texture) = texture {
+                snapshot.append_scaled_texture(texture, gsk::ScalingFilter::Trilinear, &rect(image.rect));
+            }
+        }
+        for rule in &content.rules {
+            let mut ink = rgba(text);
+            ink.set_alpha(RULES[rule.strength as usize]);
+            snapshot.append_color(&ink, &rect(rule.rect));
+        }
+        for run in &content.runs {
+            let ink = match run.ink {
+                Ink::Text => rgba(text),
+                Ink::Link => rgba(link),
+                Ink::Secondary => secondary,
+            };
+            let color = fonts::font_is_color(run.font);
             let Some(&[x0, y0]) = run.positions.first() else { continue };
             let mut glyphs = gtk::pango::GlyphString::new();
             glyphs.set_size(run.glyphs.len() as i32);
@@ -192,11 +325,13 @@ impl PageView {
                 g.set_width(units.get(i + 1).map_or(0, |next| next - units[i]));
                 g.set_x_offset(0);
                 g.set_y_offset(((run.positions[i][1] - y0) * 1024.0).round() as i32);
-                // `set_size` leaves the new entries uninitialised; a stray `is_color` bit makes GSK draw the glyph as a
-                // colour glyph (invisible here). The bindings have no setter, so set the bitfield: cluster start only.
-                unsafe { (*(info as *mut gtk::pango::GlyphInfo).cast::<gtk::pango::ffi::PangoGlyphInfo>()).attr.is_cluster_start = 1 };
+                // `set_size` leaves the new entries uninitialised; a stray `is_color` bit makes GSK draw a glyph as a
+                // colour glyph (invisible for a plain font). The bindings have no setter, so set the whole bitfield:
+                // bit 0 cluster start, bit 1 colour (emoji).
+                let attr = 1 | (color as u32) << 1;
+                unsafe { (*(info as *mut gtk::pango::GlyphInfo).cast::<gtk::pango::ffi::PangoGlyphInfo>()).attr.is_cluster_start = attr };
             }
-            let font = s.fonts.get(run.face, run.size);
+            let Some(font) = s.fonts.get(run.font, run.size) else { continue };
             if let Some(node) = gsk::TextNode::new(font, &glyphs, &ink, &graphene::Point::new(x0, y0)) {
                 snapshot.append_node(node);
             }
@@ -298,6 +433,18 @@ impl PageView {
         self.with(|s| {
             if let Some(layout) = &s.layout {
                 s.page = if end { layout.pages.len() - 1 } else { 0 };
+                s.locator = layout.page_start(s.page);
+                s.turn = None;
+            }
+        });
+        self.queue_draw();
+    }
+
+    /// Page `page` of the current chapter (the last one if there are fewer).
+    pub fn go_to_page(&self, page: usize) {
+        self.with(|s| {
+            if let Some(layout) = &s.layout {
+                s.page = page.min(layout.pages.len() - 1);
                 s.locator = layout.page_start(s.page);
                 s.turn = None;
             }
