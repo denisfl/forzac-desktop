@@ -38,6 +38,12 @@ list.
   drawn over the cached node (a rounded rectangle in the link ink at low opacity), so focus changes only redraw.
 - **Panels** are children of the window's overlay: the contents on the right (the theme's colours through a CSS
   provider updated with the theme), the note at the bottom. A panel takes the focus while open.
+- **The contents are a `GtkListView`** (only the rows on screen exist), built once per window in the first pause in
+  reading (a second without a move, so it never delays a turn) and shown once invisibly then, so the interface font
+  and styles are loaded before `o`. Measured on the Pi: a `GtkListBox` of all entries took 0.8–0.9 s to appear; the
+  list view 60–130 ms; prepared, 30–49 ms, and 6 ms when opened again.
+- **Tab stops** are runs of areas with the same target, so a link broken across lines is one stop; the core merges
+  a link's words on a line into one area.
 - **Shortcut scope**: the reader shortcuts move from the window (global scope) to the page view (local scope), so they
   act only while the page has the focus; panels have their own keys. `q`, `f`, `?` stay window-wide.
 - **Jumps** (`go_to(Locator)`) push the current position on a back stack (50 places); `Ctrl+O` pops. A jump into

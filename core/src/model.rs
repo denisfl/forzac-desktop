@@ -66,6 +66,14 @@ impl Block {
             _ => None,
         }
     }
+
+    /// How much text the block holds (bytes; table rows count their cells): the measure of progress through a book.
+    pub fn text_len(&self) -> usize {
+        match self {
+            Block::TableRow { table, row } => table.rows[*row].iter().map(|c| c.text.text.len()).sum(),
+            b => b.text().map_or(0, |t| t.text.len()),
+        }
+    }
 }
 
 /// What a paragraph is, which decides its indent, alignment, face and spacing.

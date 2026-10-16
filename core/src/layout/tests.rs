@@ -74,12 +74,12 @@ fn pages_hold_whole_chapter_and_find_locators() {
 #[test]
 fn note_markers_and_links_are_active_areas() {
     let style = PageStyle::for_window(600.0, 900.0, 20.0);
-    let text = "Текст со сноской1 и ссылкой здесь.";
+    let text = "Текст со сноской1 и ссылкой из трёх слов.";
     let note = text.find('1').unwrap();
     let link = text.find("ссылкой").unwrap();
     let styles = vec![
         StyleRange { start: note, end: note + 1, style: Style::NoteRef, target: Some("n1".into()) },
-        StyleRange { start: link, end: link + "ссылкой".len(), style: Style::Link, target: Some("l1".into()) },
+        StyleRange { start: link, end: link + "ссылкой из трёх".len(), style: Style::Link, target: Some("l1".into()) },
     ];
     let b = book(vec![Block::Paragraph { text: StyledText { text: text.into(), styles }, kind: Kind::Body }]);
     let mut t = typesetter(style);
@@ -87,9 +87,9 @@ fn note_markers_and_links_are_active_areas() {
     let page = ch.render(0, &style, &mut t);
     let targets: Vec<&Target> = page.areas.iter().map(|a| &a.target).collect();
     assert_eq!(targets, [&Target::Note("n1".into()), &Target::Link("l1".into())]);
-    // The link is one area across the word, drawn in the link ink.
+    // The link is one area across its words, drawn in the link ink.
     let area = &page.areas[1];
-    assert!(area.rect.w > 40.0 && area.rect.h > 10.0, "{:?}", area.rect);
+    assert!(area.rect.w > 120.0 && area.rect.h > 10.0, "{:?}", area.rect);
     assert!(page.runs.iter().any(|r| r.ink == Ink::Link));
     // The marker is raised: its area sits above the link's.
     assert!(page.areas[0].rect.y < area.rect.y);
@@ -154,4 +154,59 @@ fn ideographic_text_breaks_between_characters() {
     for line in lines {
         assert!(right(line) <= style.text_width(), "line ends at {}", right(line));
     }
+}
+
+#[test]
+fn pages_know_how_far_into_the_book_they_are() {
+    let style = PageStyle::for_window(600.0, 500.0, 20.0);
+    let mut b = book((0..20).map(|_| paragraph(TEXT)).collect());
+    b.chapters.push(b.chapters[0].clone());
+    let mut t = typesetter(style);
+    let first = paginate(&b, 0, &style, &mut t);
+    let second = paginate(&b, 1, &style, &mut t);
+    assert_eq!(first.progress(0), 0.0);
+    assert!((second.progress(0) - 0.5).abs() < 1e-6, "the second of two equal chapters starts half way");
+    let all: Vec<f32> =
+        (0..first.pages.len()).map(|i| first.progress(i)).chain((0..second.pages.len()).map(|i| second.progress(i))).collect();
+    assert!(all.windows(2).all(|w| w[0] < w[1]), "{all:?}");
+    assert!(*all.last().unwrap() < 1.0);
+}
+
+#[test]
+fn running_head_and_foot() {
+    let style = PageStyle::for_window(600.0, 500.0, 20.0);
+    let mut b = book((0..20).map(|_| paragraph(TEXT)).collect());
+    b.chapters[0].title = Some("Очень длинное название главы, которое никак не поместится в одну строку колонтитула".into());
+    let mut t = typesetter(style);
+    let ch = paginate(&b, 0, &style, &mut t);
+    fn secondary(page: &PageContent) -> Vec<&GlyphRun> {
+        page.runs.iter().filter(|r| r.ink == Ink::Secondary).collect()
+    }
+    assert_eq!(secondary(&ch.render(0, &style, &mut t)).len(), 1, "no running head on the chapter's first page");
+    let page = ch.render(1, &style, &mut t);
+    let runs = secondary(&page);
+    assert_eq!(runs.len(), 2, "running head and foot");
+    let head = runs[0];
+    let (left, right) = (head.positions[0][0], head.positions.last().unwrap()[0]);
+    assert!(left >= style.margin_h - 1.0 && right <= style.width - style.margin_h, "the shortened title fits: {left}…{right}");
+    assert!(head.positions[0][1] < style.margin_top, "the head is above the text");
+    assert!(ch.render_body(1, &style).runs.iter().all(|r| r.ink != Ink::Secondary), "the body alone has neither");
+}
+
+#[test]
+fn notes_are_typeset_as_one_tall_page() {
+    let mut b = book(vec![paragraph(TEXT)]);
+    let note = crate::model::Note { title: Some("1".into()), blocks: (0..3).map(|_| paragraph(TEXT)).collect() };
+    b.notes.insert("n1".into(), note);
+    let style = PageStyle { height: 10_000.0, margin_top: 16.0, margin_bottom: 16.0, ..PageStyle::for_window(500.0, 10_000.0, 18.0) };
+    let mut t = typesetter(style);
+    let layout = layout_note(&b, "n1", &style, &mut t).unwrap();
+    assert_eq!(layout.pages.len(), 1);
+    let page = layout.render_body(0, &style);
+    let top = page.runs.iter().flat_map(|r| &r.positions).map(|p| p[1]).fold(f32::MAX, f32::min);
+    assert!(top < style.margin_top + 30.0, "the start is not lowered: first baseline at {top}");
+    let height = layout.height(0);
+    let bottom = page.runs.iter().flat_map(|r| &r.positions).map(|p| p[1]).fold(0.0, f32::max);
+    assert!(bottom <= style.margin_top + height && height > 100.0, "height {height}, last baseline {bottom}");
+    assert!(layout_note(&b, "missing", &style, &mut t).is_none());
 }

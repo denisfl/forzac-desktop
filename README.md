@@ -49,13 +49,16 @@ Tests: `cargo test -p forzac-core`. Measurements on a Linux desktop: `scripts/me
 | `k` `h` `←` `↑` `Shift+Space` `PgUp` `Backspace` | previous page |
 | `]` `[` | next / previous chapter |
 | `g` `G` `Home` `End` | chapter start / end |
+| `o` | contents (`/` filters, `Enter` jumps); Linux |
+| `Tab` `Shift+Tab`, then `Enter` | note markers and links on the page (or click them); Linux |
+| `Ctrl+O` | back after a jump; Linux |
 | `+` `−` | text size |
 | `t` `T` | theme |
 | `f` `F11` (macOS: `⌃⌘F`) | full screen |
 | `?` | help |
 | `q` `Ctrl+W` (macOS: `⌘W`) | close |
 
-Planned: `o` contents, `/` `n` `N` search, `b` bookmark, `m` page / scroll mode, `s` settings.
+A wheel step turns a page; one touchpad swipe turns one page (Linux). Planned: `/` `n` `N` search, `b` bookmark, `m` page / scroll mode, `s` settings.
 
 ## Default reader on Linux
 

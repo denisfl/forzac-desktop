@@ -3,6 +3,8 @@
 //!
 //! The neighbouring chapters are typeset and their images decoded on a worker thread, so a turn across a chapter
 //! boundary only draws.
+//!
+//! Note markers and links of the page can be focused (`Tab`) and opened; jumps keep a back stack.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -10,7 +12,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use forzac_core::hyphen::Hyphenator;
-use forzac_core::{Block, Book, ChapterLayout, Ink, Locator, PageStyle, Rect, Typesetter, fonts, paginate};
+use forzac_core::model::LinkTarget;
+use forzac_core::{
+    Area, Block, Book, ChapterLayout, Ink, Locator, PageContent, PageStyle, Rect, Target, Typesetter, fonts, layout_note, paginate,
+};
 use gtk::subclass::prelude::*;
 use gtk::{gdk, gio, glib, graphene, gsk, prelude::*};
 
@@ -35,6 +40,18 @@ const RULES: [f32; 4] = [0.0, 0.35, 0.6, 0.9];
 
 /// Page turn duration, µs.
 const TURN: i64 = 200_000;
+
+/// Places remembered for `Ctrl+O`.
+const BACK_STACK: usize = 50;
+
+/// Touchpad scrolling (logical pixels) that turns a page; one turn per swipe.
+const SWIPE: f64 = 60.0;
+
+/// What opening a note marker or link asks of the window (jumps inside the book the view does itself).
+pub enum Open {
+    Note(String),
+    External(String),
+}
 
 fn rgba(rgb: u32) -> gdk::RGBA {
     gdk::RGBA::new(((rgb >> 16) & 0xFF) as f32 / 255.0, ((rgb >> 8) & 0xFF) as f32 / 255.0, (rgb & 0xFF) as f32 / 255.0, 1.0)
@@ -63,6 +80,9 @@ struct Prefetched {
     typesetter: Typesetter,
     textures: Vec<(String, Option<gdk::Texture>)>,
 }
+
+/// Opens a note or an external link for the view.
+type OnOpen = Box<dyn Fn(Open)>;
 
 /// Runs once, after the first frame with a page is presented.
 type FirstFrame = Box<dyn FnOnce(&PageView)>;
@@ -98,6 +118,12 @@ pub struct State {
     size_step: usize,
     theme: usize,
     nodes: HashMap<usize, gsk::RenderNode>,
+    /// Note markers and links of the cached pages.
+    areas: HashMap<usize, Vec<Area>>,
+    /// The focused area of the current page (`Tab`).
+    focus: Option<usize>,
+    /// Where jumps started, the latest last.
+    back: Vec<Locator>,
     turn: Option<Turn>,
 }
 
@@ -113,6 +139,12 @@ mod imp {
         pub on_first_frame: RefCell<Option<FirstFrame>>,
         /// Called when the reading position changes.
         pub on_moved: RefCell<Option<Box<dyn Fn()>>>,
+        /// Called to open a note or an external link.
+        pub on_open: RefCell<Option<OnOpen>>,
+        /// Scrolling not yet turned into a page turn, and whether this touchpad swipe already turned one.
+        pub scroll: std::cell::Cell<(f64, bool)>,
+        /// When the page last changed, so background work can wait for a pause in reading.
+        pub last_move: std::cell::Cell<Option<std::time::Instant>>,
     }
 
     #[glib::object_subclass]
@@ -181,12 +213,202 @@ impl PageView {
             size_step: size_step.min(TEXT_SIZES.len() - 1),
             theme: theme.min(THEMES.len() - 1),
             nodes: HashMap::new(),
+            areas: HashMap::new(),
+            focus: None,
+            back: Vec::new(),
             turn: None,
         });
         view.set_hexpand(true);
         view.set_vexpand(true);
         view.set_focusable(true);
+        view.set_can_focus(true);
+        view.imp().last_move.set(Some(std::time::Instant::now())); // opening counts as a move
+
+        let click = gtk::GestureClick::new();
+        click.connect_released(glib::clone!(
+            #[weak]
+            view,
+            move |_, _, x, y| view.click(x as f32, y as f32)
+        ));
+        view.add_controller(click);
+
+        // A wheel step turns a page; a touchpad swipe turns at most one.
+        let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+        scroll.connect_scroll_begin(glib::clone!(
+            #[weak]
+            view,
+            move |_| view.imp().scroll.set((0.0, false))
+        ));
+        scroll.connect_scroll_end(glib::clone!(
+            #[weak]
+            view,
+            move |_| view.imp().scroll.set((0.0, false))
+        ));
+        scroll.connect_scroll(glib::clone!(
+            #[weak]
+            view,
+            #[upgrade_or]
+            glib::Propagation::Proceed,
+            move |c, _, dy| {
+                let (mut acc, mut turned) = view.imp().scroll.get();
+                acc += dy;
+                if c.unit() == gdk::ScrollUnit::Wheel {
+                    while acc.abs() >= 1.0 {
+                        view.turn(acc.signum() as i32);
+                        acc -= acc.signum();
+                    }
+                } else if !turned && acc.abs() >= SWIPE {
+                    view.turn(acc.signum() as i32);
+                    turned = true;
+                }
+                view.imp().scroll.set((acc, turned));
+                glib::Propagation::Stop
+            }
+        ));
+        view.add_controller(scroll);
         view
+    }
+
+    /// Calls `f` to open a note or an external link.
+    pub fn connect_open(&self, f: impl Fn(Open) + 'static) {
+        *self.imp().on_open.borrow_mut() = Some(Box::new(f));
+    }
+
+    /// The contents: (title, level, place) of every titled section, or of every chapter when the book has none.
+    pub fn contents(&self) -> Vec<(String, u32, Locator)> {
+        self.with(|s| {
+            if s.book.toc.is_empty() {
+                s.book
+                    .chapters
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, c)| Some((c.title.clone()?, 1, Locator { chapter: i, ..Locator::default() })))
+                    .collect()
+            } else {
+                s.book.toc.iter().map(|e| (e.title.clone(), e.level, e.target)).collect()
+            }
+        })
+    }
+
+    /// Note `id` typeset at `width` for the note panel: its node and height, in the current theme and text size.
+    pub fn note(&self, id: &str, width: f32) -> Option<(gsk::RenderNode, f32)> {
+        self.with(|s| {
+            let text_size = TEXT_SIZES[s.size_step] * 0.9;
+            let base = PageStyle::for_window(width, 100_000.0, text_size);
+            let style = PageStyle { margin_h: 28.0, margin_top: 18.0, margin_bottom: 18.0, ..base };
+            let mut typesetter = Typesetter::new(style, s.hyphenator.clone());
+            let layout = layout_note(&s.book, id, &style, &mut typesetter)?;
+            let content = layout.render_body(0, &style);
+            let node = content_node(&content, s.theme, &mut s.fonts, &mut s.textures, &s.book)?;
+            Some((node, style.margin_top + layout.height(0) + style.margin_bottom))
+        })
+    }
+
+    /// `Tab` (`delta` 1) and `Shift+Tab` (−1): focus the next or previous note marker or link of the page.
+    pub fn focus_next(&self, delta: i32) {
+        self.with(|s| {
+            let Some(page) = Self::page_node(s, s.page).map(|_| s.page) else { return };
+            let count = s.areas.get(&page).map_or(0, |a| stops(a).len()) as i32;
+            if count == 0 {
+                return;
+            }
+            s.focus = Some(match s.focus {
+                Some(f) => (f as i32 + delta).rem_euclid(count) as usize,
+                None if delta > 0 => 0,
+                None => count as usize - 1,
+            });
+        });
+        self.queue_draw();
+    }
+
+    /// Removes the focus; false when nothing was focused.
+    pub fn unfocus(&self) -> bool {
+        let had = self.with(|s| s.focus.take().is_some());
+        self.queue_draw();
+        had
+    }
+
+    /// Opens the focused note marker or link; false when nothing is focused.
+    pub fn open_focused(&self) -> bool {
+        let target = self.with(|s| {
+            let areas = s.areas.get(&s.page)?;
+            let (first, _) = *stops(areas).get(s.focus?)?;
+            Some(areas[first].target.clone())
+        });
+        match target {
+            Some(t) => {
+                self.open(t);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn click(&self, x: f32, y: f32) {
+        let target = self.with(|s| {
+            let areas = s.areas.get(&s.page)?;
+            // A little slack: markers are small.
+            let hit =
+                |a: &&Area| x >= a.rect.x - 4.0 && x <= a.rect.x + a.rect.w + 4.0 && y >= a.rect.y - 4.0 && y <= a.rect.y + a.rect.h + 4.0;
+            areas.iter().find(hit).map(|a| a.target.clone())
+        });
+        if let Some(t) = target {
+            self.open(t);
+        }
+    }
+
+    fn open(&self, target: Target) {
+        let action = self.with(|s| match target {
+            Target::Note(id) => Some(Err(Open::Note(id))),
+            Target::Link(key) => match s.book.links.get(&key)? {
+                LinkTarget::Place { start, .. } => Some(Ok(*start)),
+                LinkTarget::Note(id) => Some(Err(Open::Note(id.clone()))),
+                LinkTarget::External(url) => Some(Err(Open::External(url.clone()))),
+            },
+        });
+        match action {
+            Some(Ok(at)) => self.go_to(at),
+            Some(Err(open)) => {
+                if let Some(f) = self.imp().on_open.borrow().as_ref() {
+                    f(open);
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// Jumps to `at`, remembering where the jump started (`back` returns there).
+    pub fn go_to(&self, at: Locator) {
+        self.with(|s| {
+            s.back.push(s.locator);
+            if s.back.len() > BACK_STACK {
+                s.back.remove(0);
+            }
+        });
+        self.show(at);
+    }
+
+    /// Returns to where the last jump started; false when there is none.
+    pub fn back(&self) -> bool {
+        let Some(at) = self.with(|s| s.back.pop()) else { return false };
+        self.show(at);
+        true
+    }
+
+    /// Shows the page with `at`, without the slide.
+    fn show(&self, at: Locator) {
+        self.with(|s| {
+            let at = forzac_core::state::clamp(&s.book, at);
+            s.chapter = at.chapter;
+            s.locator = at;
+            s.turn = None;
+            s.focus = None;
+            if let Some(layout) = s.layout.as_ref().filter(|l| l.chapter == at.chapter) {
+                s.page = layout.page_of(at);
+            }
+        });
+        self.moved();
+        self.queue_draw();
     }
 
     /// Calls `f` whenever the reading position changes (to save it).
@@ -194,7 +416,13 @@ impl PageView {
         *self.imp().on_moved.borrow_mut() = Some(Box::new(f));
     }
 
+    /// How long since the page last changed (since the view was created, if it has not).
+    pub fn quiet_for(&self) -> std::time::Duration {
+        self.imp().last_move.get().map_or(std::time::Duration::MAX, |t| t.elapsed())
+    }
+
     fn moved(&self) {
+        self.imp().last_move.set(Some(std::time::Instant::now()));
         if let Some(f) = self.imp().on_moved.borrow().as_ref() {
             f();
         }
@@ -256,6 +484,8 @@ impl PageView {
                 s.neighbours.push(old);
             }
             s.nodes.clear();
+            s.areas.clear();
+            s.focus = None;
             true
         })
     }
@@ -322,55 +552,9 @@ impl PageView {
         }
         let (layout, style, t) = (s.layout.as_ref()?, s.style?, s.typesetter.as_mut()?);
         let content = layout.render(page, &style, t);
-        let (_, _, text, link) = THEMES[s.theme];
-        let mut secondary = rgba(text);
-        secondary.set_alpha(SECONDARY);
-        let snapshot = gtk::Snapshot::new();
-        for image in &content.images {
-            // Decoded on the worker; an image the worker has not reached yet (the first page) is decoded here.
-            let book = &s.book;
-            let texture = s.textures.entry(image.id.clone()).or_insert_with(|| {
-                book.images.get(&image.id).and_then(|i| gdk::Texture::from_bytes(&glib::Bytes::from(&i.bytes[..])).ok())
-            });
-            if let Some(texture) = texture {
-                snapshot.append_scaled_texture(texture, gsk::ScalingFilter::Trilinear, &rect(image.rect));
-            }
-        }
-        for rule in &content.rules {
-            let mut ink = rgba(text);
-            ink.set_alpha(RULES[rule.strength as usize]);
-            snapshot.append_color(&ink, &rect(rule.rect));
-        }
-        for run in &content.runs {
-            let ink = match run.ink {
-                Ink::Text => rgba(text),
-                Ink::Link => rgba(link),
-                Ink::Secondary => secondary,
-            };
-            let color = fonts::font_is_color(run.font);
-            let Some(&[x0, y0]) = run.positions.first() else { continue };
-            let mut glyphs = gtk::pango::GlyphString::new();
-            glyphs.set_size(run.glyphs.len() as i32);
-            let units: Vec<i32> = run.positions.iter().map(|p| ((p[0] - x0) * 1024.0).round() as i32).collect();
-            for (i, info) in glyphs.glyph_info_mut().iter_mut().enumerate() {
-                info.set_glyph(run.glyphs[i] as u32);
-                let g = info.geometry_mut();
-                g.set_width(units.get(i + 1).map_or(0, |next| next - units[i]));
-                g.set_x_offset(0);
-                g.set_y_offset(((run.positions[i][1] - y0) * 1024.0).round() as i32);
-                // `set_size` leaves the new entries uninitialised; a stray `is_color` bit makes GSK draw a glyph as a
-                // colour glyph (invisible for a plain font). The bindings have no setter, so set the whole bitfield:
-                // bit 0 cluster start, bit 1 colour (emoji).
-                let attr = 1 | (color as u32) << 1;
-                unsafe { (*(info as *mut gtk::pango::GlyphInfo).cast::<gtk::pango::ffi::PangoGlyphInfo>()).attr.is_cluster_start = attr };
-            }
-            let Some(font) = s.fonts.get(run.font, run.size) else { continue };
-            if let Some(node) = gsk::TextNode::new(font, &glyphs, &ink, &graphene::Point::new(x0, y0)) {
-                snapshot.append_node(node);
-            }
-        }
-        let node = snapshot.to_node()?;
+        let node = content_node(&content, s.theme, &mut s.fonts, &mut s.textures, &s.book)?;
         s.nodes.insert(page, node.clone());
+        s.areas.insert(page, content.areas);
         Some(node)
     }
 
@@ -397,6 +581,21 @@ impl PageView {
                 _ => {
                     s.turn = None;
                     snapshot.append_node(&current);
+                    // The focused marker or link (all its lines): a soft box in the link ink, over the cached page.
+                    let areas = s.areas.get(&s.page);
+                    if let (Some(areas), Some(f)) = (areas, s.focus)
+                        && let Some(&(first, last)) = stops(areas).get(f)
+                    {
+                        let mut ink = rgba(THEMES[s.theme].3);
+                        ink.set_alpha(0.22);
+                        for area in &areas[first..=last] {
+                            let r = area.rect;
+                            let bounds = graphene::Rect::new(r.x - 3.0, r.y - 2.0, r.w + 6.0, r.h + 4.0);
+                            snapshot.push_rounded_clip(&gsk::RoundedRect::from_rect(bounds, 4.0));
+                            snapshot.append_color(&ink, &bounds);
+                            snapshot.pop();
+                        }
+                    }
                 }
             }
         });
@@ -433,6 +632,7 @@ impl PageView {
                 return false;
             }
             s.turn = from.map(|from| Turn { from, dir: delta.signum() as f32, start: None });
+            s.focus = None;
             true
         });
         if animate {
@@ -459,6 +659,7 @@ impl PageView {
             s.chapter = target;
             s.locator = Locator { chapter: target, ..Locator::default() };
             s.turn = None;
+            s.focus = None;
         });
         self.moved();
         self.queue_draw();
@@ -470,6 +671,7 @@ impl PageView {
                 s.page = if end { layout.pages.len() - 1 } else { 0 };
                 s.locator = layout.page_start(s.page);
                 s.turn = None;
+                s.focus = None;
             }
         });
         self.moved();
@@ -497,6 +699,7 @@ impl PageView {
         self.with(|s| {
             s.theme = (s.theme as i32 + delta).rem_euclid(THEMES.len() as i32) as usize;
             s.nodes.clear(); // ink is baked into the nodes; only a redraw, no re-layout
+            s.areas.clear();
         });
         self.queue_draw();
     }
@@ -515,4 +718,74 @@ impl PageView {
     pub fn page_count(&self) -> usize {
         self.with(|s| s.layout.as_ref().map_or(0, |l| l.pages.len()))
     }
+}
+
+/// `Tab` stops: runs of consecutive areas with the same target (a link broken across lines is one stop), as index
+/// ranges `(first, last)`.
+fn stops(areas: &[Area]) -> Vec<(usize, usize)> {
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    for (i, area) in areas.iter().enumerate() {
+        match out.last_mut() {
+            Some(stop) if areas[stop.1].target == area.target => stop.1 = i,
+            _ => out.push((i, i)),
+        }
+    }
+    out
+}
+
+/// The render node of a page's (or a note's) contents in `theme`: images, table rules and glyph runs.
+fn content_node(
+    content: &PageContent,
+    theme: usize,
+    fonts: &mut Fonts,
+    textures: &mut HashMap<String, Option<gdk::Texture>>,
+    book: &Book,
+) -> Option<gsk::RenderNode> {
+    let (_, _, text, link) = THEMES[theme];
+    let mut secondary = rgba(text);
+    secondary.set_alpha(SECONDARY);
+    let snapshot = gtk::Snapshot::new();
+    for image in &content.images {
+        // Decoded on the worker; an image the worker has not reached yet (the first page) is decoded here.
+        let texture = textures
+            .entry(image.id.clone())
+            .or_insert_with(|| book.images.get(&image.id).and_then(|i| gdk::Texture::from_bytes(&glib::Bytes::from(&i.bytes[..])).ok()));
+        if let Some(texture) = texture {
+            snapshot.append_scaled_texture(texture, gsk::ScalingFilter::Trilinear, &rect(image.rect));
+        }
+    }
+    for rule in &content.rules {
+        let mut ink = rgba(text);
+        ink.set_alpha(RULES[rule.strength as usize]);
+        snapshot.append_color(&ink, &rect(rule.rect));
+    }
+    for run in &content.runs {
+        let ink = match run.ink {
+            Ink::Text => rgba(text),
+            Ink::Link => rgba(link),
+            Ink::Secondary => secondary,
+        };
+        let color = fonts::font_is_color(run.font);
+        let Some(&[x0, y0]) = run.positions.first() else { continue };
+        let mut glyphs = gtk::pango::GlyphString::new();
+        glyphs.set_size(run.glyphs.len() as i32);
+        let units: Vec<i32> = run.positions.iter().map(|p| ((p[0] - x0) * 1024.0).round() as i32).collect();
+        for (i, info) in glyphs.glyph_info_mut().iter_mut().enumerate() {
+            info.set_glyph(run.glyphs[i] as u32);
+            let g = info.geometry_mut();
+            g.set_width(units.get(i + 1).map_or(0, |next| next - units[i]));
+            g.set_x_offset(0);
+            g.set_y_offset(((run.positions[i][1] - y0) * 1024.0).round() as i32);
+            // `set_size` leaves the new entries uninitialised; a stray `is_color` bit makes GSK draw a glyph as a
+            // colour glyph (invisible for a plain font). The bindings have no setter, so set the whole bitfield:
+            // bit 0 cluster start, bit 1 colour (emoji).
+            let attr = 1 | (color as u32) << 1;
+            unsafe { (*(info as *mut gtk::pango::GlyphInfo).cast::<gtk::pango::ffi::PangoGlyphInfo>()).attr.is_cluster_start = attr };
+        }
+        let Some(font) = fonts.get(run.font, run.size) else { continue };
+        if let Some(node) = gsk::TextNode::new(font, &glyphs, &ink, &graphene::Point::new(x0, y0)) {
+            snapshot.append_node(node);
+        }
+    }
+    snapshot.to_node()
 }

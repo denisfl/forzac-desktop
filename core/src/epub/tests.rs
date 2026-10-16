@@ -308,6 +308,16 @@ fn lists_pre_and_breaks() {
 }
 
 #[test]
+fn list_items_of_paragraphs_keep_their_markers() {
+    let b = book(docs(&[(
+        "a.xhtml",
+        "<ul><li><p>Первый <em>пункт</em></p><p>Продолжение</p></li><li></li><li><p>Второй</p></li></ul><ol><li><p>Раз</p></li></ol>",
+    )]));
+    assert_eq!(texts(&b), ["• Первый пункт", "Продолжение", "• Второй", "1. Раз"]);
+    assert_eq!(span(paragraphs(&b)[0].0, Style::Emphasis), "пункт");
+}
+
+#[test]
 fn images_resolved_relative_to_document() {
     let b = book(docs(&[(
         "text/a.xhtml",

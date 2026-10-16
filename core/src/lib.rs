@@ -16,7 +16,9 @@ mod typography;
 mod xml;
 
 pub use fonts::Face;
-pub use layout::{Area, ChapterLayout, GlyphRun, Ink, PageContent, PageImage, PageStyle, Rect, Rule, Target, Typesetter, paginate};
+pub use layout::{
+    Area, ChapterLayout, GlyphRun, Ink, PageContent, PageImage, PageStyle, Rect, Rule, Target, Typesetter, layout_note, paginate,
+};
 pub use model::{Block, Book, Chapter, Locator};
 
 /// Why a file is not a readable book.

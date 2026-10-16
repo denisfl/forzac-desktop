@@ -152,3 +152,13 @@ fn a_thousand_books_read_and_write_quickly() {
     // The requirement is 10 ms on a Raspberry Pi 5 in a release build; debug builds are many times slower.
     assert!(elapsed.as_millis() < 200, "{elapsed:?}");
 }
+
+#[test]
+fn progress_of_many_places_matches_one_by_one() {
+    let b = book("aaaa", &[3, 5, 2]);
+    let places = [at(0, 0, 0), at(1, 0, 0), at(1, 4, 0), at(2, 1, 0)];
+    let many = progress_of(&b, &places);
+    for (p, place) in many.iter().zip(places) {
+        assert!((p - progress(&b, place)).abs() < 1e-6);
+    }
+}

@@ -13,6 +13,7 @@
 
 mod fonts;
 mod page_view;
+mod panels;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -22,7 +23,7 @@ use std::time::{Duration, Instant};
 use forzac_core::Locator;
 use forzac_core::state::Store;
 use gtk::{gio, glib, graphene, prelude::*};
-use page_view::{PageView, TEXT_SIZES, THEMES};
+use page_view::{Open, PageView, TEXT_SIZES, THEMES};
 
 const APP_ID: &str = "app.truenrth.forzac";
 
@@ -125,12 +126,15 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
     if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
         window.set_decorated(false);
     }
+    panels::set_theme(theme);
     let save_style: Rc<dyn Fn()> = if stateless {
-        Rc::new(|| {})
+        let view = view.clone();
+        Rc::new(move || panels::set_theme(view.style().0))
     } else {
         let (view, store) = (view.clone(), store.clone());
         Rc::new(move || {
             let (theme, size) = view.style();
+            panels::set_theme(theme);
             let mut s = store.borrow_mut();
             for (key, value) in [("theme", THEMES[theme].0.to_owned()), ("text-size", TEXT_SIZES[size].to_string())] {
                 if let Err(e) = s.set_setting(key, &value) {
@@ -139,7 +143,50 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             }
         })
     };
-    window.add_controller(shortcuts(&view, &help, &window, save_style));
+    // The contents panel is built in the first pause in reading (a second without turning), so `o` only shows it and
+    // the building never delays a page turn.
+    let contents: Rc<RefCell<Option<Rc<panels::Contents>>>> = Rc::default();
+    let open_contents: Rc<dyn Fn()> = {
+        let (contents, overlay, view) = (contents.clone(), overlay.clone(), view.clone());
+        Rc::new(move || {
+            let c = contents.borrow_mut().get_or_insert_with(|| panels::Contents::new(&overlay, &view)).clone();
+            c.open(&view);
+        })
+    };
+    glib::timeout_add_local(
+        Duration::from_millis(500),
+        glib::clone!(
+            #[weak]
+            overlay,
+            #[weak]
+            view,
+            #[upgrade_or]
+            glib::ControlFlow::Break,
+            move || {
+                if contents.borrow().is_some() {
+                    return glib::ControlFlow::Break;
+                }
+                if view.quiet_for() < Duration::from_secs(1) {
+                    return glib::ControlFlow::Continue;
+                }
+                contents.borrow_mut().replace(panels::Contents::new(&overlay, &view));
+                glib::ControlFlow::Break
+            }
+        ),
+    );
+    view.add_controller(shortcuts(&view, &help, open_contents, &window, save_style));
+    view.connect_open(glib::clone!(
+        #[weak]
+        overlay,
+        #[weak]
+        window,
+        #[weak]
+        view,
+        move |open| match open {
+            Open::Note(id) => panels::note(&overlay, &view, &id),
+            Open::External(url) => gtk::UriLauncher::new(&url).launch(Some(&window), gio::Cancellable::NONE, |_| {}),
+        }
+    ));
     if !stateless {
         remember_position(&view, &window, path, store);
     }
@@ -181,6 +228,7 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
         });
     }
     window.present();
+    view.grab_focus();
 }
 
 fn report_turns(view: &PageView) {
@@ -235,10 +283,13 @@ fn save_png(view: &PageView, path: &std::path::Path) {
 }
 
 const HELP: &str = "\
-j  l  →  ↓  Space  PgDn    next page
+j  l  →  ↓  Space  PgDn  Enter    next page
 k  h  ←  ↑  Shift+Space  PgUp    previous page
 ]  [    next / previous chapter
 g  G  Home  End    chapter start / end
+o    contents  (/ filters)
+Tab  Shift+Tab    notes and links on the page, Enter opens
+Ctrl+O    back after a jump
 +  −    text size
 t  T    theme
 f  F11    full screen
@@ -364,9 +415,15 @@ fn recent_window(app: &gtk::Application, options: &Options, store: &SharedStore)
 }
 
 /// Keys by keyval; GTK also matches them in the first (Latin) layout group, so `j`/`k` work in a Russian layout.
-fn shortcuts(view: &PageView, help: &gtk::Label, window: &gtk::ApplicationWindow, save_style: Rc<dyn Fn()>) -> gtk::ShortcutController {
+/// They act while the page has the focus: an open panel has keys of its own.
+fn shortcuts(
+    view: &PageView,
+    help: &gtk::Label,
+    open_contents: Rc<dyn Fn()>,
+    window: &gtk::ApplicationWindow,
+    save_style: Rc<dyn Fn()>,
+) -> gtk::ShortcutController {
     let controller = gtk::ShortcutController::new();
-    controller.set_scope(gtk::ShortcutScope::Global);
     let add = |trigger: &str, f: Box<dyn Fn()>| {
         let action = gtk::CallbackAction::new(move |_, _| {
             f();
@@ -375,7 +432,28 @@ fn shortcuts(view: &PageView, help: &gtk::Label, window: &gtk::ApplicationWindow
         controller.add_shortcut(gtk::Shortcut::new(gtk::ShortcutTrigger::parse_string(trigger), Some(action)));
     };
     let v = view.clone();
-    add("j|l|Right|Down|space|Page_Down|Return", Box::new(move || v.turn(1)));
+    add("j|l|Right|Down|space|Page_Down", Box::new(move || v.turn(1)));
+    let v = view.clone();
+    add(
+        "Return|KP_Enter",
+        Box::new(move || {
+            if !v.open_focused() {
+                v.turn(1);
+            }
+        }),
+    );
+    let v = view.clone();
+    add("Tab", Box::new(move || v.focus_next(1)));
+    let v = view.clone();
+    add("<Shift>Tab|<Shift>ISO_Left_Tab", Box::new(move || v.focus_next(-1)));
+    let v = view.clone();
+    add(
+        "<Control>o",
+        Box::new(move || {
+            v.back();
+        }),
+    );
+    add("o", Box::new(move || open_contents()));
     let v = view.clone();
     add("k|h|Left|Up|<Shift>space|Page_Up|BackSpace", Box::new(move || v.turn(-1)));
     let v = view.clone();
@@ -420,8 +498,17 @@ fn shortcuts(view: &PageView, help: &gtk::Label, window: &gtk::ApplicationWindow
     );
     let h = help.clone();
     add("question", Box::new(move || h.set_visible(!h.is_visible())));
-    let h = help.clone();
-    add("Escape", Box::new(move || h.set_visible(false)));
+    let (h, v) = (help.clone(), view.clone());
+    add(
+        "Escape",
+        Box::new(move || {
+            if h.is_visible() {
+                h.set_visible(false);
+            } else {
+                v.unfocus();
+            }
+        }),
+    );
     let w = window.clone();
     add("f|F11", Box::new(move || if w.is_fullscreen() { w.unfullscreen() } else { w.fullscreen() }));
     let w = window.clone();

@@ -212,12 +212,37 @@ pub fn clamp(book: &Book, at: Locator) -> Locator {
     at
 }
 
+/// The share of the book's text before each of `places`, in one pass over the book (for the contents).
+pub fn progress_of(book: &Book, places: &[Locator]) -> Vec<f32> {
+    // Text before each block: block starts per chapter, then the total.
+    let mut starts: Vec<Vec<usize>> = Vec::with_capacity(book.chapters.len());
+    let mut total = 0;
+    for chapter in &book.chapters {
+        starts.push(
+            chapter
+                .blocks
+                .iter()
+                .map(|b| {
+                    let start = total;
+                    total += b.text_len();
+                    start
+                })
+                .collect(),
+        );
+    }
+    places
+        .iter()
+        .map(|at| {
+            let chapter = starts.get(at.chapter);
+            let before = chapter.and_then(|c| c.get(at.block).copied()).or_else(|| chapter.and_then(|c| c.last().copied())).unwrap_or(0);
+            if total == 0 { 0.0 } else { before as f32 / total as f32 }
+        })
+        .collect()
+}
+
 /// The share of the book's text before `at`.
 pub fn progress(book: &Book, at: Locator) -> f32 {
-    let length = |b: &Block| match b {
-        Block::TableRow { table, row } => table.rows[*row].iter().map(|c| c.text.text.len()).sum(),
-        b => b.text().map_or(0, |t| t.text.len()),
-    };
+    let length = Block::text_len;
     let mut before = 0;
     let mut total = 0;
     for (c, chapter) in book.chapters.iter().enumerate() {

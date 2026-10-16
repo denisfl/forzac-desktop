@@ -349,6 +349,10 @@ impl Reader<'_> {
             self.close_link();
         }
         let frame = self.frames.last().unwrap();
+        if frame.name == "li" && self.marker_only() {
+            self.sb.clear(); // an empty item: its marker goes with it
+        }
+        let frame = self.frames.last().unwrap();
         let parent = self.frames.len().checked_sub(2).map_or(MAIN, |i| self.frames[i].sink);
         if frame.block || frame.sink != parent {
             // The paragraph closes while the element is still open: its kind and style belong to it.
@@ -474,12 +478,25 @@ impl Reader<'_> {
         }
     }
 
+    /// The paragraph so far is only a list item's marker ("• ", "3. ") and the item is still open.
+    fn marker_only(&self) -> bool {
+        if !self.frames.iter().any(|f| f.name == "li") {
+            return false;
+        }
+        let text: String = self.sb.iter().collect();
+        let text = text.trim();
+        text == "•" || (text.ends_with('.') && text.len() > 1 && text[..text.len() - 1].chars().all(|c| c.is_ascii_digit()))
+    }
+
     fn in_pre(&self) -> bool {
         self.frames.iter().any(|f| f.pre)
     }
 
     /// Closes the current paragraph. Open styles go on in the next paragraph from its start.
     fn flush(&mut self) {
+        if self.marker_only() {
+            return; // `<li><p>…</p></li>`: the marker waits for the item's first paragraph
+        }
         let len = self.sb.len();
         for f in &self.frames {
             if let Some(style) = f.style

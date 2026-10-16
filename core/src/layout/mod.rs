@@ -11,7 +11,7 @@ mod table;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-pub use page::{ChapterLayout, Page, PageContent, PageImage, Rule, paginate};
+pub use page::{ChapterLayout, Page, PageContent, PageImage, Rule, layout_note, paginate};
 
 use crate::fonts::{self, Face, FontId, Glyph, Shaper};
 use crate::hyphen::Hyphenator;
@@ -781,7 +781,11 @@ fn draw(line: &mut Line, pieces: &[Piece], segments: &[Segment], a: usize, b: us
             if let Some(target) = &seg.target {
                 let rect = Rect { x, y: -p.rise - p.ascent, w: advance, h: p.ascent + p.descent };
                 match line.areas.last_mut() {
-                    Some(area) if area.target == *target && area.rect.x + area.rect.w >= x - 0.5 => {
+                    // The words of one link are one area: across the (possibly stretched) spaces between them.
+                    Some(area) if area.target == *target && area.rect.x + area.rect.w >= x - 2.0 * p.size => {
+                        let bottom = (area.rect.y + area.rect.h).max(rect.y + rect.h);
+                        area.rect.y = area.rect.y.min(rect.y);
+                        area.rect.h = bottom - area.rect.y;
                         area.rect.w = x + advance - area.rect.x;
                     }
                     _ => line.areas.push(Area { rect, target: target.clone() }),

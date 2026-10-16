@@ -2,7 +2,7 @@
 
 use super::{Area, BlockLayout, Content, GlyphRun, Group, Ink, PageStyle, Rect, Typesetter};
 use crate::fonts::Face;
-use crate::model::{Book, Locator};
+use crate::model::{Block, Book, Chapter, Kind, Locator, StyledText};
 
 /// Lines `[line_start, line_end)` of a block (one "line" for an image or a table row), `top` below the text area's top.
 #[derive(Debug, Clone, Copy)]
@@ -48,6 +48,20 @@ pub struct ChapterLayout {
     pub chapter: usize,
     pub(super) blocks: Vec<BlockLayout>,
     pub pages: Vec<Page>,
+    /// The chapter's title, for the running head.
+    title: Option<String>,
+    position: Position,
+}
+
+/// Where the chapter's text lies in the book, to tell how far a page is (text lengths, see `Block::text_len`).
+#[derive(Default)]
+struct Position {
+    /// Text before the chapter.
+    before: usize,
+    /// Text before each block of the chapter.
+    blocks: Vec<usize>,
+    /// Text of the whole book.
+    total: usize,
 }
 
 impl ChapterLayout {
@@ -66,8 +80,46 @@ impl ChapterLayout {
         (0..self.pages.len()).rev().find(|&i| self.page_start(i) <= at).unwrap_or(0)
     }
 
-    /// What to draw on page `i`, with the page number at the bottom.
+    /// How far into the book page `i` starts, 0 to 1.
+    pub fn progress(&self, i: usize) -> f32 {
+        let p = &self.position;
+        let at = self.page_start(i);
+        let block = p.blocks.get(at.block).copied().unwrap_or_else(|| p.blocks.last().copied().unwrap_or(0));
+        let block_len = p.blocks.get(at.block + 1).map_or(0, |next| next - block);
+        if p.total == 0 { 0.0 } else { (p.before + block + at.offset.min(block_len)) as f32 / p.total as f32 }
+    }
+
+    /// The height of page `i`'s content below the top margin.
+    pub fn height(&self, i: usize) -> f32 {
+        let height = |s: &Slice| {
+            self.blocks.get(s.layout).map_or(0.0, |b| match &b.content {
+                Content::Text(t) => (s.line_end - s.line_start) as f32 * t.line_height,
+                _ => b.height(),
+            })
+        };
+        self.pages[i].slices.iter().map(|s| s.top + height(s)).fold(0.0, f32::max)
+    }
+
+    /// What to draw on page `i`: the text, the running head (the chapter's title, not on its first page) and the foot
+    /// (the page in the chapter and the position in the book).
     pub fn render(&self, i: usize, style: &PageStyle, typesetter: &mut Typesetter) -> PageContent {
+        let mut out = self.render_body(i, style);
+        let size = style.text_size * 0.7;
+        let width = style.text_width();
+        if i > 0
+            && let Some(title) = &self.title
+        {
+            let y = style.margin_top / 2.0 + size * 0.35;
+            out.runs.push(label(typesetter, title, size, style.width / 2.0, y, width));
+        }
+        let foot = format!("{} / {} · {}%", i + 1, self.pages.len(), (self.progress(i) * 100.0).round() as u32);
+        let y = style.height - style.margin_bottom / 2.0 + size * 0.35;
+        out.runs.push(label(typesetter, &foot, size, style.width / 2.0, y, width));
+        out
+    }
+
+    /// Page `i`'s text, images and rules only.
+    pub fn render_body(&self, i: usize, style: &PageStyle) -> PageContent {
         let mut out = PageContent::default();
         for s in &self.pages[i].slices {
             let Some(b) = self.blocks.get(s.layout) else { continue };
@@ -98,24 +150,48 @@ impl ChapterLayout {
                 }
             }
         }
-        // Page number.
-        let label = format!("{} / {}", i + 1, self.pages.len());
-        let size = style.text_size * 0.7;
-        let font = Face::Regular.id();
-        let scale = size / typesetter.shaper.units_per_em(font);
-        let glyphs = typesetter.shaper.shape(font, &label);
-        let width: f32 = glyphs.iter().map(|g| g.advance as f32 * scale).sum();
-        let mut x = (style.width - width) / 2.0;
-        let y = style.height - style.margin_bottom / 2.0 + size * 0.35;
-        let mut run = GlyphRun { font, size, ink: Ink::Secondary, glyphs: Vec::new(), positions: Vec::new() };
-        for g in glyphs.iter() {
-            run.glyphs.push(g.id as u16);
-            run.positions.push([x, y]);
-            x += g.advance as f32 * scale;
-        }
-        out.runs.push(run);
         out
     }
+}
+
+/// A line of secondary text centred on `center` at baseline `y`, shortened with "…" to `max_width`.
+fn label(typesetter: &mut Typesetter, text: &str, size: f32, center: f32, y: f32, max_width: f32) -> GlyphRun {
+    let font = Face::Regular.id();
+    let scale = size / typesetter.shaper.units_per_em(font);
+    let mut text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut glyphs = typesetter.shaper.shape(font, &text);
+    let width = |g: &[crate::fonts::Glyph]| g.iter().map(|g| g.advance as f32 * scale).sum::<f32>();
+    while width(&glyphs) > max_width && text.chars().count() > 1 {
+        let keep = text.chars().count() * 9 / 10;
+        text = text.chars().take(keep).collect::<String>().trim_end().to_owned() + "…";
+        glyphs = typesetter.shaper.shape(font, &text);
+    }
+    let mut x = center - width(&glyphs) / 2.0;
+    let mut run = GlyphRun { font, size, ink: Ink::Secondary, glyphs: Vec::new(), positions: Vec::new() };
+    for g in glyphs.iter() {
+        run.glyphs.push(g.id as u16);
+        run.positions.push([x + g.x_offset as f32 * scale, y - g.y_offset as f32 * scale]);
+        x += g.advance as f32 * scale;
+    }
+    run
+}
+
+/// Note `id` typeset as one tall page at `style`'s width: its title (a subtitle) and text, the chapter start not
+/// lowered. Draw it with `render_body`; images are the book's.
+pub fn layout_note(book: &Book, id: &str, style: &PageStyle, typesetter: &mut Typesetter) -> Option<ChapterLayout> {
+    let note = book.notes.get(id)?;
+    let mut blocks = Vec::new();
+    if let Some(title) = note.title.as_ref().filter(|t| !t.trim().is_empty()) {
+        blocks.push(Block::Paragraph { text: StyledText { text: title.clone(), styles: Vec::new() }, kind: Kind::Subtitle });
+    }
+    blocks.extend(note.blocks.iter().cloned());
+    let images = blocks
+        .iter()
+        .filter_map(|b| if let Block::Image { id } = b { book.images.get_key_value(id) } else { None })
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let note_book = Book { language: book.language.clone(), images, chapters: vec![Chapter { title: None, blocks }], ..Book::default() };
+    Some(paginate_from(&note_book, 0, style, typesetter, 0.0))
 }
 
 fn push_line(out: &mut PageContent, line: &super::Line, x: f32, y: f32) {
@@ -125,6 +201,11 @@ fn push_line(out: &mut PageContent, line: &super::Line, x: f32, y: f32) {
 
 /// Paginates a chapter: a port of the Android `Paginator`, which needs only line counts and heights from its layouts.
 pub fn paginate(book: &Book, chapter: usize, style: &PageStyle, typesetter: &mut Typesetter) -> ChapterLayout {
+    let lowered = typesetter.line_height * 2.0; // the chapter start is lowered, as in a printed book
+    paginate_from(book, chapter, style, typesetter, lowered)
+}
+
+fn paginate_from(book: &Book, chapter: usize, style: &PageStyle, typesetter: &mut Typesetter, start: f32) -> ChapterLayout {
     let model = &book.chapters[chapter].blocks;
     // Layouts paired with their block index in the chapter: blocks that take no room have no layout.
     let laid: Vec<(usize, BlockLayout)> =
@@ -134,7 +215,7 @@ pub fn paginate(book: &Book, chapter: usize, style: &PageStyle, typesetter: &mut
     let lh = typesetter.line_height;
     let mut pages = Vec::new();
     let mut slices: Vec<Slice> = Vec::new();
-    let mut y = lh * 2.0; // the chapter start is lowered, as in a printed book
+    let mut y = start;
     let mut prev: Option<usize> = None;
 
     let mut new_page = |slices: &mut Vec<Slice>, y: &mut f32, prev: &mut Option<usize>| {
@@ -218,5 +299,22 @@ pub fn paginate(book: &Book, chapter: usize, style: &PageStyle, typesetter: &mut
     if pages.is_empty() {
         pages.push(Page { chapter, slices: vec![Slice { layout: usize::MAX, block: 0, line_start: 0, line_end: 0, top: 0.0 }] });
     }
-    ChapterLayout { chapter, blocks: laid.into_iter().map(|(_, l)| l).collect(), pages }
+    let mut position = Position::default();
+    for (c, ch) in book.chapters.iter().enumerate() {
+        let lengths = ch.blocks.iter().map(Block::text_len);
+        if c == chapter {
+            for len in lengths {
+                position.blocks.push(position.total - position.before);
+                position.total += len;
+            }
+            position.blocks.push(position.total - position.before);
+        } else {
+            position.total += lengths.sum::<usize>();
+            if c < chapter {
+                position.before = position.total;
+            }
+        }
+    }
+    let title = book.chapters[chapter].title.clone();
+    ChapterLayout { chapter, blocks: laid.into_iter().map(|(_, l)| l).collect(), pages, title, position }
 }
