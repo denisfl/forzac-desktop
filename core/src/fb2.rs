@@ -2,6 +2,8 @@
 //!
 //! Ports the behaviour of the Android app's `Fb2Reader`: chapters with parts opened up, contents, notes, links, images,
 //! tables. The encoding comes from the BOM or the XML declaration (FB2 files are often `windows-1251`).
+//!
+//! The same reader reads the body of an FB3 package (root `fb3-body`): its elements extend FB2's without clashing.
 
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
@@ -16,13 +18,7 @@ use crate::model::{
 };
 use crate::typography;
 
-#[derive(Debug)]
-pub enum Error {
-    /// Not a FictionBook document (or a zip without one), or an archive that unpacks too large.
-    NotABook,
-    /// A well-formed book without any text.
-    NoText,
-}
+pub use crate::Error;
 
 /// Unpacked FB2 larger than this is treated as a zip bomb.
 const MAX_UNPACKED: u64 = 256 * 1024 * 1024;
@@ -50,7 +46,7 @@ pub fn parse(bytes: &[u8]) -> Result<Book, Error> {
 
 /// The document as UTF-8: the encoding comes from the byte order mark, else from the XML declaration
 /// (`encoding="windows-1251"`), else UTF-8. The parser reads UTF-8 only and ignores the declared label afterwards.
-fn to_utf8(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+pub(crate) fn to_utf8(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
     use std::borrow::Cow;
     if let Some((encoding, bom)) = encoding_rs::Encoding::for_bom(bytes) {
         let (text, _) = encoding.decode_without_bom_handling(&bytes[bom..]);
@@ -132,6 +128,10 @@ struct Fb2Reader<'a> {
     ids: HashMap<String, (Seq, Seq)>,
     /// Images inside the paragraph being read: placed after it as image blocks.
     inline_images: Vec<String>,
+    /// FB3: image part names by relationship id (`img src`); FB2 images are `<binary>` ids.
+    fb3_images: Option<&'a HashMap<String, String>>,
+    /// FB3: a `stanza` is being read, so its `p` are verse lines (FB2 uses `v`).
+    in_stanza: bool,
 }
 
 impl<'a> Fb2Reader<'a> {
@@ -150,6 +150,8 @@ impl<'a> Fb2Reader<'a> {
             chapter_seqs: Vec::new(),
             ids: HashMap::new(),
             inline_images: Vec::new(),
+            fb3_images: None,
+            in_stanza: false,
         }
     }
 
@@ -161,10 +163,15 @@ impl<'a> Fb2Reader<'a> {
                     Ev::Eof => return Ok(()),
                     Ev::Start(name, attrs) => {
                         if !root_seen {
-                            if name != "FictionBook" {
-                                return Err(Broken);
+                            match name.as_str() {
+                                "FictionBook" => root_seen = true,
+                                "fb3-body" => {
+                                    root_seen = true;
+                                    self.main_body_seen = true;
+                                    self.read_main_body()?;
+                                }
+                                _ => return Err(Broken),
                             }
-                            root_seen = true;
                             continue;
                         }
                         match name.as_str() {
@@ -355,6 +362,7 @@ impl<'a> Fb2Reader<'a> {
                     r.prologue = out;
                     read?;
                 }
+                "notes" => r.read_notes()?, // FB3: notes inside the body
                 _ => {
                     let mut out = std::mem::take(&mut r.prologue);
                     let read = r.read_element(name, attrs, Kind::Body, 0, &mut out);
@@ -452,9 +460,9 @@ impl<'a> Fb2Reader<'a> {
         }
     }
 
-    /// Sections with an id are notes; sections without one are searched for nested notes.
+    /// Sections with an id (in FB3 `notebody`) are notes; sections without one are searched for nested notes.
     fn read_notes(&mut self) -> Res<()> {
-        self.for_each_child(|r, name, attrs| if name == "section" { r.read_note_section(attrs) } else { r.skip() })
+        self.for_each_child(|r, name, attrs| if name == "section" || name == "notebody" { r.read_note_section(attrs) } else { r.skip() })
     }
 
     fn read_note_section(&mut self, attrs: &[(String, String)]) -> Res<()> {
@@ -502,6 +510,7 @@ impl<'a> Fb2Reader<'a> {
             "p" | "v" | "subtitle" | "text-author" | "date" => {
                 let kind = match name {
                     "v" => Kind::Verse,
+                    "p" if self.in_stanza => Kind::Verse,
                     "subtitle" => Kind::Subtitle,
                     "text-author" | "date" => Kind::TextAuthor,
                     _ => kind,
@@ -515,10 +524,19 @@ impl<'a> Fb2Reader<'a> {
                     self.push_block(out, Block::Image { id });
                 }
             }
-            "empty-line" => {
+            "empty-line" | "br" => {
                 self.push_block(out, Block::EmptyLine);
                 self.skip()?;
             }
+            "img" => {
+                if let Some(id) = self.fb3_image(attrs) {
+                    self.push_block(out, Block::Image { id });
+                }
+                self.skip()?;
+            }
+            "subscription" => self.read_flow(Kind::TextAuthor, depth, out)?,
+            "pre" => self.read_flow(Kind::Code, depth, out)?,
+            "ul" | "ol" => self.read_list(name == "ol", depth, out)?,
             "image" => {
                 if let Some(id) = image_id(attrs) {
                     self.push_block(out, Block::Image { id });
@@ -533,13 +551,16 @@ impl<'a> Fb2Reader<'a> {
             }
             "title" => self.read_flow(Kind::Subtitle, depth, out)?,
             "epigraph" => self.read_flow(Kind::Epigraph, depth, out)?,
-            "cite" | "annotation" => self.read_flow(Kind::Cite, depth, out)?,
-            "poem" => self.read_flow(kind, depth, out)?,
+            "cite" | "annotation" | "blockquote" => self.read_flow(Kind::Cite, depth, out)?,
+            "poem" | "div" => self.read_flow(kind, depth, out)?,
             "stanza" => {
                 if matches!(out.last(), Some(Item::Block(_, Block::Paragraph { kind: Kind::Verse, .. }))) {
                     self.push_block(out, Block::EmptyLine);
                 }
-                self.read_flow(kind, depth, out)?;
+                let outer = std::mem::replace(&mut self.in_stanza, true);
+                let read = self.read_flow(kind, depth, out);
+                self.in_stanza = outer;
+                read?;
             }
             "table" => self.read_table(out)?,
             "section" => self.read_flow(Kind::Body, depth + 1, out)?,
@@ -562,10 +583,43 @@ impl<'a> Fb2Reader<'a> {
         })
     }
 
-    /// Rows `tr` of cells `td`/`th` with `colspan`; one-column tables (layout wrappers) become paragraphs.
+    /// FB3 list: items are paragraphs starting "• " or "N. ", as in EPUB; a nested list the same way.
+    fn read_list(&mut self, ordered: bool, depth: u32, out: &mut Vec<Item>) -> Res<()> {
+        let mut n = 0;
+        self.for_each_child(|r, name, _| match name {
+            "li" => {
+                n += 1;
+                let marker = if ordered { format!("{n}. ") } else { "• ".to_owned() };
+                let text = r.read_styled_text()?;
+                if !text.text.is_empty() {
+                    let styles = text
+                        .styles
+                        .into_iter()
+                        .map(|s| StyleRange { start: s.start + marker.len(), end: s.end + marker.len(), ..s })
+                        .collect();
+                    r.push_block(out, Block::Paragraph { text: StyledText { text: marker + &text.text, styles }, kind: Kind::Body });
+                }
+                Ok(())
+            }
+            "ul" | "ol" => r.read_list(name == "ol", depth, out),
+            "title" => r.read_flow(Kind::Subtitle, depth, out),
+            _ => r.skip(),
+        })
+    }
+
+    /// The image part of an FB3 `img` (by relationship id); `None` in FB2 or when the relationship is missing.
+    fn fb3_image(&self, attrs: &[(String, String)]) -> Option<String> {
+        self.fb3_images?.get(attr(attrs, "src")?).cloned()
+    }
+
+    /// Rows `tr` of cells `td`/`th` with `colspan`; one-column tables (layout wrappers) become paragraphs. An FB3 table
+    /// `title` is a subtitle before the table.
     fn read_table(&mut self, out: &mut Vec<Item>) -> Res<()> {
         let mut rows: Vec<Vec<TableCell>> = Vec::new();
         self.for_each_child(|r, name, _| {
+            if name == "title" {
+                return r.read_flow(Kind::Subtitle, 0, out);
+            }
             if name != "tr" {
                 return r.skip();
             }
@@ -650,13 +704,20 @@ impl<'a> Fb2Reader<'a> {
                 }
                 Ev::Start(name, attrs) => {
                     let style = match name.as_str() {
-                        "emphasis" => Some((Style::Emphasis, None)),
+                        "emphasis" | "em" => Some((Style::Emphasis, None)),
                         "strong" => Some((Style::Strong, None)),
                         "sup" => Some((Style::Superscript, None)),
                         "sub" => Some((Style::Subscript, None)),
                         "strikethrough" => Some((Style::Strikethrough, None)),
                         "code" => Some((Style::Code, None)),
                         "a" if attr(&attrs, "type") == Some("note") => Some((Style::NoteRef, image_id(&attrs))),
+                        "note" => Some((Style::NoteRef, image_id(&attrs))),
+                        "img" => {
+                            if let Some(id) = self.fb3_image(&attrs) {
+                                self.inline_images.push(id);
+                            }
+                            None
+                        }
                         "a" => link_key(&attrs).map(|key| (Style::Link, Some(key))),
                         "image" => {
                             if let Some(id) = image_id(&attrs) {
@@ -740,6 +801,14 @@ impl<'a> Fb2Reader<'a> {
     }
 }
 
+/// Reads the body part of an FB3 package; `images` maps relationship ids to part names.
+pub(crate) fn read_fb3_body(xml: &[u8], images: &HashMap<String, String>) -> Result<Book, Error> {
+    let data = to_utf8(xml);
+    let mut reader = Fb2Reader::new(&data);
+    reader.fb3_images = Some(images);
+    reader.read()
+}
+
 fn attr<'v>(attrs: &'v [(String, String)], name: &str) -> Option<&'v str> {
     attrs.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
 }
@@ -793,7 +862,7 @@ fn heading_title<'b>(blocks: impl Iterator<Item = &'b Block>) -> Option<String> 
 }
 
 /// Named entities that books use without a DTD, plus the XML ones.
-fn entity(name: &str) -> &'static str {
+pub(crate) fn entity(name: &str) -> &'static str {
     match name {
         "amp" => "&",
         "lt" => "<",

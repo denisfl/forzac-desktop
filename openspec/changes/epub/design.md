@@ -45,6 +45,19 @@ id → part name). The FB2 reader learns the FB3 elements, which do not clash wi
 `notes`/`notebody` inside the body, `img`, `subscription`, `blockquote`, `div`, `pre`, `br`, lists, `p` in a stanza.
 Metadata comes from the description part (not FB2's `title-info`).
 
+### Line breaks in Chinese and Japanese
+EPUB brings books without spaces between words; the typesetter only broke at spaces, hyphenation points and dashes, so
+such a paragraph was one line running off the page. Words now also break between characters when either side is a Han
+ideograph, kana or CJK punctuation, unless the next character may not start a line or the previous one may not end it
+(a short kinsoku list). The break is a glue of zero width with a little stretch (0.1 em), so a justified line without
+spaces fills the column by spacing the characters, as Japanese typesetting does.
+
+### Speed
+Measured on the Pi: the largest real books of the corpus parse in 106 ms (7.7 MB) and 131 ms (2.5 MB, 22 000 blocks).
+The XHTML reader asks only for the attributes it uses (books put long `title` attributes on every span), skips the
+duplicate-attribute check, lowercases tag names in place and deduplicates style ranges by sorting (a document can be
+one paragraph of thousands of spans). What remains is mostly inflate and quick-xml itself.
+
 ### XML details
 quick-xml with `check_end_names` off and empty elements expanded, as for FB2. Named HTML entities use FB2's table.
 Documents are decoded to UTF-8 by FB2's BOM/declaration rule. Attribute values have `&amp;` and the like unescaped
@@ -57,3 +70,5 @@ Documents are decoded to UTF-8 by FB2's BOM/declaration rule. Attribute values h
 - Whole archive in memory: a 50 MB illustrated EPUB is held twice briefly (zip and unpacked) → acceptable on the
   target machines; images stay as bytes, decoded by the shells per page.
 - Formulas (MathML) read as plain text can look odd in technical books → a later change if books need it.
+- Very large stress samples are slower: a 10.6 MB EPUB of 36 MB of text (the Mahabharata sample, 2014 documents)
+  parses in 650 ms on the Pi, a 0.9 MB EPUB of 25 MB of MathML in 310 ms. Real books are well inside the budget.

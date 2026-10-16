@@ -60,7 +60,7 @@ fn main() -> glib::ExitCode {
             }
         }
     });
-    app.connect_activate(|_| eprintln!("usage: forzac <book.fb2|book.fb2.zip>"));
+    app.connect_activate(|_| eprintln!("usage: forzac <book.fb2|book.fb3|book.epub>"));
     let mut run_args = vec![args[0].clone()];
     run_args.extend(files.into_iter().cloned());
     app.run_with_args(&run_args)

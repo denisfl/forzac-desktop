@@ -1,6 +1,6 @@
 # Forzac for desktop
 
-An offline reader for FB2 and EPUB books with book-quality typesetting — hyphenation, justification, no lone lines
+An offline reader for FB2, FB3 and EPUB books with book-quality typesetting — hyphenation, justification, no lone lines
 at page edges — for Linux (first of all [Omarchy](https://omarchy.org)) and macOS. Keyboard first, few settings,
 free. The desktop sibling of Forzac for Android.
 

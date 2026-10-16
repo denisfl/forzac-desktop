@@ -140,3 +140,18 @@ fn tables_set_rows_with_rules_and_keep_the_header() {
     };
     assert!(row[1].x > style.text_size, "{}", row[1].x);
 }
+
+#[test]
+fn ideographic_text_breaks_between_characters() {
+    let style = PageStyle::for_window(600.0, 900.0, 20.0);
+    let text = "智に働けば角が立つ。情に棹させば流される。意地を通せば窮屈だ。とかくに人の世は住みにくい。住みにくさが高じると、安い所へ引き越したくなる。";
+    let b = Book { language: Some("ja".into()), ..book(vec![paragraph(text)]) };
+    let mut t = Typesetter::new(style, None);
+    let layout = t.layout(&b.chapters[0].blocks[0], &b).unwrap();
+    let lines = &text_of(&layout).lines;
+    assert!(lines.len() >= 2, "the paragraph wraps");
+    let right = |line: &Line| line.runs.iter().flat_map(|r| r.positions.iter()).map(|p| p[0]).fold(0.0f32, f32::max);
+    for line in lines {
+        assert!(right(line) <= style.text_width(), "line ends at {}", right(line));
+    }
+}

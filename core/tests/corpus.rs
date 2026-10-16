@@ -1,79 +1,136 @@
-//! Parses every FB2 book in a local corpus: `FORZAC_CORPUS=~/Books cargo test -p forzac-core --test corpus`.
+//! Opens every book in a local corpus and typesets every page:
+//! `FORZAC_CORPUS=~/Books cargo test --release -p forzac-core --test corpus -- --nocapture`.
 //! Books are never committed; without `FORZAC_CORPUS` the test is skipped.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-/// Books with one of `extensions` under `FORZAC_CORPUS` (not recursive), or `None` when the variable is unset.
-fn corpus(extensions: &[&str]) -> Option<Vec<PathBuf>> {
+use forzac_core::model::Style;
+use forzac_core::{Block, Book, Error};
+
+/// FB2, FB3 and EPUB files under `FORZAC_CORPUS` (not recursive), or `None` when the variable is unset.
+fn corpus() -> Option<Vec<PathBuf>> {
     let dir = std::env::var_os("FORZAC_CORPUS")?;
     let mut books: Vec<PathBuf> = std::fs::read_dir(dir)
         .expect("FORZAC_CORPUS is not a readable directory")
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            let name = p.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
-            extensions.iter().any(|ext| name.ends_with(ext))
-        })
+        .filter(|p| format(p).is_some())
         .collect();
     books.sort();
     Some(books)
 }
 
-#[test]
-fn every_fb2_book_parses() {
-    let Some(books) = corpus(&[".fb2", ".fb2.zip"]) else {
-        eprintln!("skipped: set FORZAC_CORPUS to a directory of books");
-        return;
-    };
-    let mut failures = Vec::new();
-    let (mut notes, mut images, mut image_blocks, mut links, mut tables, mut chapters) = (0, 0, 0, 0, 0, 0);
-    let mut drawn = Drawn::default();
-    for path in &books {
-        match forzac_core::open(path) {
-            Ok(book) if !book.chapters.is_empty() => {
-                typeset_all(&book, &mut drawn);
-                chapters += book.chapters.len();
-                notes += book.notes.len();
-                images += book.images.len();
-                links += book.links.len();
-                image_blocks += book
-                    .chapters
-                    .iter()
-                    .flat_map(|c| &c.blocks)
-                    .filter(|b| matches!(b, forzac_core::Block::Image { id } if book.images.contains_key(id)))
-                    .count();
-                tables += book
-                    .chapters
-                    .iter()
-                    .flat_map(|c| &c.blocks)
-                    .filter(|b| matches!(b, forzac_core::Block::TableRow { row: 0, .. }))
-                    .count();
-            }
-            Ok(_) => failures.push(format!("{}: no chapters", path.display())),
-            Err(e) => failures.push(format!("{}: {e:?}", path.display())),
-        }
-    }
-    eprintln!(
-        "{} FB2 books, {} failed; {chapters} chapters, {notes} notes, {images} images ({image_blocks} in the text), {links} links, {tables} tables; drawn: {:?}",
-        books.len(),
-        failures.len(),
-        drawn
-    );
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+fn format(path: &std::path::Path) -> Option<&'static str> {
+    let name = path.file_name()?.to_string_lossy().to_lowercase();
+    [(".fb2", "FB2"), (".fb2.zip", "FB2"), (".fb3", "FB3"), (".epub", "EPUB")].iter().find(|(ext, _)| name.ends_with(ext)).map(|(_, f)| *f)
 }
 
-/// What the pages of the corpus hold.
+/// What a format's books hold, and what their pages draw.
 #[derive(Debug, Default)]
-struct Drawn {
-    pages: usize,
+struct Counts {
+    books: usize,
+    chapters: usize,
+    contents: usize,
+    notes: usize,
+    note_markers: usize,
+    links: usize,
     images: usize,
+    /// Image blocks without a raster image in the book (SVG, missing files): they take no room.
+    unshown_images: usize,
+    tables: usize,
+    pages: usize,
+    drawn_images: usize,
     rules: usize,
     areas: usize,
     /// Glyphs no font had (drawn as a box); without a fallback provider these are the characters PT Serif lacks.
     missing_glyphs: usize,
 }
 
+#[test]
+fn every_book_opens() {
+    let Some(books) = corpus() else {
+        eprintln!("skipped: set FORZAC_CORPUS to a directory of books");
+        return;
+    };
+    let mut failures = Vec::new();
+    let mut without_text = Vec::new();
+    let mut counts: BTreeMap<&str, Counts> = BTreeMap::new();
+    for path in &books {
+        let name = path.file_name().unwrap().to_string_lossy();
+        let book = match forzac_core::open(path) {
+            Ok(book) => book,
+            // Picture books (fixed-layout pages of images) have no text; they are not supported.
+            Err(Error::NoText) => {
+                without_text.push(name.into_owned());
+                continue;
+            }
+            Err(e) => {
+                failures.push(format!("{name}: {e:?}"));
+                continue;
+            }
+        };
+        let c = counts.entry(format(path).unwrap()).or_default();
+        if let Err(problem) = check(&book) {
+            failures.push(format!("{name}: {problem}"));
+        }
+        let blocks: Vec<&Block> = book.chapters.iter().flat_map(|ch| &ch.blocks).collect();
+        let markers = blocks.iter().filter_map(|b| b.text()).flat_map(|t| &t.styles).filter(|s| s.style == Style::NoteRef).count();
+        let unshown = blocks.iter().filter(|b| matches!(b, Block::Image { id } if !book.images.contains_key(id))).count();
+        let pages_before = c.pages;
+        typeset_all(&book, c);
+        eprintln!(
+            "{:<5} ch {:>4}  toc {:>4}  pages {:>5}  notes {:>4}/{:>4}  links {:>5}  img {:>4} (unshown {:>3})  {}",
+            format(path).unwrap(),
+            book.chapters.len(),
+            book.toc.len(),
+            c.pages - pages_before,
+            markers,
+            book.notes.len(),
+            book.links.len(),
+            book.images.len(),
+            unshown,
+            name.chars().take(60).collect::<String>()
+        );
+        c.books += 1;
+        c.chapters += book.chapters.len();
+        c.contents += book.toc.len();
+        c.notes += book.notes.len();
+        c.note_markers += markers;
+        c.links += book.links.len();
+        c.images += book.images.len();
+        c.unshown_images += unshown;
+        c.tables += blocks.iter().filter(|b| matches!(b, Block::TableRow { row: 0, .. })).count();
+    }
+    for (format, c) in &counts {
+        eprintln!("{format}: {c:?}");
+    }
+    eprintln!("{} books, {} failed, {} without text: {}", books.len(), failures.len(), without_text.len(), without_text.join(", "));
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A title, chapters, every note marker leads to its note, every contents entry points inside the book.
+fn check(book: &Book) -> Result<(), String> {
+    if book.title.trim().is_empty() {
+        return Err("no title".into());
+    }
+    if book.chapters.is_empty() {
+        return Err("no chapters".into());
+    }
+    let markers = book.chapters.iter().flat_map(|c| &c.blocks).filter_map(|b| b.text()).flat_map(|t| &t.styles);
+    if let Some(m) = markers.filter(|s| s.style == Style::NoteRef).find(|s| !s.target.as_ref().is_some_and(|t| book.notes.contains_key(t)))
+    {
+        return Err(format!("note marker without a note: {:?}", m.target));
+    }
+    if let Some(e) =
+        book.toc.iter().find(|e| e.target.chapter >= book.chapters.len() || e.target.block > book.chapters[e.target.chapter].blocks.len())
+    {
+        return Err(format!("contents entry outside the book: {} → {:?}", e.title, e.target));
+    }
+    Ok(())
+}
+
 /// Lays out every chapter and renders every page: the whole chain must hold for real books.
-fn typeset_all(book: &forzac_core::Book, drawn: &mut Drawn) {
+fn typeset_all(book: &Book, c: &mut Counts) {
     let style = forzac_core::PageStyle::for_window(760.0, 980.0, 20.0);
     let hyphenator = forzac_core::hyphen::Hyphenator::for_language(book.language.as_deref()).map(std::sync::Arc::new);
     let mut typesetter = forzac_core::Typesetter::new(style, hyphenator);
@@ -82,11 +139,11 @@ fn typeset_all(book: &forzac_core::Book, drawn: &mut Drawn) {
         for page in 0..layout.pages.len() {
             let content = layout.render(page, &style, &mut typesetter);
             assert!(!content.runs.is_empty(), "every page has at least its number");
-            drawn.images += content.images.len();
-            drawn.rules += content.rules.len();
-            drawn.areas += content.areas.len();
-            drawn.missing_glyphs += content.runs.iter().flat_map(|r| &r.glyphs).filter(|&&g| g == 0).count();
+            c.drawn_images += content.images.len();
+            c.rules += content.rules.len();
+            c.areas += content.areas.len();
+            c.missing_glyphs += content.runs.iter().flat_map(|r| &r.glyphs).filter(|&&g| g == 0).count();
         }
-        drawn.pages += layout.pages.len();
+        c.pages += layout.pages.len();
     }
 }

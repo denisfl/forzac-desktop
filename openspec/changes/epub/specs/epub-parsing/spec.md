@@ -127,9 +127,20 @@ Parsing an EPUB of up to 10 MB SHALL take at most 500 ms on a Raspberry Pi 5.
 - **THEN** parsing takes at most 500 ms
 
 ### Requirement: Real books
-A corpus test SHALL open every EPUB in a local directory and check: a title, at least one chapter, every note marker
-has its note, every image block has its image, every contents entry points inside the book; and typeset every page.
+A corpus test SHALL open every FB2, FB3 and EPUB book in a local directory and check: a title, at least one chapter,
+every note marker has its note, every contents entry points inside the book; and typeset every page. Picture books
+without any text (fixed-layout pages of images) are reported, not failed. Image blocks without a raster image in the
+book (SVG, missing files) are counted; they take no room on the page.
 
 #### Scenario: The corpus test
 - **WHEN** `FORZAC_CORPUS` names a directory of books
-- **THEN** every EPUB in it opens and passes the checks
+- **THEN** every book with text in it opens and passes the checks
+
+### Requirement: Chinese and Japanese text
+Text without spaces between words (Han ideographs, kana) SHALL break between characters, except before closing
+punctuation, small kana and the prolonged sound mark, and after opening punctuation; justified lines of such text
+SHALL fill the column by spacing the characters.
+
+#### Scenario: A Japanese novel
+- **WHEN** a paragraph of Japanese text is longer than a line
+- **THEN** it wraps within the column and no line starts with "。" or "、"

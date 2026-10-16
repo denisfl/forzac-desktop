@@ -333,7 +333,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let chapter = UInt32(value(after: "--chapter") ?? "0") ?? 0
         guard let path = args.dropFirst().first(where: { !$0.hasPrefix("--") && $0 != png && UInt32($0) == nil }),
               let doc = forzac_open(path) else {
-            fputs("usage: forzac <book.fb2|book.fb2.zip>\n", stderr)
+            fputs("usage: forzac <book.fb2|book.fb3|book.epub>\n", stderr)
             exit(2)
         }
         let parsed = Date().timeIntervalSince(processStart)

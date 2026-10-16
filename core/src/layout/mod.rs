@@ -546,8 +546,8 @@ impl Typesetter {
         self.word_pieces(text, segments, (start, end), pieces);
         let word_pieces = &pieces[first_piece..];
 
-        // Break points inside the word: (byte offset, hyphenation?).
-        let mut cuts: Vec<(usize, bool)> = Vec::new();
+        // Break points inside the word.
+        let mut cuts: Vec<(usize, Cut)> = Vec::new();
         let chars: Vec<(usize, char)> = text[start..end].char_indices().map(|(o, c)| (start + o, c)).collect();
         let mut k = 0;
         while k < chars.len() {
@@ -558,25 +558,39 @@ impl Typesetter {
                 }
                 if let (true, Some(h)) = (hyphenate && k - run_start >= 5, &self.hyphenator) {
                     let letters: Vec<char> = chars[run_start..k].iter().map(|(_, c)| *c).collect();
-                    cuts.extend(h.hyphenate(&letters).into_iter().map(|p| (chars[run_start + p].0, true)));
+                    cuts.extend(h.hyphenate(&letters).into_iter().map(|p| (chars[run_start + p].0, Cut::Hyphen)));
                 }
             } else {
                 if matches!(chars[k].1, '-' | '—') && k > 0 && k + 1 < chars.len() {
-                    cuts.push((chars[k + 1].0, false));
+                    cuts.push((chars[k + 1].0, Cut::Break));
                 }
                 k += 1;
+            }
+        }
+        // Chinese and Japanese have no spaces: a line may break between characters, but not before closing
+        // punctuation or after opening punctuation (kinsoku).
+        for pair in chars.windows(2) {
+            let (a, b) = (pair[0].1, pair[1].1);
+            if (is_ideographic(a) || is_ideographic(b)) && !NO_LINE_START.contains(b) && !NO_LINE_END.contains(a) {
+                cuts.push((pair[1].0, Cut::Ideographic));
             }
         }
         // Only where a glyph cluster starts: never inside a ligature.
         cuts.retain(|(at, _)| word_pieces.iter().any(|p| p.glyphs.iter().any(|g| p.start + g.cluster as usize == *at)));
         cuts.sort_by_key(|c| c.0);
+        cuts.dedup_by_key(|c| c.0);
 
         let mut at = start;
-        for (pos, hyphen) in cuts.into_iter().chain([(end, false)]) {
+        for (pos, cut) in cuts.into_iter().chain([(end, Cut::Break)]) {
             items.push(Item::Box { width: span_width(word_pieces, at, pos) });
             meta.push(Meta::Text(at, pos));
             if pos < end {
-                if hyphen {
+                if cut == Cut::Ideographic {
+                    // A little stretch between characters, so justified lines without spaces can fill the column.
+                    let size = segments[segment_at(segments, pos)].size;
+                    items.push(Item::Glue { width: 0.0, stretch: size * 0.1, shrink: 0.0 });
+                    meta.push(Meta::Plain);
+                } else if cut == Cut::Hyphen {
                     let index = first_piece + word_pieces.iter().rposition(|p| p.start < pos).unwrap_or(0);
                     let piece = &pieces[index];
                     let width = self.width_of(segments[piece.segment].face.id(), "-", piece.size);
@@ -667,6 +681,27 @@ impl Typesetter {
         }
         (lines, starts)
     }
+}
+
+/// A break point inside a word.
+#[derive(Clone, Copy, PartialEq)]
+enum Cut {
+    Hyphen,
+    /// After a hard hyphen or a dash.
+    Break,
+    /// Between Chinese or Japanese characters.
+    Ideographic,
+}
+
+/// Characters that may not start a line (closing punctuation, small kana, the prolonged sound mark).
+const NO_LINE_START: &str =
+    "、。，．・：；？！ー）」』】〕〉》｝］〙〗〟’”ゝゞヽヾ々ぁぃぅぇぉっゃゅょゎゕゖァィゥェォッャュョヮヵヶ‐゠〜?!),.:;]}";
+/// Characters that may not end a line (opening punctuation).
+const NO_LINE_END: &str = "（「『【〔〈《｛［〘〖〝‘“([{";
+
+/// Han ideographs, kana and CJK punctuation, which are set without spaces.
+fn is_ideographic(c: char) -> bool {
+    matches!(c as u32, 0x2E80..=0x2FDF | 0x3000..=0x30FF | 0x3100..=0x31FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF | 0x20000..=0x3FFFF)
 }
 
 fn segment_at(segments: &[Segment], at: usize) -> usize {
