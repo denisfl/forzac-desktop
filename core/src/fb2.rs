@@ -774,7 +774,7 @@ impl<'a> Fb2Reader<'a> {
         let mut links = HashMap::new();
         for chapter in &self.book.chapters {
             for block in &chapter.blocks {
-                for range in block.text().map(|t| t.styles.as_slice()).unwrap_or_default() {
+                for range in block.texts().into_iter().flat_map(|t| &t.styles) {
                     let (Style::Link, Some(key)) = (range.style, &range.target) else { continue };
                     if links.contains_key(key) {
                         continue;

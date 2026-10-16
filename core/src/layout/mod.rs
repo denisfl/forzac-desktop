@@ -12,11 +12,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub use page::{ChapterLayout, Page, PageContent, PageImage, Rule, end_page, layout_note, layout_preview, paginate};
+pub use table::{TableView, layout_table};
 
 use crate::fonts::{self, Face, Family, FontId, Glyph, Shaper};
 use crate::hyphen::Hyphenator;
 use crate::knuth_plass::{self, INFINITY, Item};
-use crate::model::{Block, Book, Kind, Style, StyledText};
+use crate::model::{Block, Book, Kind, Locator, Style, StyledText};
 
 /// Page geometry and text parameters, in logical pixels.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -81,6 +82,17 @@ pub enum Target {
     Note(String),
     /// A key in `Book::links`.
     Link(String),
+    /// An image at least a third of the column wide, by its id in `Book::images`: it opens in the view.
+    Image(String),
+    /// A table, by its first row: it opens in the view (`layout_table`).
+    Table(Locator),
+}
+
+impl Target {
+    /// An image or a table, which opens in the view rather than as a note or a link.
+    pub fn is_viewable(&self) -> bool {
+        matches!(self, Target::Image(_) | Target::Table(_))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -94,6 +106,11 @@ pub struct Rect {
 impl Rect {
     fn offset(self, dx: f32, dy: f32) -> Rect {
         Rect { x: self.x + dx, y: self.y + dy, ..self }
+    }
+
+    fn union(self, r: Rect) -> Rect {
+        let (x, y) = (self.x.min(r.x), self.y.min(r.y));
+        Rect { x, y, w: (self.x + self.w).max(r.x + r.w) - x, h: (self.y + self.h).max(r.y + r.h) - y }
     }
 }
 
@@ -180,8 +197,10 @@ enum Content {
         w: f32,
         h: f32,
     },
-    /// Rule strengths: 0 none, 1 light between rows, 2 medium under the header, 3 heavy above and below the table.
+    /// Row `row` of its table. Rule strengths: 0 none, 1 light between rows, 2 medium under the header, 3 heavy above and
+    /// below the table.
     Row {
+        row: usize,
         cells: Vec<Cell>,
         rules: (u8, u8),
         height: f32,

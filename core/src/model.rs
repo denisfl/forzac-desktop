@@ -115,6 +115,14 @@ impl Block {
         }
     }
 
+    /// The block's styled texts: its text, or the cells of a table row.
+    pub fn texts(&self) -> Vec<&StyledText> {
+        match self {
+            Block::TableRow { table, row } => table.rows[*row].iter().map(|c| &c.text).collect(),
+            b => b.text().into_iter().collect(),
+        }
+    }
+
     /// How much text the block holds (bytes; a table row's cells joined by line breaks, as `Table::cell_starts`
     /// counts them): the measure of progress through a book.
     pub fn text_len(&self) -> usize {

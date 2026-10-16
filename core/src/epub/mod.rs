@@ -563,7 +563,7 @@ fn without_broken_refs(block: &Block, notes: &HashMap<String, Note>) -> Block {
 fn resolve_links(book: &mut Book, place: &dyn Fn(&str, &str) -> Option<LinkTarget>) {
     let mut links = HashMap::new();
     for block in book.chapters.iter().flat_map(|c| &c.blocks) {
-        for range in block.text().map(|t| t.styles.as_slice()).unwrap_or_default() {
+        for range in block.texts().into_iter().flat_map(|t| &t.styles) {
             let (Style::Link, Some(key)) = (range.style, &range.target) else { continue };
             if links.contains_key(key) {
                 continue;

@@ -12,7 +12,7 @@ use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk::{glib, graphene, gsk};
 
-use super::{Mode, PageView, State, THEMES, content_node, rgba, stops};
+use super::{Mode, PageView, State, content_node, draw_focus, stops};
 
 /// The longest a scroll movement takes, µs.
 const MOTION: i64 = 150_000;
@@ -388,19 +388,11 @@ impl PageView {
                 Self::draw_marks(s, snapshot, &marks, top);
             }
         }
-        // The focused marker or link.
+        // The focused stop.
         if s.focus.is_some() {
             let areas = Self::visible_areas(s, h).to_vec();
-            if let Some((first, last)) = s.focus.and_then(|f| stops(&areas).get(f).copied()) {
-                let mut ink = rgba(THEMES[s.theme].link);
-                ink.set_alpha(0.22);
-                for area in &areas[first..=last] {
-                    let r = area.rect;
-                    let bounds = graphene::Rect::new(r.x - 3.0, r.y - 2.0, r.w + 6.0, r.h + 4.0);
-                    snapshot.push_rounded_clip(&gsk::RoundedRect::from_rect(bounds, 4.0));
-                    snapshot.append_color(&ink, &bounds);
-                    snapshot.pop();
-                }
+            if let Some(stop) = s.focus.and_then(|f| stops(&areas).get(f).copied()) {
+                draw_focus(snapshot, s.theme, &areas, stop);
             }
         }
     }

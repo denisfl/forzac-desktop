@@ -70,6 +70,8 @@ impl Theme {
              .forzac-panel .snippet {{ color: alpha({ink}, 0.78); }}
              .forzac-panel .search {{ background-color: {sheet}; border: 1px solid {line}; }}
              .forzac-panel .search text placeholder {{ color: {muted}; }}
+             .forzac-panel button.viewer-close {{ background-color: {sheet}; box-shadow: 0 1px 4px alpha(black, 0.12); }}
+             .forzac-panel button.viewer-close:hover {{ background-color: mix({sheet}, {ink}, 0.06); }}
              .forzac-panel row:selected {{ background-color: alpha({ink}, 0.07); color: {ink}; }}
              {circles}"
         ));
@@ -85,6 +87,7 @@ const STATIC_CSS: &str = "
     .forzac-sheet { border-radius: 22px 22px 0 0; padding: 10px 20px 24px 20px; }
     .forzac-sheet.note { padding: 10px 24px 36px 24px; }
     .forzac-panel .grabber { min-width: 36px; min-height: 4px; border-radius: 2px; }
+    .forzac-panel .viewer-close { border-radius: 22px; }
     .forzac-panel .rule { min-height: 1px; }
     .forzac-panel .divider { min-width: 1px; }
     .forzac-panel .theme-name { font-size: 11px; }
@@ -767,12 +770,16 @@ fn sheet(overlay: &gtk::Overlay, view: &PageView, label: Option<&str>, node: gsk
         .max_content_height((overlay.height() as f32 * 0.6) as i32 - 80)
         .build();
     panel.append(&scrolled);
+    // What had the focus gets it back: the page, or the image or table view the note was opened from.
+    let back = overlay.root().and_then(|r| r.focus()).unwrap_or_else(|| view.clone().upcast());
     overlay.add_overlay(&panel);
     let keys = gtk::ShortcutController::new();
     let (o, p, v) = (overlay.clone(), panel.clone(), view.clone());
     shortcut(&keys, "Escape|Return|KP_Enter|q|space", move || {
         o.remove_overlay(&p);
-        v.grab_focus();
+        if !(back.root().is_some() && back.grab_focus()) {
+            v.grab_focus();
+        }
     });
     note.add_controller(keys);
     note.grab_focus();

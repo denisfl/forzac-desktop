@@ -406,6 +406,15 @@ fn external_links() {
 }
 
 #[test]
+fn links_in_table_cells() {
+    let b = book(docs(&[(
+        "a.xhtml",
+        r#"<table><tr><td>1</td><td><a href="https://example.org">сайт</a></td></tr><tr><td>2</td><td>3</td></tr></table>"#,
+    )]));
+    assert_eq!(b.links.get("https://example.org"), Some(&LinkTarget::External("https://example.org".into())));
+}
+
+#[test]
 fn broken_links_become_text() {
     let b = book(docs(&[(
         "a.xhtml",

@@ -20,8 +20,8 @@ mod xml;
 
 pub use fonts::Face;
 pub use layout::{
-    Area, ChapterLayout, GlyphRun, Ink, PageContent, PageImage, PageStyle, Rect, Rule, Stroke, Target, Typesetter, end_page, layout_note,
-    layout_preview, paginate,
+    Area, ChapterLayout, GlyphRun, Ink, PageContent, PageImage, PageStyle, Rect, Rule, Stroke, TableView, Target, Typesetter, end_page,
+    layout_note, layout_preview, layout_table, paginate,
 };
 pub use model::{Block, Book, Chapter, Locator};
 

@@ -2,6 +2,7 @@
 
 import AppKit
 import CoreText
+import QuartzCore
 
 /// A theme's colours (the Android app's `docs/design.md`): the page's paper, ink and link ink; the panels' secondary
 /// text, lines and background.
@@ -190,28 +191,68 @@ func bitmap(_ size: CGSize, scale: CGFloat, background: UInt32?, _ body: (CGCont
     return ctx.makeImage()
 }
 
-/// A note marker or link on a page: where it is (y down) and what it opens.
+/// A note marker, link, image or table on a page: where it is (y down) and what it opens.
 struct Area {
     let rect: CGRect
-    let isNote: Bool
+    /// 0 note marker, 1 link, 2 image, 3 table (the core's kinds).
+    let kind: UInt8
+    /// The note id, link key or image id.
     let target: String
+    /// A table's first row.
+    let at: ForzacLocator
+    var isNote: Bool { kind == 0 }
+    /// An image or a table: it opens in the view.
+    var isViewable: Bool { kind >= 2 }
+
+    func opensSame(_ o: Area) -> Bool {
+        kind == o.kind && target == o.target && (kind != 3 || (at.chapter, at.block) == (o.at.chapter, o.at.block))
+    }
+
+    func offsetBy(dy: CGFloat) -> Area { Area(rect: rect.offsetBy(dx: 0, dy: dy), kind: kind, target: target, at: at) }
 }
 
 func areas(of page: ForzacPage, dy: CGFloat = 0) -> [Area] {
     (0..<Int(page.area_count)).map { i in
         let a = page.areas[i]
         return Area(rect: CGRect(x: CGFloat(a.rect.x), y: CGFloat(a.rect.y) + dy, width: CGFloat(a.rect.w), height: CGFloat(a.rect.h)),
-                    isNote: a.kind == 0, target: String(cString: a.target))
+                    kind: a.kind, target: String(cString: a.target), at: a.at)
     }
 }
 
-/// `Tab` stops: runs of consecutive areas with the same target (a link broken across lines is one stop).
+/// `Tab` stops: runs of consecutive areas with the same target (a link broken across lines is one stop). An image or a
+/// table is one stop however many areas it has (a table cut by the "Scroll" tiles has one per tile).
 func stops(_ areas: [Area]) -> [ClosedRange<Int>] {
     var out: [ClosedRange<Int>] = []
     for (i, a) in areas.enumerated() {
-        if let last = out.last, areas[last.upperBound].target == a.target { out[out.count - 1] = last.lowerBound...i } else { out.append(i...i) }
+        if let last = out.last, areas[last.upperBound].opensSame(a) {
+            out[out.count - 1] = last.lowerBound...i
+        } else if !(a.isViewable && out.contains { areas[$0.lowerBound].opensSame(a) }) {
+            out.append(i...i)
+        }
     }
     return out
+}
+
+/// Layers (y up in a view `height` high) that mark the focused stop of `areas`: a marker or link as a soft box in the
+/// link ink over each of its lines; an image or a table as a rounded outline in the link ink around all its areas.
+func focusLayers(_ areas: [Area], _ stop: ClosedRange<Int>, palette: Palette, height h: CGFloat) -> [CALayer] {
+    let first = areas[stop.lowerBound]
+    if first.isViewable {
+        let r = areas.filter { $0.opensSame(first) }.map(\.rect).reduce(first.rect) { $0.union($1) }
+        let l = CALayer()
+        l.borderColor = color(palette.link, alpha: 0.7)
+        l.borderWidth = 2
+        l.cornerRadius = 6
+        l.frame = CGRect(x: r.minX - 6, y: h - r.maxY - 6, width: r.width + 12, height: r.height + 12)
+        return [l]
+    }
+    return areas[stop].map { a in
+        let l = CALayer()
+        l.backgroundColor = color(palette.link, alpha: 0.22)
+        l.cornerRadius = 4
+        l.frame = CGRect(x: a.rect.minX - 3, y: h - a.rect.maxY - 2, width: a.rect.width + 6, height: a.rect.height + 4)
+        return l
+    }
 }
 
 /// [Lucide](https://lucide.dev) icons (ISC) as shapes on their 24×24 grid, stroke 1.75; the spacing and margin presets

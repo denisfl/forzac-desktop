@@ -4,7 +4,7 @@
 //! The neighbouring chapters are typeset and their images decoded on a worker thread, so a turn across a chapter
 //! boundary only draws.
 //!
-//! Note markers and links of the page can be focused (`Tab`) and opened; jumps keep a back stack.
+//! Note markers, links, wide images and tables of the page can be focused (`Tab`) and opened; jumps keep a back stack.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -17,7 +17,7 @@ use forzac_core::search::Hit;
 use forzac_core::settings::{Setting, Settings, Turning};
 use forzac_core::{
     Area, Block, Book, ChapterLayout, Ink, Locator, PageContent, PageStyle, Rect, Target, Typesetter, end_page, fonts, layout_note,
-    layout_preview, paginate,
+    layout_preview, layout_table, paginate,
 };
 use gtk::subclass::prelude::*;
 use gtk::{gdk, gio, glib, graphene, gsk, prelude::*};
@@ -79,20 +79,29 @@ const PILL_FADE: i64 = 150_000;
 const PILL_PAGES: i32 = 2;
 const PILL_TEXT: &str = "← Back · Ctrl+O";
 
-/// What opening a note marker or link asks of the window (jumps inside the book the view does itself).
+/// What opening a note marker, a link, an image or a table asks of the window (jumps inside the book the view does
+/// itself).
 pub enum Open {
     Note(String),
     /// A link's short target, shown in the note sheet (`Book::preview`).
     Preview(String),
     External(String),
+    /// An image (by id) or a table (by its first row) for the view (`viewer`).
+    Image(String),
+    Table(Locator),
 }
 
-fn rgba(rgb: u32) -> gdk::RGBA {
+pub(crate) fn rgba(rgb: u32) -> gdk::RGBA {
     gdk::RGBA::new(((rgb >> 16) & 0xFF) as f32 / 255.0, ((rgb >> 8) & 0xFF) as f32 / 255.0, (rgb & 0xFF) as f32 / 255.0, 1.0)
 }
 
 fn rect(r: Rect) -> graphene::Rect {
     graphene::Rect::new(r.x, r.y, r.w, r.h)
+}
+
+/// Image `id` of `book` decoded; `None` when it cannot be.
+fn decode(book: &Book, id: &str) -> Option<gdk::Texture> {
+    book.images.get(id).and_then(|i| gdk::Texture::from_bytes(&glib::Bytes::from(&i.bytes[..])).ok())
 }
 
 /// Ids of the images in `chapters`.
@@ -397,7 +406,7 @@ impl PageView {
         })
     }
 
-    /// `Tab` (`delta` 1) and `Shift+Tab` (−1): focus the next or previous note marker or link of the page.
+    /// `Tab` (`delta` 1) and `Shift+Tab` (−1): focus the next or previous note marker, link, image or table of the page.
     pub fn focus_next(&self, delta: i32) {
         let h = WidgetExt::height(self) as f32;
         self.with(|s| {
@@ -426,7 +435,7 @@ impl PageView {
         had
     }
 
-    /// Opens the focused note marker or link; false when nothing is focused.
+    /// Opens the focused note marker, link, image or table; false when nothing is focused.
     pub fn open_focused(&self) -> bool {
         let h = WidgetExt::height(self) as f32;
         let target = self.with(|s| {
@@ -452,10 +461,10 @@ impl PageView {
         }
         let target = self.with(|s| {
             let areas = if s.mode == Mode::Scroll { Self::visible_areas(s, h) } else { s.areas.get(&s.page)? };
-            // A little slack: markers are small.
+            // A little slack: markers are small. A marker or link in a table goes before the table.
             let hit =
                 |a: &&Area| x >= a.rect.x - 4.0 && x <= a.rect.x + a.rect.w + 4.0 && y >= a.rect.y - 4.0 && y <= a.rect.y + a.rect.h + 4.0;
-            areas.iter().find(hit).map(|a| a.target.clone())
+            areas.iter().filter(hit).min_by_key(|a| a.target.is_viewable()).map(|a| a.target.clone())
         });
         if let Some(t) = target {
             self.open(t);
@@ -469,9 +478,12 @@ impl PageView {
         }
     }
 
-    fn open(&self, target: Target) {
+    /// Opens a note marker, a link, an image or a table: a jump inside the book here, the rest through `connect_open`.
+    pub fn open(&self, target: Target) {
         let action = self.with(|s| match target {
             Target::Note(id) => Some(Err(Open::Note(id))),
+            Target::Image(id) => Some(Err(Open::Image(id))),
+            Target::Table(at) => Some(Err(Open::Table(at))),
             Target::Link(key) => match s.book.links.get(&key)? {
                 LinkTarget::Place { .. } if s.book.preview(&key).is_some() => Some(Err(Open::Preview(key))),
                 LinkTarget::Place { start, .. } => Some(Ok(*start)),
@@ -488,6 +500,30 @@ impl PageView {
             }
             None => {}
         }
+    }
+
+    /// Whether opening `target` jumps to another place in the book, rather than showing something over the page.
+    pub fn jumps(&self, target: &Target) -> bool {
+        self.with(|s| match target {
+            Target::Link(key) => matches!(s.book.links.get(key), Some(LinkTarget::Place { .. })) && s.book.preview(key).is_none(),
+            _ => false,
+        })
+    }
+
+    /// Image `id` decoded, from the pages' cache when a page has shown it.
+    pub fn texture(&self, id: &str) -> Option<gdk::Texture> {
+        self.with(|s| s.textures.entry(id.to_owned()).or_insert_with(|| decode(&s.book, id)).clone())
+    }
+
+    /// The table whose first row is `at` typeset for the view at `zoom` times the text size: its node in the current
+    /// theme, its width and height, and the areas of its note markers and links.
+    pub fn table_view(&self, at: Locator, zoom: f32) -> Option<(gsk::RenderNode, f32, f32, Vec<Area>)> {
+        self.with(|s| {
+            let mut typesetter = Typesetter::new(s.settings.table_style(zoom), s.hyphenator.clone());
+            let view = layout_table(&s.book, at, &mut typesetter)?;
+            let node = content_node(&view.content, s.theme, &mut s.fonts, &mut s.textures, &s.book)?;
+            Some((node, view.width, view.height, view.content.areas))
+        })
     }
 
     /// Jumps to `at`, remembering where the jump started (`back` returns there).
@@ -588,7 +624,7 @@ impl PageView {
     }
 
     /// The body text's line height.
-    fn line_height(&self) -> f32 {
+    pub fn line_height(&self) -> f32 {
         self.with(|s| s.typesetter.as_ref().map_or(30.0, |t| t.line_height))
     }
 
@@ -792,13 +828,7 @@ impl PageView {
                     typesetter = Typesetter::new(style, typesetter.hyphenator());
                 }
                 let layouts = chapters.iter().map(|&c| paginate(&book, c, &style, &mut typesetter)).collect();
-                let textures = images
-                    .into_iter()
-                    .map(|id| {
-                        let texture = book.images.get(&id).and_then(|i| gdk::Texture::from_bytes(&glib::Bytes::from(&i.bytes[..])).ok());
-                        (id, texture)
-                    })
-                    .collect();
+                let textures = images.into_iter().map(|id| (id.clone(), decode(&book, &id))).collect();
                 Prefetched { style, layouts, typesetter, textures }
             })
             .await;
@@ -962,20 +992,12 @@ impl PageView {
                     if let (Some((from, to)), Some(layout), Some(style)) = (Self::highlighted(s, s.chapter), &s.layout, &s.style) {
                         Self::draw_marks(s, snapshot, &layout.marks(s.page, style, from, to), 0.0);
                     }
-                    // The focused marker or link (all its lines): a soft box in the link ink, over the cached page.
+                    // The focused stop, over the cached page.
                     let areas = s.areas.get(&s.page);
                     if let (Some(areas), Some(f)) = (areas, s.focus)
-                        && let Some(&(first, last)) = stops(areas).get(f)
+                        && let Some(&stop) = stops(areas).get(f)
                     {
-                        let mut ink = rgba(THEMES[s.theme].link);
-                        ink.set_alpha(0.22);
-                        for area in &areas[first..=last] {
-                            let r = area.rect;
-                            let bounds = graphene::Rect::new(r.x - 3.0, r.y - 2.0, r.w + 6.0, r.h + 4.0);
-                            snapshot.push_rounded_clip(&gsk::RoundedRect::from_rect(bounds, 4.0));
-                            snapshot.append_color(&ink, &bounds);
-                            snapshot.pop();
-                        }
+                        draw_focus(snapshot, s.theme, areas, stop);
                     }
                 }
             }
@@ -1143,19 +1165,43 @@ impl PageView {
 }
 
 /// `Tab` stops: runs of consecutive areas with the same target (a link broken across lines is one stop), as index
-/// ranges `(first, last)`.
-fn stops(areas: &[Area]) -> Vec<(usize, usize)> {
+/// ranges `(first, last)`. An image or a table is one stop however many areas it has (a table cut by the "Scroll"
+/// tiles has one per tile).
+pub(crate) fn stops(areas: &[Area]) -> Vec<(usize, usize)> {
     let mut out: Vec<(usize, usize)> = Vec::new();
     for (i, area) in areas.iter().enumerate() {
-        match out.last_mut() {
-            Some(stop) if areas[stop.1].target == area.target => stop.1 = i,
-            _ => out.push((i, i)),
+        if let Some(stop) = out.last_mut().filter(|s| areas[s.1].target == area.target) {
+            stop.1 = i;
+        } else if !(area.target.is_viewable() && out.iter().any(|s| areas[s.0].target == area.target)) {
+            out.push((i, i));
         }
     }
     out
 }
 
-/// The render node of a page's (or a note's) contents in `theme`: images, table rules and glyph runs.
+/// The focused stop `(first, last)` of `areas`: a marker or link as a soft box in the link ink over each of its lines;
+/// an image or a table as a rounded outline in the link ink around all its areas.
+pub(crate) fn draw_focus(snapshot: &gtk::Snapshot, theme: usize, areas: &[Area], (first, last): (usize, usize)) {
+    let mut ink = rgba(THEMES[theme].link);
+    let target = &areas[first].target;
+    if target.is_viewable() {
+        let Some(r) = areas.iter().filter(|a| a.target == *target).map(|a| rect(a.rect)).reduce(|a, b| a.union(&b)) else { return };
+        ink.set_alpha(0.7);
+        let bounds = graphene::Rect::new(r.x() - 6.0, r.y() - 6.0, r.width() + 12.0, r.height() + 12.0);
+        snapshot.append_border(&gsk::RoundedRect::from_rect(bounds, 6.0), &[2.0; 4], &[ink; 4]);
+        return;
+    }
+    ink.set_alpha(0.22);
+    for area in &areas[first..=last] {
+        let r = area.rect;
+        let bounds = graphene::Rect::new(r.x - 3.0, r.y - 2.0, r.w + 6.0, r.h + 4.0);
+        snapshot.push_rounded_clip(&gsk::RoundedRect::from_rect(bounds, 4.0));
+        snapshot.append_color(&ink, &bounds);
+        snapshot.pop();
+    }
+}
+
+/// The render node of a page's (or a note's, or a table's) contents in `theme`: images, table rules and glyph runs.
 fn content_node(
     content: &PageContent,
     theme: usize,
@@ -1169,9 +1215,7 @@ fn content_node(
     let snapshot = gtk::Snapshot::new();
     for image in &content.images {
         // Decoded on the worker; an image the worker has not reached yet (the first page) is decoded here.
-        let texture = textures
-            .entry(image.id.clone())
-            .or_insert_with(|| book.images.get(&image.id).and_then(|i| gdk::Texture::from_bytes(&glib::Bytes::from(&i.bytes[..])).ok()));
+        let texture = textures.entry(image.id.clone()).or_insert_with(|| decode(book, &image.id));
         if let Some(texture) = texture {
             snapshot.append_scaled_texture(texture, gsk::ScalingFilter::Trilinear, &rect(image.rect));
         }

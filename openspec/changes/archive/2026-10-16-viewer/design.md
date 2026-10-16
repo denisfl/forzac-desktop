@@ -43,6 +43,11 @@ the shells.
 Alternative considered: a separate list of "objects" per page. It would duplicate the area plumbing in the ABI, both
 shells' `Tab` handling and the "Scroll" tiles.
 
+**Links in table cells — core.** The FB2 and EPUB readers registered links from paragraphs and headings only
+(`Block::text`), so a link in a cell was drawn in the link ink but led nowhere. They now read every styled text of a
+block (`Block::texts`: a row's cells). Unregistered link ranges in cells stay (the table is shared by its rows); the
+shells ignore an unknown key.
+
 **Clicks prefer markers and links.** A table's area covers its cells' links, so the shells hit-test markers and links
 first and viewable areas second. A click on a viewable area opens the view instead of turning the page in the side
 thirds (Android: "an image is more important than the tap zones").
@@ -119,6 +124,7 @@ theme change; `NoteSheet.dismiss` gives the focus back to the view under it.
 Core tests: areas for an image ≥ ⅓ and < ⅓ of the column, one table area before the cells' link area on a page, none
 in notes; `layout_table` column widths (20 em cap, longest word), height = sum of rows, areas of markers in cells; ABI
 tests for `forzac_table` and `forzac_image`. The corpus test typesets every table for the view and prints the slowest.
-By hand on the Pi 5 (GTK, over VNC) and the M1 Mac: a schematic from `Eymishen_Elektronika-Net-nichego-proshche-` and
-a wide table from the corpus, keys, mouse, touchpad, both page modes, a note in a table cell, theme change while open;
-`scripts/pi-headless.sh` page-turn and idle measurements unchanged.
+By hand on the Pi 5 (GTK, `wtype` and `grim`) and the M1 Mac (`--panel` and `--keys` with `--png`): figure 1.6 of
+"LLM Engineer's Handbook" (the electronics book in the corpus has no images the EPUB reader loads: its manifest calls
+them `application/octet-stream`) and the same book's dataframe table, both page modes, a note and a link in a table
+cell; `scripts/pi-headless.sh` page turns against the build before the change, idle CPU with the view open.

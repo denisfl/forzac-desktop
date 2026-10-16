@@ -211,3 +211,52 @@ fn errors_and_previews_through_the_c_functions() {
         forzac_close(doc);
     }
 }
+
+#[test]
+fn images_and_tables_for_the_view_through_the_c_functions() {
+    // A PNG header of 600×300: enough for the typesetter to read the size.
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    png.extend(600u32.to_be_bytes());
+    png.extend(300u32.to_be_bytes());
+    png.extend([8, 6, 0, 0, 0, 0, 0, 0, 0]);
+    let fb2 = format!(
+        r##"<?xml version="1.0" encoding="utf-8"?><FictionBook xmlns:l="http://www.w3.org/1999/xlink">
+            <description><title-info><book-title>T</book-title><lang>ru</lang></title-info></description>
+            <body><section><p>Схема:</p><image l:href="#s.png"/>
+            <table><tr><th>Год</th><th>Событие</th></tr><tr><td>1812</td><td>Война<a l:href="#n1" type="note">1</a></td></tr></table>
+            </section></body>
+            <body name="notes"><section id="n1"><p>Отечественная.</p></section></body>
+            <binary id="s.png" content-type="image/png">{}</binary></FictionBook>"##,
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &png)
+    );
+    let path = book_file().with_file_name("view.fb2");
+    std::fs::write(&path, fb2).unwrap();
+    unsafe {
+        let doc = forzac_open(c(path.to_str().unwrap()).as_ptr(), std::ptr::null_mut());
+        assert!(!doc.is_null());
+        let settings = forzac_settings_default();
+        forzac_paginate(doc, 0, 900.0, 1200.0, &settings);
+        let page = forzac_page(doc, 0);
+        let areas = std::slice::from_raw_parts(page.areas, page.area_count as usize);
+        let kinds: Vec<u8> = areas.iter().map(|a| a.kind).collect();
+        assert_eq!(kinds, [2, 3, 0], "the image, the table, then the marker in its cell");
+        assert_eq!(string(areas[0].target).as_deref(), Some("s.png"));
+        let mut len = 0;
+        let bytes = forzac_image(doc, areas[0].target, &mut len);
+        assert_eq!((bytes, len), (std::slice::from_raw_parts(page.images, 1)[0].bytes, png.len()));
+
+        let table = forzac_table(doc, areas[1].at, 1.0, &settings);
+        assert!(!table.is_null());
+        let (mut w, mut h) = (0.0, 0.0);
+        let view = forzac_table_page(table, &mut w, &mut h);
+        assert!(w > 100.0 && h > 30.0 && view.run_count > 0 && view.rule_count > 0, "{w}×{h}");
+        let marker = std::slice::from_raw_parts(view.areas, view.area_count as usize);
+        assert_eq!((marker.len(), marker[0].kind, string(marker[0].target).as_deref()), (1, 0, Some("n1")));
+        // The page view goes on: the table's arrays stay valid.
+        forzac_page(doc, 0);
+        assert_eq!(forzac_table_page(table, &mut w, &mut h).area_count, 1);
+        forzac_table_free(table);
+        assert!(forzac_table(doc, ForzacLocator { chapter: 0, block: 0, offset: 0 }, 1.0, &settings).is_null(), "not a table");
+        forzac_close(doc);
+    }
+}

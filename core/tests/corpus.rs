@@ -170,3 +170,37 @@ fn whole_book_search_is_fast() {
     println!("slowest search: {} ms, {} ({} KB of text, {} matches)", slowest.0, slowest.1, slowest.2 / 1024, slowest.3);
     assert!(slowest.0 <= budget, "{} ms over {budget} ms", slowest.0);
 }
+
+/// Every table typeset for the view at the default text size: the slowest per 100 rows, against the budget of 50 ms on
+/// a Raspberry Pi 5 (`FORZAC_TABLE_BUDGET_MS`, by default 50).
+#[test]
+fn tables_for_the_view_are_fast() {
+    let Some(books) = corpus() else { return };
+    let budget: f64 = std::env::var("FORZAC_TABLE_BUDGET_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(50.0);
+    let style = forzac_core::settings::Settings::default().table_style(1.0);
+    let (mut tables, mut slowest) = (0, (0.0, 0.0, 0, String::new()));
+    for path in &books {
+        let Ok(book) = forzac_core::open(path) else { continue };
+        let hyphenator = forzac_core::hyphen::Hyphenator::for_language(book.language.as_deref()).map(std::sync::Arc::new);
+        let mut typesetter = forzac_core::Typesetter::new(style, hyphenator);
+        for (chapter, ch) in book.chapters.iter().enumerate() {
+            for (block, b) in ch.blocks.iter().enumerate() {
+                let Block::TableRow { table, row: 0 } = b else { continue };
+                let t = std::time::Instant::now();
+                let view = forzac_core::layout_table(&book, forzac_core::Locator { chapter, block, offset: 0 }, &mut typesetter);
+                let ms = t.elapsed().as_secs_f64() * 1000.0;
+                assert!(view.is_some_and(|v| v.width > 0.0 && v.height > 0.0));
+                tables += 1;
+                let per_100 = ms * 100.0 / table.rows.len().max(100) as f64;
+                if per_100 >= slowest.0 {
+                    slowest = (per_100, ms, table.rows.len(), path.file_name().unwrap().to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+    println!(
+        "{tables} tables for the view; slowest {:.1} ms per 100 rows ({:.1} ms, {} rows), {}",
+        slowest.0, slowest.1, slowest.2, slowest.3
+    );
+    assert!(slowest.0 <= budget, "{:.1} ms per 100 rows over {budget} ms", slowest.0);
+}

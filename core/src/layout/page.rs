@@ -1,6 +1,6 @@
 //! Pagination (a port of the Android `Paginator`) and page contents.
 
-use super::{Area, BlockLayout, Content, GlyphRun, Group, Ink, PageStyle, Rect, Stroke, Typesetter};
+use super::{Area, BlockLayout, Content, GlyphRun, Group, Ink, PageStyle, Rect, Stroke, Target, Typesetter};
 use crate::fonts::Face;
 use crate::model::{Block, Book, Chapter, Locator};
 
@@ -57,6 +57,9 @@ pub struct ChapterLayout {
     /// The chapter as one column ("Scroll"): each block layout's top, and the column's height.
     flow: Vec<f32>,
     flow_height: f32,
+    /// Whether wide images and tables are areas (`view_area`): not in notes and previews, whose blocks are not the
+    /// chapter's.
+    viewable: bool,
 }
 
 /// Where the chapter's text lies in the book, to tell how far a page is (text lengths, see `Block::text_len`).
@@ -129,10 +132,37 @@ impl ChapterLayout {
         let mut out = PageContent::default();
         for s in &self.pages[i].slices {
             if let Some(b) = self.blocks.get(s.layout) {
-                draw_block(&mut out, b, s.line_start..s.line_end, style.margin_h + b.x, style.margin_top + s.top);
+                let (left, top, at) = (style.margin_h + b.x, style.margin_top + s.top, out.areas.len());
+                draw_block(&mut out, b, s.line_start..s.line_end, left, top);
+                self.view_area(&mut out, at, b, s.block, left, top, style);
             }
         }
         out
+    }
+
+    /// The area of an image at least a third of the column wide or of a table, which open in the view: an image's
+    /// rectangle; for a table one area around its rows drawn here, inserted at `at` (before the first row's cell areas)
+    /// and grown by later rows. `block` is the model block of `b`, drawn at `left`, `top`.
+    #[allow(clippy::too_many_arguments)]
+    fn view_area(&self, out: &mut PageContent, at: usize, b: &BlockLayout, block: usize, left: f32, top: f32, style: &PageStyle) {
+        if !self.viewable {
+            return;
+        }
+        match &b.content {
+            Content::Image { id, w, h } if *w >= style.text_width() / 3.0 => {
+                out.areas.insert(at, Area { rect: Rect { x: left, y: top, w: *w, h: *h }, target: Target::Image(id.clone()) })
+            }
+            Content::Row { row, height, width, .. } => {
+                let Some(first) = block.checked_sub(*row) else { return };
+                let target = Target::Table(Locator { chapter: self.chapter, block: first, offset: 0 });
+                let rect = Rect { x: left, y: top, w: *width, h: *height };
+                match out.areas.iter_mut().find(|a| a.target == target) {
+                    Some(area) => area.rect = area.rect.union(rect),
+                    None => out.areas.insert(at, Area { rect, target }),
+                }
+            }
+            _ => {}
+        }
     }
 
     /// The height of the chapter as one column ("Scroll").
@@ -147,7 +177,9 @@ impl ChapterLayout {
         let mut out = PageContent::default();
         for (i, lines, top) in self.flow_lines(y0, y1) {
             let b = &self.blocks[i];
-            draw_block(&mut out, b, lines, style.margin_h + b.x, top);
+            let (left, at) = (style.margin_h + b.x, out.areas.len());
+            draw_block(&mut out, b, lines, left, top);
+            self.view_area(&mut out, at, b, self.block_index[i], left, top, style);
         }
         out
     }
@@ -240,7 +272,7 @@ impl ChapterLayout {
 }
 
 /// Lines `lines` of block `b` (one "line" for an image or a table row) with the first at `top`, the column at `left`.
-fn draw_block(out: &mut PageContent, b: &BlockLayout, lines: std::ops::Range<usize>, left: f32, top: f32) {
+pub(super) fn draw_block(out: &mut PageContent, b: &BlockLayout, lines: std::ops::Range<usize>, left: f32, top: f32) {
     match &b.content {
         Content::Text(t) => {
             for line in lines.clone() {
@@ -250,7 +282,7 @@ fn draw_block(out: &mut PageContent, b: &BlockLayout, lines: std::ops::Range<usi
         }
         Content::Empty => {}
         Content::Image { id, w, h } => out.images.push(PageImage { id: id.clone(), rect: Rect { x: left, y: top, w: *w, h: *h } }),
-        Content::Row { cells, rules, height, width } => {
+        Content::Row { cells, rules, height, width, .. } => {
             for cell in cells {
                 for (n, line) in cell.text.lines.iter().enumerate() {
                     let y = top + cell.y + n as f32 * cell.text.line_height + cell.text.baseline;
@@ -380,7 +412,7 @@ fn layout_blocks(book: &Book, blocks: Vec<Block>, style: &PageStyle, typesetter:
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     let note_book = Book { language: book.language.clone(), images, chapters: vec![Chapter { title: None, blocks }], ..Book::default() };
-    paginate_from(&note_book, 0, style, typesetter, 0.0)
+    ChapterLayout { viewable: false, ..paginate_from(&note_book, 0, style, typesetter, 0.0) }
 }
 
 fn push_line(out: &mut PageContent, line: &super::Line, x: f32, y: f32) {
@@ -525,5 +557,15 @@ fn paginate_from(book: &Book, chapter: usize, style: &PageStyle, typesetter: &mu
 
     let title = book.chapters[chapter].title.clone();
     let block_index = laid.iter().map(|(i, _)| *i).collect();
-    ChapterLayout { chapter, blocks: laid.into_iter().map(|(_, l)| l).collect(), pages, title, position, block_index, flow, flow_height }
+    ChapterLayout {
+        chapter,
+        blocks: laid.into_iter().map(|(_, l)| l).collect(),
+        pages,
+        title,
+        position,
+        block_index,
+        flow,
+        flow_height,
+        viewable: true,
+    }
 }

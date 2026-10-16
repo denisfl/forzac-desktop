@@ -5,8 +5,10 @@
 // ~/Library/Application Support/Forzac/state.
 //
 // Spike flags: --measure (time to the first presented page), --png out.png (first page), --chapter N, --page N (the
-// page of the chapter --png saves), --panel settings|contents|note:ID and --theme N (with --png: the whole window with
-// that panel open, in that theme), --scroll (in "Scroll"); with any of them the reading state is neither read nor written.
+// page of the chapter --png saves), --panel settings|contents|note:ID|image:ID|table:CHAPTER.BLOCK and --theme N (with
+// --png: the whole window with that panel or view open, in that theme; --keys "ll+\t\r" then sends those keys to it
+// first, 0.3 s apart: letters, digits, + - =, \t Tab, \r Return, \e Esc, an upper-case letter with Shift), --scroll (in
+// "Scroll"); with any of them the reading state is neither read nor written.
 
 import AppKit
 
@@ -19,7 +21,7 @@ m    pages or scroll
 ]  [    next / previous chapter
 g  G  Home  End    chapter start / end
 o    contents  (/ filters)
-Tab  Shift+Tab    notes and links on the page, Return opens
+Tab  Shift+Tab    notes, links, pictures and tables on the page, Return opens
 ⌃O  ⌘[    back after a jump
 s  ⌘,    settings
 /  ⌘F    search;  n  N  ⌘G  ⇧⌘G    next / previous match
@@ -28,9 +30,17 @@ t  T    theme
 f  ⌃⌘F    full screen
 ?    this help
 q  ⌘W    close
+click    the left or right third of the page turns it; a picture or a table opens
+
+Picture or table:  + − 0  zoom, fit    arrows  h j k l  Space  move    Esc  q  close
 
 Forzac is free. Support it: forzac.truenrth.app
 """
+
+/// `\t`, `\r` and `\e` in a `--keys` value as Tab, Return and Esc.
+func unescape(_ s: String) -> String {
+    s.replacingOccurrences(of: "\\t", with: "\t").replacingOccurrences(of: "\\r", with: "\r").replacingOccurrences(of: "\\e", with: "\u{1b}")
+}
 
 /// Whether macOS shows a dark appearance.
 func systemIsDark() -> Bool { NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }
@@ -46,6 +56,8 @@ final class Reader: NSObject, NSWindowDelegate {
     private var contents: ContentsPanel?
     private var search: SearchPanel?
     private weak var note: NoteSheet?
+    /// The image or table view over the page, while it is open.
+    private weak var viewer: Viewer?
     private let state: OpaquePointer?
     private var saveTimer: Timer?
     var onClose: ((Reader) -> Void)?
@@ -102,6 +114,7 @@ final class Reader: NSObject, NSWindowDelegate {
             guard let self else { return }
             if let state = self.state { _ = withUnsafePointer(to: self.view.settings) { forzac_state_save_settings(state, $0) } }
             self.window.appearance = NSAppearance(named: themes[self.view.theme].paper < 0x808080 ? .darkAqua : .aqua)
+            self.viewer?.recolour()
         }
         window.appearance = NSAppearance(named: view.palette.paper < 0x808080 ? .darkAqua : .aqua)
         savePosition() // an opened book is a recent book, even if it is closed without turning a page
@@ -185,9 +198,14 @@ final class Reader: NSObject, NSWindowDelegate {
             var preview = false
             if case .preview = command { preview = true }
             guard let sheet = NoteSheet(view: view, id: id, preview: preview, windowSize: container.bounds.size) else { return }
+            sheet.back = viewer
             sheet.pin(in: container)
             note = sheet
             window.makeFirstResponder(sheet)
+        case .image(let id):
+            openViewer(.image(id))
+        case .table(let at):
+            openViewer(.table(at))
         case .help:
             help.sizeToFit()
             help.setFrameOrigin(NSPoint(x: (container.bounds.width - help.frame.width) / 2, y: (container.bounds.height - help.frame.height) / 2))
@@ -196,6 +214,18 @@ final class Reader: NSObject, NSWindowDelegate {
             closePanels()
             window.makeFirstResponder(view)
         }
+    }
+
+    /// Shows an image or a table over the page, filling the window.
+    private func openViewer(_ subject: Viewer.Subject) {
+        closePanels()
+        guard viewer == nil, let v = Viewer(page: view, subject: subject) else { return }
+        v.frame = container.bounds
+        v.autoresizingMask = [.width, .height]
+        container.addSubview(v, positioned: .below, relativeTo: help)
+        viewer = v
+        window.makeFirstResponder(v)
+        v.show()
     }
 
     /// Shows `panel` (closing the others), or closes it when it is open: `s`, `o` and `/` open and close their panels.
@@ -216,6 +246,17 @@ final class Reader: NSObject, NSWindowDelegate {
         contents?.isHidden = true
         search?.isHidden = true
         note?.removeFromSuperview()
+    }
+
+    /// A key press as the keyboard would send it to what has the keys (`--keys`).
+    func send(_ key: Character) {
+        let codes: [Character: UInt16] = ["\t": 0x30, "\r": 0x24, "\u{1b}": 0x35]
+        let text = String(key).lowercased()
+        let shift = key.isUppercase
+        guard let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: shift ? .shift : [], timestamp: 0, windowNumber: window.windowNumber,
+                                       context: nil, characters: text, charactersIgnoringModifiers: text, isARepeat: false, keyCode: codes[key] ?? 0xFFFF)
+        else { return }
+        window.sendEvent(e)
     }
 
     /// The whole window as drawn, panels included (`--panel`).
@@ -450,11 +491,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 return NSApp.terminate(nil)
             }
             v.show(animated: 0)
-            if !panel.isEmpty { reader.run(panel == "settings" ? .settings : panel == "contents" ? .contents : .note(String(panel.dropFirst(5)))) }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            if !panel.isEmpty { reader.run(self.command(panel)) }
+            let keys = Array(self.value(after: "--keys").map(unescape) ?? "")
+            for (i, key) in keys.enumerated() {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5 + 0.3 * Double(i)) { reader.send(key) }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8 + 0.3 * Double(keys.count)) {
                 reader.savePNG(png)
                 NSApp.terminate(nil)
             }
+        }
+    }
+
+    /// The command a `--panel` value names.
+    private func command(_ panel: String) -> Command {
+        let arg = String(panel.drop { $0 != ":" }.dropFirst())
+        switch panel {
+        case "settings": return .settings
+        case "contents": return .contents
+        case _ where panel.hasPrefix("image:"): return .image(arg)
+        case _ where panel.hasPrefix("table:"):
+            let n = arg.split(separator: ".").compactMap { UInt32($0) }
+            return .table(ForzacLocator(chapter: n.first ?? 0, block: n.last ?? 0, offset: 0))
+        default: return .note(arg)
         }
     }
 

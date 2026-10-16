@@ -37,9 +37,16 @@ typedef struct {
 } ForzacStroke;             // a line through struck-out text
 
 typedef struct {
+    uint32_t chapter;
+    uint32_t block;
+    uint32_t offset;
+} ForzacLocator;
+
+typedef struct {
     ForzacRect rect;
-    uint8_t kind;           // 0 note marker, 1 link
-    const char *target;     // note id or link key
+    uint8_t kind;           // 0 note marker, 1 link, 2 image (opens in the view), 3 table (opens in the view)
+    const char *target;     // note id, link key or image id; empty for a table
+    ForzacLocator at;       // a table's first row
 } ForzacArea;
 
 typedef struct {
@@ -54,12 +61,6 @@ typedef struct {
     const ForzacStroke *strokes;
     uint32_t stroke_count;
 } ForzacPage;
-
-typedef struct {
-    uint32_t chapter;
-    uint32_t block;
-    uint32_t offset;
-} ForzacLocator;
 
 // Indices into the presets; theme -1 follows the system's light or dark.
 typedef struct {
@@ -123,6 +124,14 @@ uint8_t forzac_link(ForzacDocument *doc, const char *key, ForzacLocator *at, con
 float forzac_link_preview(ForzacDocument *doc, const char *key, float width, const ForzacSettings *settings, ForzacPage *out);
 // The end page after the book's last page, for the current style.
 ForzacPage forzac_end_page(ForzacDocument *doc);
+// An image's file bytes (the target of a kind 2 area; the same pointer pages give); NULL when there is no such image.
+const uint8_t *forzac_image(const ForzacDocument *doc, const char *id, size_t *len);
+// A table typeset for the view (the `at` of a kind 3 area) at `zoom` times the text size; NULL when `at` is not a
+// table's first row. Its page is drawn from the origin, *width × *height, and stays valid until the table is freed.
+typedef struct ForzacTable ForzacTable;
+ForzacTable *forzac_table(const ForzacDocument *doc, ForzacLocator at, float zoom, const ForzacSettings *settings);
+ForzacPage forzac_table_page(const ForzacTable *table, float *width, float *height);
+void forzac_table_free(ForzacTable *table);
 // Rectangles over the text [from, to) (a search match) on a page of the current chapter, or between heights of a
 // chapter's column; up to `capacity` into `out`, returns how many.
 uint32_t forzac_marks(ForzacDocument *doc, uint32_t page, ForzacLocator from, ForzacLocator to, ForzacRect *out, uint32_t capacity);

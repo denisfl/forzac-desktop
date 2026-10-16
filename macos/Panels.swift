@@ -696,6 +696,8 @@ final class ContentsRow: NSTableRowView {
 /// `Esc`, `Enter`, `Space` or `q` closes it.
 final class NoteSheet: SheetView {
     private weak var view: PageView?
+    /// What gets the keys back on closing: the image or table view the note was opened from, else the page.
+    weak var back: NSView?
 
     /// Note `id`, or with `preview` the short target of link `id` (a figure, a table, a paragraph) without a label.
     init?(view: PageView, id: String, preview: Bool = false, windowSize: CGSize) {
@@ -750,7 +752,7 @@ final class NoteSheet: SheetView {
 
     func dismiss() {
         removeFromSuperview()
-        if let view { view.window?.makeFirstResponder(view) }
+        if let next = back ?? view { next.window?.makeFirstResponder(next) }
     }
 }
 

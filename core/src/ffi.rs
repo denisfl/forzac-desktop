@@ -10,7 +10,10 @@ use std::sync::Arc;
 
 use crate::fonts::{self, Family, FontId, FontSource};
 use crate::hyphen::Hyphenator;
-use crate::layout::{ChapterLayout, PageContent, PageStyle, Rect, Target, Typesetter, end_page, layout_note, layout_preview, paginate};
+use crate::layout::{
+    ChapterLayout, PageContent, PageStyle, Rect, TableView, Target, Typesetter, end_page, layout_note, layout_preview, layout_table,
+    paginate,
+};
 use crate::model::{Book, LinkTarget, Locator};
 use crate::settings::{Align, Margins, Setting, Settings, Spacing, TEXT_SIZES, THEMES, Turning};
 
@@ -64,15 +67,18 @@ pub struct ForzacStroke {
     pub ink: u8,
 }
 
-/// A note marker (`kind` 0, `target` the note id) or a link (`kind` 1, `target` the link key).
+/// A note marker (`kind` 0, `target` the note id), a link (`kind` 1, `target` the link key), an image that opens in the
+/// view (`kind` 2, `target` the image id) or a table (`kind` 3, `at` its first row, `target` empty).
 #[repr(C)]
 pub struct ForzacArea {
     pub rect: ForzacRect,
     pub kind: u8,
     pub target: *const c_char,
+    pub at: ForzacLocator,
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct ForzacPage {
     pub runs: *const ForzacRun,
     pub run_count: u32,
@@ -182,16 +188,80 @@ pub struct Document {
     /// The chapter of the last [`forzac_paginate`].
     current: usize,
     page: PageContent,
+    published: Published,
+    contents: Vec<ForzacTocEntry>,
+    contents_titles: Vec<CString>,
+    /// The last string returned (a note title, a link's address), kept alive for the caller.
+    text: CString,
+}
+
+/// A page's contents as the C arrays a [`ForzacPage`] points to.
+#[derive(Default)]
+struct Published {
     runs: Vec<ForzacRun>,
     images: Vec<ForzacImage>,
     rules: Vec<ForzacRule>,
     strokes: Vec<ForzacStroke>,
     areas: Vec<ForzacArea>,
     targets: Vec<CString>,
-    contents: Vec<ForzacTocEntry>,
-    contents_titles: Vec<CString>,
-    /// The last string returned (a note title, a link's address), kept alive for the caller.
-    text: CString,
+}
+
+impl Published {
+    /// `p` as pointers into `p` and these arrays, valid until the next call; images are `book`'s.
+    fn publish(&mut self, p: &PageContent, book: &Book) -> ForzacPage {
+        self.runs = p
+            .runs
+            .iter()
+            .map(|r| ForzacRun {
+                font: r.font.0,
+                ink: r.ink as u8,
+                size: r.size,
+                count: r.glyphs.len() as u32,
+                glyphs: r.glyphs.as_ptr(),
+                positions: r.positions.as_ptr().cast(),
+            })
+            .collect();
+        self.images = p
+            .images
+            .iter()
+            .filter_map(|i| {
+                book.images.get(&i.id).map(|b| ForzacImage { bytes: b.bytes.as_ptr(), len: b.bytes.len(), rect: i.rect.into() })
+            })
+            .collect();
+        self.rules = p.rules.iter().map(|r| ForzacRule { rect: r.rect.into(), strength: r.strength }).collect();
+        self.strokes = p.strokes.iter().map(|s| ForzacStroke { rect: s.rect.into(), ink: s.ink as u8 }).collect();
+        let none = Locator::default().into();
+        let (kinds, targets): (Vec<(u8, ForzacLocator)>, Vec<CString>) = p
+            .areas
+            .iter()
+            .map(|a| match &a.target {
+                Target::Note(id) => ((0, none), cstring(id)),
+                Target::Link(key) => ((1, none), cstring(key)),
+                Target::Image(id) => ((2, none), cstring(id)),
+                Target::Table(at) => ((3, (*at).into()), CString::default()),
+            })
+            .unzip();
+        self.targets = targets;
+        self.areas = p
+            .areas
+            .iter()
+            .zip(kinds)
+            .zip(&self.targets)
+            .map(|((a, (kind, at)), target)| ForzacArea { rect: a.rect.into(), kind, target: target.as_ptr(), at })
+            .collect();
+        ForzacPage {
+            runs: self.runs.as_ptr(),
+            run_count: self.runs.len() as u32,
+            images: self.images.as_ptr(),
+            image_count: self.images.len() as u32,
+            rules: self.rules.as_ptr(),
+            rule_count: self.rules.len() as u32,
+            areas: self.areas.as_ptr(),
+            area_count: self.areas.len() as u32,
+            strokes: self.strokes.as_ptr(),
+            stroke_count: self.strokes.len() as u32,
+        }
+    }
 }
 
 impl Document {
@@ -214,57 +284,7 @@ impl Document {
 
     /// `self.page` as pointers for the caller.
     fn publish(&mut self) -> ForzacPage {
-        let p = &self.page;
-        self.runs = p
-            .runs
-            .iter()
-            .map(|r| ForzacRun {
-                font: r.font.0,
-                ink: r.ink as u8,
-                size: r.size,
-                count: r.glyphs.len() as u32,
-                glyphs: r.glyphs.as_ptr(),
-                positions: r.positions.as_ptr().cast(),
-            })
-            .collect();
-        let book = &self.book;
-        self.images = p
-            .images
-            .iter()
-            .filter_map(|i| {
-                book.images.get(&i.id).map(|b| ForzacImage { bytes: b.bytes.as_ptr(), len: b.bytes.len(), rect: i.rect.into() })
-            })
-            .collect();
-        self.rules = p.rules.iter().map(|r| ForzacRule { rect: r.rect.into(), strength: r.strength }).collect();
-        self.strokes = p.strokes.iter().map(|s| ForzacStroke { rect: s.rect.into(), ink: s.ink as u8 }).collect();
-        let (kinds, targets): (Vec<u8>, Vec<CString>) = p
-            .areas
-            .iter()
-            .map(|a| match &a.target {
-                Target::Note(id) => (0, cstring(id)),
-                Target::Link(key) => (1, cstring(key)),
-            })
-            .unzip();
-        self.targets = targets;
-        self.areas = p
-            .areas
-            .iter()
-            .zip(kinds)
-            .zip(&self.targets)
-            .map(|((a, kind), target)| ForzacArea { rect: a.rect.into(), kind, target: target.as_ptr() })
-            .collect();
-        ForzacPage {
-            runs: self.runs.as_ptr(),
-            run_count: self.runs.len() as u32,
-            images: self.images.as_ptr(),
-            image_count: self.images.len() as u32,
-            rules: self.rules.as_ptr(),
-            rule_count: self.rules.len() as u32,
-            areas: self.areas.as_ptr(),
-            area_count: self.areas.len() as u32,
-            strokes: self.strokes.as_ptr(),
-            stroke_count: self.strokes.len() as u32,
-        }
+        self.published.publish(&self.page, &self.book)
     }
 
     /// Keeps `s` alive until the next string and returns it; null for `None`.
@@ -324,12 +344,7 @@ pub unsafe extern "C" fn forzac_open(path: *const c_char, error: *mut u32) -> *m
         layouts: Vec::new(),
         current: 0,
         page: PageContent::default(),
-        runs: Vec::new(),
-        images: Vec::new(),
-        rules: Vec::new(),
-        strokes: Vec::new(),
-        areas: Vec::new(),
-        targets: Vec::new(),
+        published: Published::default(),
         contents: Vec::new(),
         contents_titles: Vec::new(),
         text: CString::default(),
@@ -576,6 +591,66 @@ pub unsafe extern "C" fn forzac_end_page(doc: *mut Document) -> ForzacPage {
         doc.page = end_page(&doc.book, &style, t);
     }
     doc.publish()
+}
+
+/// Image `id`'s file bytes (owned by the document, the same pointer pages give); null when the book has no such image.
+///
+/// # Safety
+/// `doc` from [`forzac_open`]; `id` a valid NUL-terminated string; `len` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_image(doc: *const Document, id: *const c_char, len: *mut usize) -> *const u8 {
+    let book = &unsafe { &*doc }.book;
+    let Some(image) = book.images.get(unsafe { str(id) }.as_ref()) else { return std::ptr::null() };
+    unsafe { *len = image.bytes.len() };
+    image.bytes.as_ptr()
+}
+
+/// A table typeset for the view, owning what its page points to.
+pub struct Table {
+    view: TableView,
+    /// The arrays `page` points to, kept alive with it.
+    _arrays: Published,
+    page: ForzacPage,
+}
+
+/// The table whose first row is `at` typeset for the view at `zoom` times the text size of `settings`; null when `at`
+/// is not a table's first row. Free it with [`forzac_table_free`].
+///
+/// # Safety
+/// `doc` from [`forzac_open`]; `settings` valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_table(doc: *const Document, at: ForzacLocator, zoom: f32, settings: *const ForzacSettings) -> *mut Table {
+    let doc = unsafe { &*doc };
+    let style = Settings::from(unsafe { *settings }).table_style(zoom);
+    let mut typesetter = Typesetter::new(style, doc.hyphenator.clone());
+    let Some(view) = layout_table(&doc.book, at.into(), &mut typesetter) else { return std::ptr::null_mut() };
+    // The page points into the heap buffers of `view` and `published`, which moving them into the box keeps.
+    let mut published = Published::default();
+    let page = published.publish(&view.content, &doc.book);
+    Box::into_raw(Box::new(Table { view, _arrays: published, page }))
+}
+
+/// What to draw of a table for the view, from the origin, and its size; valid until the table is freed.
+///
+/// # Safety
+/// `table` from [`forzac_table`]; `width` and `height` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_table_page(table: *const Table, width: *mut f32, height: *mut f32) -> ForzacPage {
+    let table = unsafe { &*table };
+    unsafe {
+        *width = table.view.width;
+        *height = table.view.height;
+    }
+    table.page
+}
+
+/// # Safety
+/// `table` from [`forzac_table`], or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_table_free(table: *mut Table) {
+    if !table.is_null() {
+        drop(unsafe { Box::from_raw(table) });
+    }
 }
 
 /// Note `id`'s title (its number, as a rule); null when it has none. Valid until the next string from `doc`.

@@ -361,3 +361,83 @@ fn the_end_page_shows_the_title_authors_and_finished() {
     assert_eq!(page.runs.last().unwrap().ink, Ink::Secondary);
     assert!(page.areas.is_empty() && page.images.is_empty());
 }
+
+#[test]
+fn wide_images_and_tables_are_areas_for_the_view() {
+    let style = PageStyle::for_window(600.0, 900.0, 20.0);
+    let link = StyleRange { start: 0, end: 4, style: Style::Link, target: Some("#x".into()) };
+    let rows = vec![
+        vec![cell("Год", true), cell("Событие", true)],
+        vec![
+            cell("1812", false),
+            TableCell { text: StyledText { text: "Бородино".into(), styles: vec![link] }, header: false, col_span: 1 },
+        ],
+        vec![cell("1861", false), cell("Реформа", false)],
+    ];
+    let table = Arc::new(Table { rows });
+    let mut blocks = vec![Block::Image { id: "wide".into() }, Block::Image { id: "ornament".into() }, paragraph(TEXT)];
+    blocks.extend((0..3).map(|row| Block::TableRow { table: table.clone(), row }));
+    let mut b = book(blocks);
+    b.images = HashMap::from([("wide".into(), png(400, 200)), ("ornament".into(), png(100, 20))]);
+    let mut t = typesetter(style);
+    let ch = paginate(&b, 0, &style, &mut t);
+    let page = ch.render_body(0, &style);
+    let targets: Vec<&Target> = page.areas.iter().map(|a| &a.target).collect();
+    let table_at = Locator { chapter: 0, block: 3, offset: 0 };
+    assert_eq!(targets, [&Target::Image("wide".into()), &Target::Table(table_at), &Target::Link("#x".into())], "no area for the ornament");
+    // One area around the three rows, before the link in a cell.
+    let rows: Vec<&Rule> = page.rules.iter().collect();
+    let area = page.areas[1].rect;
+    assert!((area.y - rows[0].rect.y).abs() < 1.0 && (area.y + area.h - rows.last().unwrap().rect.y).abs() < 1.0, "{area:?}");
+    assert!((area.w - style.text_width()).abs() < 0.01);
+    // The column has the same areas.
+    let flow = ch.render_flow(0.0, ch.flow_height(), &style);
+    assert_eq!(flow.areas.iter().map(|a| &a.target).collect::<Vec<_>>(), targets);
+    // A note shows the same table without them.
+    b.notes.insert("n".into(), crate::model::Note { title: None, blocks: b.chapters[0].blocks.clone() });
+    let note = layout_note(&b, "n", &style, &mut t).unwrap();
+    assert!(note.render_body(0, &style).areas.iter().all(|a| !a.target.is_viewable()));
+}
+
+#[test]
+fn a_table_for_the_view_has_columns_by_content() {
+    let long = "Отмена крепостного права в России стала одной из самых значительных реформ девятнадцатого века и изменила жизнь миллионов";
+    let marker = StyleRange { start: "Москва".len(), end: "Москва1".len(), style: Style::NoteRef, target: Some("n1".into()) };
+    let rows = vec![
+        vec![cell("Год", true), cell("Событие", true), cell("Место", true)],
+        vec![
+            cell("1812", false),
+            cell(long, false),
+            TableCell { text: StyledText { text: "Москва1".into(), styles: vec![marker] }, header: false, col_span: 1 },
+        ],
+    ];
+    let table = Arc::new(Table { rows });
+    let mut blocks = vec![paragraph(TEXT)];
+    blocks.extend((0..2).map(|row| Block::TableRow { table: table.clone(), row }));
+    let b = book(blocks);
+    let size = 20.0;
+    let style = PageStyle {
+        text_size: size,
+        margin_h: 0.0,
+        margin_top: 0.0,
+        margin_bottom: 0.0,
+        ..PageStyle::for_window(100_000.0, 100_000.0, size)
+    };
+    let mut t = typesetter(style);
+    assert!(layout_table(&b, Locator { chapter: 0, block: 0, offset: 0 }, &mut t).is_none(), "a paragraph is not a table");
+    assert!(layout_table(&b, Locator { chapter: 0, block: 2, offset: 0 }, &mut t).is_none(), "nor a later row");
+    let view = layout_table(&b, Locator { chapter: 0, block: 1, offset: 0 }, &mut t).unwrap();
+    let g = t.natural_geometry(&table);
+    // The long cell's column is capped at 20 em and wraps; the others are as wide as their text.
+    assert!((g.w[1] - 20.0 * size).abs() < 0.01, "{:?}", g.w);
+    assert!(g.w[0] < 4.0 * size && g.w[2] < 6.0 * size, "{:?}", g.w);
+    assert!((view.width - (g.w.iter().sum::<f32>() + 2.0 * size)).abs() < 0.01);
+    let rules: Vec<u8> = view.content.rules.iter().map(|r| r.strength).collect();
+    assert_eq!(rules, [3, 2, 3]);
+    assert!(view.content.rules.iter().all(|r| (r.rect.w - view.width).abs() < 0.01), "rules span the table");
+    assert!((view.content.rules.last().unwrap().rect.y + 0.75 - view.height).abs() < 0.01, "the height ends at the last rule");
+    let lines = line_count(&view.content.runs);
+    assert!(lines >= 4, "the long cell wraps: {lines} lines");
+    assert_eq!(view.content.areas.len(), 1);
+    assert_eq!(view.content.areas[0].target, Target::Note("n1".into()));
+}

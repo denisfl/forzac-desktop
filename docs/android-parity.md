@@ -128,8 +128,8 @@ modules (`core/typesetting/src/main/kotlin/app/truenrth/forzac/typesetting/…` 
 
 | # | Android | Desktop | Status |
 |---|---|---|---|
-| V1 | A tap on an image at least a third of the column wide opens it full screen: pinch to ×5, double tap ×2.5, pan, swipe down or Back closes (`ImageViewer.kt`, A change image-viewer) | None | gap |
-| V2 | A tap on a table opens it full screen: columns by content, pan both ways, pinch 50–300 % (`TableViewer.kt`, A spec tables) | None; a row taller than the page is cut | gap |
+| V1 | A tap on an image at least a third of the column wide opens it full screen: pinch to ×5, double tap ×2.5, pan, swipe down or Back closes (`ImageViewer.kt`, A change image-viewer) | The same image, `Tab` and `Enter` or a click, fitted to the window: `+`/`−`/`0`, a pinch or `Ctrl`+wheel to ×5, arrows, wheel, touchpad or drag pan; a click, `Esc` or `q` closes (`gtk/src/viewer.rs`, `macos/Viewer.swift`; change `viewer`) | same (keys for the double tap and the swipe) |
+| V2 | A tap on a table opens it full screen: columns by content, pan both ways, pinch 50–300 % (`TableViewer.kt`, A spec tables) | The same: columns by content up to 20 em at the text size, 50–300 % in 5 % steps typeset again, pan both ways; markers and links in cells work too (`core/src/layout/table.rs` `layout_table`; change `viewer`) | same |
 
 ## 11. Bookmarks and highlights
 
@@ -265,3 +265,28 @@ as the Mac's), the rows marked "same" that earlier changes had checked by hand (
 |---|---|---|---|
 | Raspberry Pi 5 | 2026-10-16 | `android-parity`, GTK shell | Passing after the GTK fixes above; M2 not checked |
 | M1 MacBook Pro | 2026-10-16 | `android-parity`, AppKit shell | Passing after the macOS fixes above |
+
+### The view of images and tables (`viewer`, V1, V2)
+
+Checked on 2026-10-16 with the build of the change. The Pi's desktop was driven with `wtype` and watched with `grim`;
+the Mac build was driven with the shell's `--panel image:ID|table:C.B --keys …` and `--png` (computer control of the Mac
+was not available), so its keys went through `NSWindow.sendEvent` to the real handlers.
+
+- A schematic: "LLM Engineer's Handbook", figure 1.6 (825×829). On both: `Tab` outlines it, `Return` opens it fitted
+  to the window, `+` four times and `l` twice show its middle right part at ×2.44, `0` fits it again, `Esc` returns to
+  the same page with the outline still on it. A 120-pixel ornament is not a stop.
+- A wide table: the same book's dataframe table (7 columns, 2170 px at the text size; on the page set at 0.8 and
+  unreadable). On both: it opens at the text size from its top left corner, `l` pans to the right columns, `End` to the
+  bottom, `−` to 65 %, `Tab` walks the links of the last column and pans each into the window.
+- A table with a note marker and a link in a cell (a test book): `Tab` on the page stops at the table before the
+  marker; in the view the note opens in the sheet over it, `Esc` gives the keys back to the view, the link closes the
+  view and jumps, `Ctrl+O` returns. On the Pi also in "Scroll"; on the Mac also in the Dark and Wave themes.
+- Found and fixed: links inside table cells were never registered by the FB2 and EPUB readers, so they were dead on the
+  page too.
+- Cost on the Pi 5: 0 CPU ticks in 10 s with a table view open; `scripts/pi-headless.sh` idle 0 ticks. Page turns at
+  123 Hz, 12 runs of 20 turns alternating the build before the change and this one (default renderer): 12 and 11 late
+  first frames of a turn, the same spread (single runs 0–3 for both). Typesetting a table for the view: a 101-row table
+  in 10 ms on the Pi (the corpus test with the two books above and a test book), the corpus's slowest in 1.5 ms on the
+  Mac.
+- Not checked by hand: the mouse, the wheel, the touchpad and the pinch in the view on both machines (no pointer
+  injection on the Pi, no computer control of the Mac), and a theme change while the view is open.

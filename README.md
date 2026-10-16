@@ -57,7 +57,8 @@ Tests: `cargo test -p forzac-core`. Measurements on a Linux desktop: `scripts/me
 | `o` | contents (`/` filters, `Enter` jumps) |
 | `/` (macOS also `⌘F`) | search in the book: case and ё/е do not matter; `Enter` goes to a match |
 | `n` `N` (macOS also `⌘G` `⇧⌘G`) | next / previous match; `Esc` clears the highlight |
-| `Tab` `Shift+Tab`, then `Enter` | note markers and links on the page (or click them) |
+| `Tab` `Shift+Tab`, then `Enter` | note markers, links, pictures and tables on the page (or click them) |
+| `+` `−` `0`, arrows `h` `j` `k` `l` `Space`, `Esc` `q` | in a picture or table opened full window: zoom, fit, move, close (also the wheel, the touchpad, a drag, a pinch, `Ctrl`+wheel; macOS `⌘`+wheel) |
 | `Ctrl+O` (macOS also `⌘[`) | back after a jump (the "← Back" pill at the foot of the page does the same) |
 | `s` | settings: theme, font, text size, line spacing, alignment, margins, pages (`j` `k` choose, `h` `l` change; macOS also `⌘,`) |
 | `+` `−` `0` | text size, the default size |
@@ -66,7 +67,8 @@ Tests: `cargo test -p forzac-core`. Measurements on a Linux desktop: `scripts/me
 | `?` | help |
 | `q` `Ctrl+W` (macOS: `⌘W`) | close |
 
-A wheel step turns a page; one touchpad swipe turns one page; a click in the left or right third of the page turns it;
+A wheel step turns a page; one touchpad swipe turns one page; a click in the left or right third of the page turns it
+(a click on a picture at least a third of the column wide or on a table opens it full window instead);
 in Scroll mode the wheel and touchpad scroll smoothly. A link to a short passage (a figure, a table, a paragraph)
 opens it over the page, like a note. After the last page comes an end page that marks the book as finished.
 Keys work in any keyboard layout. Planned: `b` bookmark.

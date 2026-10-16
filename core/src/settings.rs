@@ -222,6 +222,12 @@ impl Settings {
         }
     }
 
+    /// A table in the view at `zoom` times the text size: the page's family and line spacing, no margins.
+    pub fn table_style(&self, zoom: f32) -> PageStyle {
+        let base = self.page_style(100_000.0, 100_000.0);
+        PageStyle { text_size: base.text_size * zoom, margin_h: 0.0, margin_top: 0.0, margin_bottom: 0.0, ..base }
+    }
+
     /// Switches `setting` to the next (`delta` 1) or previous (−1) value. Sizes stop at the ends; the others go round.
     pub fn step(&mut self, setting: Setting, delta: i32, system_dark: bool) {
         fn round<T: Copy + PartialEq>(all: &[T], value: T, delta: i32) -> T {

@@ -18,6 +18,7 @@ mod icons;
 mod page_view;
 mod panels;
 mod settings_sheet;
+mod viewer;
 
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
@@ -221,12 +222,17 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             }
         })
     };
+    // The image or table view open over the page, if any.
+    let viewer: Rc<RefCell<Option<glib::WeakRef<viewer::Canvas>>>> = Rc::default();
     if !stateless {
-        let v = view.downgrade();
+        let (v, open_viewer) = (view.downgrade(), viewer.clone());
         let watch = std::cell::Cell::new(appearance::watch(move |dark| {
             if let Some(v) = v.upgrade() {
                 v.set_system_dark(dark);
                 panels::set_theme(v.theme());
+            }
+            if let Some(open) = open_viewer.borrow().as_ref().and_then(|w| w.upgrade()) {
+                open.queue_draw();
             }
         }));
         window.connect_destroy(move |_| drop(watch.take()));
@@ -347,6 +353,8 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             Open::Note(id) => *note.borrow_mut() = panels::note(&overlay, &view, &id),
             Open::Preview(key) => *note.borrow_mut() = panels::preview(&overlay, &view, &key),
             Open::External(url) => gtk::UriLauncher::new(&url).launch(Some(&window), gio::Cancellable::NONE, |_| {}),
+            Open::Image(id) => *viewer.borrow_mut() = viewer::open(&overlay, &view, viewer::Subject::Image(id)).map(|v| v.downgrade()),
+            Open::Table(at) => *viewer.borrow_mut() = viewer::open(&overlay, &view, viewer::Subject::Table(at)).map(|v| v.downgrade()),
         }
     ));
     if !stateless {
@@ -519,7 +527,7 @@ m    page or scroll
 ]  [    next / previous chapter
 g  G  Home  End    chapter start / end
 o    contents  (/ filters)
-Tab  Shift+Tab    notes and links on the page, Enter opens
+Tab  Shift+Tab    notes, links, pictures and tables on the page, Enter opens
 Ctrl+O    back after a jump
 s    settings
 /  n  N    search, next / previous match
@@ -528,7 +536,9 @@ t  T    theme
 f  F11    full screen
 ?    this help
 q  Ctrl+W    close
-click    the left or right third of the page turns it
+click    the left or right third of the page turns it; a picture or a table opens
+
+Picture or table:  + − 0  zoom, fit    arrows  h j k l  Space  move    Esc  q  close
 
 Forzac is free. Support it: forzac.truenrth.app";
 

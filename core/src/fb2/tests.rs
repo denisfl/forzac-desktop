@@ -192,6 +192,17 @@ fn tables() {
 }
 
 #[test]
+fn links_in_table_cells() {
+    let b = book(
+        r##"<section><table><tr><td>1</td><td><a l:href="#ch2">глава 2</a>, <a l:href="https://example.org">сайт</a></td></tr></table></section>
+           <section id="ch2"><title><p>Глава 2</p></title><p>Текст.</p></section>"##,
+        "",
+    );
+    assert!(matches!(b.links.get("#ch2"), Some(LinkTarget::Place { start, .. }) if start.chapter == 1));
+    assert_eq!(b.links.get("https://example.org"), Some(&LinkTarget::External("https://example.org".into())));
+}
+
+#[test]
 fn truncated_book_keeps_what_was_read() {
     let xml = fb2(
         "<section><title><p>1</p></title><p>Один</p></section><section><title><p>2</p></title><p>Два</p></section>\

@@ -10,6 +10,8 @@ enum Command {
     case contents, settings, search, help, closePanels, note(String)
     /// A link's short target in the note sheet.
     case preview(String)
+    /// An image (by id) or a table (by its first row) in the view (`Viewer`).
+    case image(String), table(ForzacLocator)
 }
 
 /// The pill after a jump, as on Android: it goes when the reader turns this many pages (or screens) away.
@@ -70,7 +72,7 @@ final class PageView: NSView {
     private var motion: (from: CGFloat, to: CGFloat, start: CFTimeInterval?)?
     private var link: CADisplayLink?
     private var marginTop: CGFloat = 0
-    private var lineHeight: CGFloat = 30
+    private(set) var lineHeight: CGFloat = 30
 
     var onFirstFrame: ((PageView) -> Void)?
     /// The reading position changed.
@@ -603,7 +605,7 @@ final class PageView: NSView {
         if !scrolling { return pageAreas[page] ?? [] }
         var out: [Area] = []
         forTiles(from: 0, to: bounds.height) { top, key in
-            out += (tileAreas[key] ?? []).map { Area(rect: $0.rect.offsetBy(dx: 0, dy: top), isNote: $0.isNote, target: $0.target) }
+            out += (tileAreas[key] ?? []).map { $0.offsetBy(dy: top) }
         }
         return out.filter { $0.rect.maxY > 0 && $0.rect.minY < bounds.height }
     }
@@ -686,20 +688,13 @@ final class PageView: NSView {
         }
         let areas = visibleAreas()
         if let f = focus, let stop = stops(areas)[safe: f] {
-            let h = bounds.height
-            for a in areas[stop] {
-                let r = CALayer()
-                r.backgroundColor = color(palette.link, alpha: 0.22)
-                r.cornerRadius = 4
-                r.frame = CGRect(x: a.rect.minX - 3, y: h - a.rect.maxY - 2, width: a.rect.width + 6, height: a.rect.height + 4)
-                focusLayer.addSublayer(r)
-            }
+            for l in focusLayers(areas, stop, palette: palette, height: bounds.height) { focusLayer.addSublayer(l) }
         }
         focusLayer.frame = bounds
         CATransaction.commit()
     }
 
-    /// Opens the focused marker or link; false when nothing is focused.
+    /// Opens the focused marker, link, image or table; false when nothing is focused.
     func openFocused() -> Bool {
         let areas = visibleAreas()
         guard let f = focus, let stop = stops(areas)[safe: f] else { return false }
@@ -707,8 +702,12 @@ final class PageView: NSView {
         return true
     }
 
-    private func open(_ area: Area) {
+    /// Opens a marker or link (a note or a short target in the sheet, a place in the book here, an address in the
+    /// browser), an image or a table (in the view).
+    func open(_ area: Area) {
         if area.isNote { return onCommand?(.note(area.target)) ?? () }
+        if area.kind == 2 { return onCommand?(.image(area.target)) ?? () }
+        if area.kind == 3 { return onCommand?(.table(area.at)) ?? () }
         var at = ForzacLocator(chapter: 0, block: 0, offset: 0)
         var text: UnsafePointer<CChar>?
         switch forzac_link(doc, area.target, &at, &text) {
@@ -718,6 +717,25 @@ final class PageView: NSView {
         case 4: onCommand?(.preview(area.target))
         default: break
         }
+    }
+
+    /// Whether opening `area` jumps to another place in the book, rather than showing something over the page.
+    func jumps(_ area: Area) -> Bool {
+        var at = ForzacLocator(chapter: 0, block: 0, offset: 0)
+        var text: UnsafePointer<CChar>?
+        return area.kind == 1 && forzac_link(doc, area.target, &at, &text) == 1
+    }
+
+    /// Image `id` decoded, from the pages' cache when a page has shown it.
+    func picture(_ id: String) -> CGImage? {
+        var len = 0
+        guard let bytes = forzac_image(doc, id, &len) else { return nil }
+        let key = UnsafeRawPointer(bytes)
+        if pictures[key] == nil {
+            let data = Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: key), count: len, deallocator: .none)
+            if let source = CGImageSourceCreateWithData(data as CFData, nil) { pictures[key] = CGImageSourceCreateImageAtIndex(source, 0, nil) }
+        }
+        return pictures[key]
     }
 
     override func mouseDown(with e: NSEvent) {
@@ -730,7 +748,9 @@ final class PageView: NSView {
         if let down = mouseDownAt, hypot(p.x - down.x, p.y - down.y) > 4 { return } // a drag, not a click
         if pillLayer.opacity > 0, pillLayer.frame.contains(p) { return goBack() }
         let y = bounds.height - p.y
-        if let a = visibleAreas().first(where: { $0.rect.insetBy(dx: -4, dy: -4).contains(CGPoint(x: p.x, y: y)) }) {
+        // A marker or link in a table goes before the table.
+        let hits = visibleAreas().filter { $0.rect.insetBy(dx: -4, dy: -4).contains(CGPoint(x: p.x, y: y)) }
+        if let a = hits.first(where: { !$0.isViewable }) ?? hits.first {
             open(a)
         } else if !scrolling {
             // The side thirds turn the page, as taps do on Android; the middle does nothing.
