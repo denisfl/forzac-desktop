@@ -84,6 +84,12 @@ final class PageView: NSView {
         show(animated: 0)
     }
 
+    /// A frame-sized view is not laid out again on its own when the window resizes it.
+    override func setFrameSize(_ size: NSSize) {
+        super.setFrameSize(size)
+        needsLayout = true
+    }
+
     override func viewDidChangeBackingProperties() {
         images = [:]
         clearTiles()
@@ -292,6 +298,8 @@ final class PageView: NSView {
             clearTiles()
         } else {
             settings.turning = 1
+            // The page's first line: after a re-layout the reading position lies inside the page.
+            locator = forzac_page_start(doc, page)
             offset = CGFloat(forzac_flow_y(doc, locator)) - marginTop
         }
     }
@@ -567,7 +575,7 @@ final class PageView: NSView {
         let shift = e.modifierFlags.contains(.shift)
         let control = e.modifierFlags.contains(.control)
         let line = lineHeight, screen = bounds.height - lineHeight
-        switch e.keyCode {
+        switch e.shortcutKey {
         case 0x02 where control: scrolling ? scroll(by: bounds.height / 2) : turn(1)          // ⌃D
         case 0x20 where control: scrolling ? scroll(by: -bounds.height / 2) : turn(-1)        // ⌃U
         case 0x1F where control: goBack()                                                    // ⌃O

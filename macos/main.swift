@@ -118,7 +118,7 @@ final class Reader: NSObject, NSWindowDelegate {
                 let panel = ContentsPanel(view: view)
                 container.addSubview(panel)
                 let share = panel.widthAnchor.constraint(equalTo: container.widthAnchor, multiplier: 0.45)
-                share.priority = .defaultHigh
+                share.priority = NSLayoutConstraint.Priority(490) // below the window's own size: the panel never resizes it
                 NSLayoutConstraint.activate([
                     panel.topAnchor.constraint(equalTo: container.topAnchor), panel.bottomAnchor.constraint(equalTo: container.bottomAnchor),
                     panel.trailingAnchor.constraint(equalTo: container.trailingAnchor), share,

@@ -29,4 +29,4 @@
 ## 6. Verification
 
 - [x] 6.1 fmt, clippy, tests; GTK still builds (Docker)
-- [ ] 6.2 On this Mac: every panel in Light, Sepia, Dark; settings keep the position; Scroll; a book from Finder
+- [x] 6.2 On this Mac: every panel in Light, Sepia, Dark; settings keep the position; Scroll; a book from Finder

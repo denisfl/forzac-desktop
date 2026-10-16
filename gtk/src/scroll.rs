@@ -145,6 +145,8 @@ impl PageView {
                     s.mode = Mode::Scroll;
                     s.column = Default::default();
                     if let Some(l) = &s.layout {
+                        // The page's first line: after a re-layout the reading position lies inside the page.
+                        s.locator = l.page_start(s.page);
                         s.column.offset = l.flow_y(s.locator) - margin;
                     }
                 }

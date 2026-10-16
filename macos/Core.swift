@@ -263,3 +263,18 @@ final class IconView: NSView {
 
 /// Lower case and "ё" as "е", for filtering the contents.
 func fold(_ s: String) -> String { s.lowercased().replacingOccurrences(of: "ё", with: "е") }
+
+/// ANSI key codes of the characters the shortcuts use.
+private let keyCodes: [Character: UInt16] = [
+    "a": 0x00, "s": 0x01, "d": 0x02, "f": 0x03, "h": 0x04, "g": 0x05, "t": 0x11, "o": 0x1F, "u": 0x20, "l": 0x25, "j": 0x26,
+    "k": 0x28, "m": 0x2E, "q": 0x0C, "0": 0x1D, "=": 0x18, "+": 0x18, "-": 0x1B, "]": 0x1E, "[": 0x21, "/": 0x2C, "?": 0x2C,
+]
+
+extension NSEvent {
+    /// The key for shortcuts: the key code of a Latin character typed (so other Latin layouts follow their letters),
+    /// else the physical key code (a Russian layout uses the keys of the Latin letters, like GTK).
+    var shortcutKey: UInt16 {
+        if let c = charactersIgnoringModifiers?.lowercased().first, let code = keyCodes[c] { return code }
+        return keyCode
+    }
+}

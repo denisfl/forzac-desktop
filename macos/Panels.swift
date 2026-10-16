@@ -77,11 +77,13 @@ class SheetView: LayerView {
     /// Pins the sheet to the bottom of `container`, centred, at most `sheetWidth` wide.
     func pin(in container: NSView) {
         container.addSubview(self)
-        let full = widthAnchor.constraint(equalTo: container.widthAnchor)
-        full.priority = .defaultHigh
+        // As wide as allowed: just below the window's own size (500), so a sheet never resizes the window, and above
+        // the content's hugging, so it does not shrink to its content.
+        let wide = widthAnchor.constraint(equalToConstant: sheetWidth)
+        wide.priority = NSLayoutConstraint.Priority(490)
         NSLayoutConstraint.activate([
             bottomAnchor.constraint(equalTo: container.bottomAnchor), centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            widthAnchor.constraint(lessThanOrEqualToConstant: sheetWidth), full,
+            widthAnchor.constraint(lessThanOrEqualToConstant: sheetWidth), widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor), wide,
         ])
     }
 }
@@ -364,7 +366,7 @@ final class SettingsSheet: SheetView {
     private func layerFrame(of v: NSView) -> CGRect { v.convert(v.bounds, to: self) }
 
     override func keyDown(with e: NSEvent) {
-        switch e.keyCode {
+        switch e.shortcutKey {
         case 0x26, 0x7D: current = min(controls.count - 1, current + 1); placeRings()  // j ↓
         case 0x28, 0x7E: current = max(0, current - 1); placeRings()                    // k ↑
         case 0x25, 0x7C: change(controls[current].1, 1)                                 // l →
@@ -660,7 +662,7 @@ final class ContentsTable: NSTableView {
     var selectionColor = color(0x000000, alpha: 0.07)
 
     override func keyDown(with e: NSEvent) {
-        switch e.keyCode {
+        switch e.shortcutKey {
         case 0x26: panel?.select(selectedRow + 1)        // j
         case 0x28: panel?.select(selectedRow - 1)        // k
         case 0x24, 0x4C: panel?.jump()                    // Return
@@ -729,7 +731,7 @@ final class NoteSheet: SheetView {
     override var acceptsFirstResponder: Bool { true }
 
     override func keyDown(with e: NSEvent) {
-        switch e.keyCode {
+        switch e.shortcutKey {
         case 0x35, 0x24, 0x4C, 0x31, 0x0C: dismiss() // Esc Return Space q
         default: super.keyDown(with: e)
         }
