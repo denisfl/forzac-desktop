@@ -1,27 +1,32 @@
 ## Why
 
-The macOS shell from the spike draws pages and turns them. It has to reach the Linux shell's features and ship as a
-proper Mac app, which needs signing and notarisation to open without warnings.
+The macOS shell from the spike draws pages and turns them; it remembers the position, the theme and the text size.
+The Linux shell has since gained the settings, the contents, notes, links with a way back, the "Scroll" mode and the
+panels of the Android design. The Mac version has to catch up so it can be read and tested every day.
 
 ## What Changes
 
-- Feature parity with the Linux shell for `reading-state`, `reader-navigation`, `page-turning`, `reader-settings`,
-  `book-search`: panels in AppKit, keys by key code (work in any layout), standard menus with the same commands.
-- Trackpad: swipe to turn pages following the fingers, two-finger scroll in "Scroll" mode.
-- Open from Finder and "Open With", document types for FB2/FB3/EPUB, recent documents.
-- The C ABI replaced by UniFFI-generated Swift bindings if the API has grown past a handful of calls (decided in
-  design).
-- A signed and notarised `.app` (a Developer ID is needed), a DMG and a Homebrew cask built by CI.
+- Parity with the Linux shell for `reading-state` (recent books when started without a book), `reader-navigation`
+  (contents, notes, links, the way back, progress), `page-turning` ("Slide" and "Scroll"), `reader-settings` (the
+  settings, the panel, light or dark from the system) and `panels-design` (the panels as in the Android design).
+- Keys by key code (any layout, Russian included), the same keys as on Linux; standard menus with the main commands
+  and the Mac's own shortcuts (`⌘W`, `⌘Q`, `⌃⌘F`, `⌘,` settings).
+- Trackpad: a horizontal swipe turns a page, two-finger scrolling scrolls in "Scroll".
+- Open from Finder: document types for FB2, FB3, EPUB; double-click, "Open With", the Dock icon; recent documents.
+- The C ABI grows by the calls these need; no binding generator (a few dozen plain functions stay readable).
+
+Search arrives with `book-search` in both shells. Signing, notarisation, a DMG and a Homebrew cask need an Apple
+Developer ID and move to their own change, `macos-release`.
 
 ## Capabilities
 
 ### New Capabilities
-- `macos-app`: Mac-specific behaviour, packaging and distribution.
+- `macos-app`: what the Mac shell does beyond the shared specs: keys, menus, trackpad, Finder.
 
 ### Modified Capabilities
-- `page-turning`, `reader-navigation`, `reader-settings`, `book-search`, `reading-state`: macOS key equivalents where
-  the Mac convention differs (`⌘F` for search, `⌘W` to close).
+<!-- None: the shared specs already describe the behaviour; macOS implements them. -->
 
 ## Impact
 
-`macos/` grows into an Xcode-less SwiftPM package; CI gets a signing job. Requires an Apple Developer account.
+`core/src/ffi.rs` and `macos/forzac.h` grow; `macos/` splits into several Swift files; the `.app` bundle carries the
+fonts. The Linux shell takes the book's contents from the core (one implementation for both shells).

@@ -28,7 +28,8 @@ FB2 comes before typesetting: notes, images, links and tables have to be in the 
 
 | # | Change | What | Done when | Size |
 |---|---|---|---|---|
-| 11 | `macos-app` | The AppKit shell catches up with 5–9; a signed, notarised `.app`; Homebrew cask | Feature parity with the Linux shell on an Apple Silicon Mac | 2–3 w |
+| 11 | `macos-app` | The AppKit shell catches up with 5–8 and the panels; opening from Finder; trackpad | Feature parity with the Linux shell on an Apple Silicon Mac | 2–3 w |
+| 11a | `macos-release` | A signed, notarised `.app`, a DMG, a Homebrew cask (needs a Developer ID) | `brew install --cask forzac` opens without a warning | 2–3 d |
 
 ## Milestone 1.0
 
