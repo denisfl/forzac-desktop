@@ -54,19 +54,27 @@ the Android app in features and behaviour.
 
 | # | Change | What | Done when | Size |
 |---|---|---|---|---|
-| 11b | `android-parity` | A list of every difference from the Android app in features and behaviour; each one decided as intended (keyboard first, no PDF, …) or a gap; gaps closed here or split into their own changes; a by-hand pass on the Pi 5 and the Mac | No undecided difference is left; the by-hand pass finds nothing new | 2–3 d for the list, then by its size |
+| 11b | `android-parity` | A list of every difference from the Android app in features and behaviour ([android-parity.md](android-parity.md)); each one decided as intended (keyboard first, no PDF, …) or a gap; the small gaps closed here; a by-hand pass on the Pi 5 and the Mac | No undecided difference is left; the by-hand pass finds nothing new | 2–3 d for the list, then 1.5–2 w |
+| 11c | `viewer` | Images and tables in a full-window view: `Tab` stops at them, `Enter` or a click opens, `+`/`−` zoom, arrows pan, `Esc` closes | A schematic and a wide table can be read on the Pi 5 and the Mac | 4–5 d |
 
 ## Milestone 1.0
 
 | # | Change | What | Done when | Size |
 |---|---|---|---|---|
 | 12 | `localization` | Interface in English and Russian | Every screen checked in both languages | 2–3 d |
+| 12a | `two-page-spread` | Two pages side by side when the window is wider than tall and holds two text columns, as on Android tablets | A full-screen landscape window on the Pi 5 and the Mac shows two pages and keeps the reading position | 1 w |
 | 13 | `bookmarks` | Bookmarks (`b`) and their list in the contents panel | A bookmark survives re-layout and restart | 3–4 d |
 | 14 | `release-1-0` | Performance budgets checked on the Pi 5 and the Mac; x86_64 packages checked in containers; release notes; packages published | Budgets met on the Pi 5 and the Mac | 3–4 d |
 
-Total: about 14–18 weeks.
+Total: about 18–22 weeks.
+
+## After 1.0
+
+- `accessibility`: the page's text for screen readers (Orca, VoiceOver), as TalkBack reads it on Android.
 
 ## Not planned for 1.0
+
+Confirmed with the maintainer in `android-parity` (2026-10-16).
 
 PDF; text selection and quotes (mouse-first on desktop; revisit after 1.0); a library screen with import and covers
 (books open in place; recent books are enough); dictionaries; formulas (MathML); fixed-layout EPUB; Flatpak (AUR and

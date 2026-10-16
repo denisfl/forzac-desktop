@@ -1,0 +1,231 @@
+# Parity with Forzac for Android
+
+Every reader feature and behaviour of the Android app next to how the desktop app does it, for the
+[`android-parity`](../openspec/changes/android-parity/proposal.md) change (milestone 0.4). Compared on 2026-10-16:
+Android at `b6b3664`, desktop at `d55130a`.
+
+**Status:** **same** — the reader sees the same thing (the means may differ); **intended** — a difference the plans
+already allow: the keyboard instead of touch, no PDF, no "Curl" and "Cover", an item under "Not planned for 1.0" in
+[roadmap.md](roadmap.md); **gap** — the desktop app lacks or does differently something it should do; **unclear** — a
+difference nobody has decided yet. Every gap and unclear row was decided by the maintainer; the decisions are at the
+end, and the by-hand pass on the Pi 5 and the Mac is recorded after them.
+
+**References.** Android paths are in the Android repository: a bare `Name.kt` is
+`app/src/main/java/app/truenrth/forzac/Name.kt`; `typesetting/`, `model/`, `fb2/`, `epub/`, `data/` are the core
+modules (`core/typesetting/src/main/kotlin/app/truenrth/forzac/typesetting/…` and so on); "A spec x" is its
+`openspec/specs/x/spec.md` (or the active change of that name). Desktop paths are in this repository; "spec x" is
+`openspec/specs/x/spec.md`. Symbols in parentheses.
+
+## 1. Opening books and formats
+
+| # | Android | Desktop | Status |
+|---|---|---|---|
+| F1 | FB2 and FB2.ZIP: encodings, HTML entities, parts opened into chapters, notes, images, cover, tables, truncated files keep what was read (`fb2/Fb2Reader.kt`, A spec fb2-parsing) | The same rules (`core/src/fb2.rs`, spec fb2-parsing); also a bold first row as table header and a 256 MB unpack limit | same |
+| F2 | FB3 through the same reader (`fb2/…/fb3/Fb3Parser.kt`, A change fb3 — waits for a live LitRes file) | `core/src/fb3.rs`, spec fb3-parsing | same |
+| F3 | EPUB 2/3: package, spine, split chapters joined, nav/NCX, notes, links, DRM rejected, ruby dropped, images in the spine, the cover page skipped (`epub/EpubReader.kt`, `epub/XhtmlReader.kt`, A spec epub-parsing) | The same rules (`core/src/epub/`, spec epub-parsing); also explicit CJK line breaking, which Android gets from `LineBreaker` | same |
+| F4 | Format decided by content (`data/BookParser.kt`) | `core/src/lib.rs` (`parse_format`) | same |
+| F5 | PDF as pages with text layer, search, quotes (`PdfBook.kt`, `PdfReaderScreen.kt`) | None | intended (no PDF) |
+| F6 | Fixed-layout EPUB of picture pages: fit to screen, manga right to left, spreads (`FixedLayoutScreen.kt`, A spec fixed-layout) | Read as ordinary content; a book of images only fails as "no text" (`core/src/epub/mod.rs`) | intended (Not planned for 1.0, confirmed) |
+| F7 | MathML formulas typeset by its own engine, inline and display, shrunk to the column, viewer (`model/Math.kt`, `typesetting/MathLayout.kt`, `FormulaViewer.kt`, A spec math) | MathML read as plain text, annotations dropped (`core/src/epub/xhtml.rs`, skip list) | intended (Not planned for 1.0, confirmed) |
+| F8 | A book is imported into the library (copied, id = content hash) from the file picker, "Open with" and "Share", then opened (`MainActivity.kt` `handleIntent`, `LibraryViewModel.kt`, A spec library) | Opened in place: command line, `xdg-open` and file managers (`gtk/src/main.rs`, `HANDLES_OPEN`), Finder, the Dock, `⌘O` (`macos/main.swift`, `AppDelegate.open`) | intended (no library with import) |
+
+## 2. Typesetting
+
+| # | Android | Desktop | Status |
+|---|---|---|---|
+| T1 | `StaticLayout`, high-quality breaking, inter-word justification, last line natural (`typesetting/BlockLayouts.kt` `build`) | Knuth–Plass over HarfRust-shaped words (`core/src/knuth_plass.rs`, `core/src/layout/mod.rs`), [ADR 0001](adr/0001-stack.md) | same |
+| T2 | Hyphenation for any language Android has patterns for, by the book's locale (`BlockLayouts.kt` `textLocale`) | Russian and English patterns only; any other language is not hyphenated (`core/src/hyphen.rs` `for_language`) | unclear |
+| T3 | A book without a language: guessed from its text, Cyrillic → `ru`, else `en` (`model/BookLanguage.kt`) | Taken as Russian (`core/src/hyphen.rs`, `unwrap_or("ru")`); detection is planned in `localization` | gap |
+| T4 | Paragraph kinds: indent 1.5 em, citation 0.92 wide, epigraph 0.7 wide italic 0.92, author right, verse 0.88 unhyphenated, subtitle bold centred kept with next (`BlockLayouts.kt` `paragraph`) | The same geometry (`core/src/layout/mod.rs` `Typesetter::layout`) | same |
+| T5 | Headings bold centred, 1.35 / 1.15, unhyphenated, kept with next (`BlockLayouts.kt` `heading`) | The same | same |
+| T6 | Preformatted text (`pre`, code) in a monospace face at 0.85 (`BlockLayouts.kt`, `Kind.Code`) | At 0.85 in the book face, line breaks kept (`core/src/layout/mod.rs`, `Kind::Code`) | gap |
+| T7 | Inline code in monospace at 0.9; strikethrough drawn (`BlockLayouts.kt` `spansOf`) | Both parsed, drawn as plain text (`core/src/layout/mod.rs` `segments`) | gap |
+| T8 | Superscript, subscript and note markers at 0.7 with a rise, line height unchanged | The same (`segments`) | same |
+| T9 | Links in the theme's link ochre, no underline | The same colours (`gtk/src/page_view.rs` `THEMES`, `Ink::Link`) | same |
+| T10 | No lone first or last line, heading kept with two lines, chapter on a new page lowered two lines, no empty line at a page top, images and table rows never split, header row with the first data row (`typesetting/Paginator.kt`) | A port of the same paginator (`core/src/layout/page.rs` `paginate`) | same |
+| T11 | Images one dp per pixel, scaled to the column and page, centred, half a line around, broken ones skipped, decoded only near the shown page (`BlockLayouts.kt` `image`, `PagePictures.kt`) | The same, one logical pixel per pixel; neighbours' images decoded on a worker (`core/src/layout/mod.rs` `image`, `page_view.rs` `prefetch`) | same |
+| T12 | Tables: widths by content, 0.9 then 0.8 size, rules heavy/medium/light, bold header (`BlockLayouts.kt` `geometry`, A spec tables) | The same (`core/src/layout/table.rs`, spec typesetting) | same |
+| T13 | Missing glyphs from system fonts (`BookFonts.kt`, `CustomFallbackBuilder`) | System fallback fonts, drawn from the same file (`core/src/fonts.rs`, `gtk/src/fonts.rs`) | same |
+| T14 | Typographic normalisation: no-break spaces, em dashes (`model/TypographyNormalizer.kt`) | A port (`core/src/typography.rs`) | same |
+
+## 3. Page turning and modes
+
+| # | Android | Desktop | Status |
+|---|---|---|---|
+| M1 | "Slide", "Cover", "Curl" (Android 13+), "Scroll" (`PageTurn.kt`) | "Slide" and "Scroll" (`core/src/settings.rs` `Turning`) | intended (no Curl and Cover) |
+| M2 | The page follows the finger, a fling turns, taps in the left/right third turn, the middle opens the menu (`ReaderScreen.kt` `readerGestures`) | Keys (`j l → ↓ Space PgDn Enter` / `k h ← ↑ Shift+Space PgUp Backspace`), a 200 ms ease-out slide; a wheel step turns a page, a touchpad swipe at most one (`page_view.rs` `turn`, `macos/PageView.swift` `keyDown`, `scrollWheel`). A click on the page turns nothing | unclear (click to turn) |
+| M3 | "Scroll": one column of the same typesetting, chapters apart, everything works in it (`ReaderScreen.kt` `FlowView`) | One column of tiles, a gap between chapters; line, screen and half-screen keys, wheel by three lines, kinetic touchpad (`gtk/src/scroll.rs`, `macos/PageView.swift`) | same |
+| M4 | Switching modes keeps the line (A spec page-turning) | `m` keeps the top line (spec page-turning) | same |
+| M5 | Asks for the highest refresh rate while moving, nothing drawn at rest (`HighRefreshRate`) | Frame clock / `CADisplayLink`, nothing drawn at rest | same |
+| M6 | Tablet in landscape (short side ≥ 600 dp, wider than tall): two pages side by side (`ReaderScreen.kt` `spread`, `ReaderSurface.kt` `PagedSurface.perScreen`) | One column at most the measure wide, centred, however wide the window (`core/src/settings.rs` `page_style`) | unclear |
+| M7 | After the last page an end page: the book closes into its cover, "Finished", days read, highlights and bookmarks, "Share highlights", "Back to library"; the book is marked 100 % (`BookOpening.kt` `FinishPage`, A spec reader-ui "Финальная страница") | Turning past the last page does nothing; the last page shows the share before it, never 100 % (`page_view.rs` `turn`, `core/src/state.rs` `progress`) | unclear |
+
+## 4. Contents, notes and links
+
+| # | Android | Desktop | Status |
+|---|---|---|---|
+| N1 | Contents full screen: tabs Contents / Bookmarks / Highlights, a "Search in book" row, the book (cover, title, author · N% read), entries with nesting, the current one bold with a dot, page numbers (`TocScreen.kt`) | A side panel (`o`): "Contents", a filter field, the book card, entries with nesting, current bold with a dot, positions in percent; `j`/`k`, `Enter`, `/` (`gtk/src/panels.rs` `Contents`, `macos/Panels.swift` `ContentsPanel`) | intended (keyboard); tabs follow Q1, Q2; numbers follow R1 |
+| N2 | A book without contents lists every chapter, an untitled one as "Chapter N" (`ReaderScreen.kt`, `entries`) | Only titled chapters are listed; untitled ones cannot be reached from the contents (`core/src/model.rs` `Book::contents`) | gap |
+| N3 | A book without a cover gets a generated one (marble or cloth) in the contents (`Covers.kt` `GeneratedCover`) | A plain dark box with the title (`panels.rs` `cover`, `Panels.swift` `cover(of:)`) | unclear |
+| N4 | A note in a bottom sheet: grabber, "NOTE n", text with images and tables, scrolls, closes; the page stays (`NoteSheet.kt`) | The same sheet, the note typeset by the core like the book (`panels.rs` `note`, `Panels.swift` `NoteSheet`, `core/src/layout/page.rs` `layout_note`) | same |
+| N5 | A tap on a marker or link (16 dp slop) wins over the tap zones | `Tab`/`Shift+Tab` focus, `Enter` opens; a click opens (4 px slack) (`page_view.rs` `focus_next`, `click`) | intended (keyboard) |
+| N6 | A link to a short target (≤ 3 blocks and 600 characters: a figure, a table, a paragraph) opens in the note sheet, the page stays (`ReaderScreen.kt` `openRef`, `model/LinkPreview.kt`) | Every link to a place jumps there (`page_view.rs` `open`) | gap |
+| N7 | External links open in the default browser or mail app (`openExternal`) | The same (`gtk::UriLauncher`, `NSWorkspace.open`) | same |
+| N8 | After a big jump (link, contents, bookmark, highlight, search, slider beyond the next page) a pill "← Back · p. N"; it returns to where the first jump of a series started, vanishes after the reader turns two pages on; Back returns (`ReaderViewModel.kt` `leave`/`returnPoint`, `ReaderScreen.kt` `ReturnPill`) | `Ctrl+O` pops a stack of up to 50 places pushed by links, contents and search; nothing on screen says it exists; `[ ] g G` do not push (`page_view.rs` `go_to`, `back`) | unclear |
+| N9 | — (the menu slider) | Chapter keys `]` `[`, chapter start/end `g` `G` `Home` `End` | intended (keyboard) |
+
+## 5. Search
+
+| # | Android | Desktop | Status |
+|---|---|---|---|
+| S1 | Case and ё/е ignored, no-break space = space, soft hyphen does not interrupt, ≥ 2 characters, notes not searched (`model/Search.kt`) | The same, and a space matches any white space (`core/src/search.rs`) | same |
+| S2 | Table cells are searched and the match is highlighted in the cell (`Search.kt`, A spec tables) | Table rows are not searched (`core/src/search.rs`) | gap |
+| S3 | Full screen over the contents: count, snippets (40/80, match bold), chapter · page; a tap jumps, highlights and shows the Back pill; the highlight goes on the next tap; the query is kept (`SearchScreen.kt`) | A side panel (`/`, `⌘F`): the same count and snippets, section · percent; `Enter` jumps and highlights; `n`/`N` next and previous; `Esc` clears the highlight; the query is kept (`panels.rs` `SearchPanel`, `Panels.swift` `SearchPanel`) | intended (keyboard); numbers follow R1 |
+
+## 6. Where the reader is
+
+| # | Android | Desktop | Status |
+|---|---|---|---|
+| R1 | The whole book is typeset in the background; then the foot shows "N of M" for the whole book, and the menu, contents, search and bookmarks show page numbers (`ReaderViewModel.kt` `layout`, `ReaderScreen.kt` `PagedView`) | Only the current and next chapters are typeset; the foot shows "4 / 22 · 37%" — page in chapter / chapter's pages · share of the book; lists show percent (`core/src/layout/page.rs` `render`) | unclear |
+| R2 | No running head: the page has the text and the page number only (A spec reader-ui "Экран чтения без интерфейса") | The chapter title as a running head on every page but the chapter's first (`page.rs` `render`, spec reader-navigation) | unclear |
+| R3 | The menu (middle tap): back, chapter title, author · book, contents; slider with chapter ticks; "Page N of M"; "N min left in chapter" (`ReaderMenu.kt`) | No menu; the window title is the book's title; chapter keys and the contents instead; no time estimate | unclear |
+| R4 | "N% read" in the contents and the library | "N% read" in the contents, the foot and the recent books | same |
+
+## 7. Settings and themes
+
+| # | Android | Desktop | Status |
+|---|---|---|---|
+| C1 | Seven settings in the "Aa" sheet: theme, size, alignment, font, spacing, margins, page turn (`SettingsSheet.kt`) | The same seven in the `s` sheet with keys, plus direct keys `+ − 0 t T m` and the Mac menus (`gtk/src/settings_sheet.rs`, `Panels.swift` `SettingsSheet`) | same |
+| C2 | Six themes: Light, Sepia, Dark, Dawn, Wave, Forest (`ReaderColors.kt`) | The same palettes, colour for colour (`page_view.rs` `THEMES`) | same |
+| C3 | Light until the reader picks a theme (`ReaderSettings.kt`) | Follows the system's light or dark until the reader picks one (`core/src/settings.rs` `theme_index`, `gtk/src/appearance.rs`) | unclear |
+| C4 | A theme change cross-fades in 220 ms (`ReaderScreen.kt` `ThemeCrossfade`) | Instant (`page_view.rs` `show_theme`) | gap |
+| C5 | Fonts: Noto Serif (default; Android's system serif), Literata, PT Serif, Source Serif, PT Sans (`BookFonts.kt`) | PT Serif (default), Literata, Source Serif, PT Sans, all bundled (`core/src/fonts.rs` `Family`) | unclear |
+| C6 | Sizes 15, 16, 17, 18, 20, 22, 24 sp, default 18 | Sizes 16, 18, 20, 22, 24, 27, 30 px, default 20 (`core/src/settings.rs` `TEXT_SIZES`) | unclear |
+| C7 | Spacing 1.45 / 1.62 / 1.85, alignment justified / left | The same | same |
+| C8 | Margins 18 / 28 / 40 dp, the column at most 34 em (tablet-layout) | Margins as the widest column, 38 / 34 / 30 em, and the least side margin, 24 / 48 / 72 px (`core/src/settings.rs` `Margins::column`) | unclear |
+| C9 | Settings global and remembered; an unknown value falls back to the default | The same (`Settings::load`/`save`, spec reader-settings) | same |
+| C10 | The theme colours the page, menu, contents, notes, settings, system bar icons and the library (`MainActivity.kt`) | The page, the panels and the Mac window's appearance; the recent-books window keeps the system look (`gtk/src/main.rs` `recent_window`, `macos/main.swift` `RecentWindow`) | gap |
+
+## 8. Reading position and recent books
+
+| # | Android | Desktop | Status |
+|---|---|---|---|
+| P1 | The position is a `Locator`, restored on reopening, kept through re-layout and rotation (A spec reading-position) | The same, kept through resizing and settings (spec reading-state, spec typesetting) | same |
+| P2 | Book identity: hash of the imported file | Size + hash of the first and last 64 KiB, path as a fallback (`core/src/state.rs` `book_id`) | same |
+| P3 | Written on every page shown (`ReaderViewModel.kt` `positions`) | On opening, 1 s after the last move, on closing (`gtk/src/main.rs` `remember_position`, `main.swift` `savePosition`) | same |
+| P4 | Library: "Continue" card, grid of covers with progress, generated covers, add, search, delete, empty state (`LibraryScreen.kt`, A spec library) | Recent books: up to 20, title, authors, percent; `Enter` opens; no covers, no removing (`gtk/src/main.rs` `recent_window`, `main.swift` `RecentWindow`, File → Open Recent on the Mac) | intended (no library screen) |
+| P5 | Back from a book returns to the library | GTK: closing the last book window quits; macOS: shows the recent books (`main.swift` `onClose`) | gap |
+| P6 | A "Continue" shortcut on the app icon (`ContinueShortcut.kt`) | Open Recent on the Mac; nothing on Linux | intended (platform) |
+
+## 9. Errors
+
+| # | Android | Desktop | Status |
+|---|---|---|---|
+| E1 | "Couldn't open “name”: reason" in the library, reasons: unsupported format, damaged, DRM-protected, no text, file unavailable (`LibraryViewModel.kt` `errorText`, `strings.xml`) | GTK: a line on stderr and no window — opened from a file manager, nothing happens (`gtk/src/main.rs` `open_window`). macOS: an alert "Not a readable book" with the file name, no reason (`main.swift` `open`). The core knows not a book / no text / protected; an unreadable file counts as "not a book" (`core/src/lib.rs` `open`) | gap |
+| E2 | Damaged files keep what could be read | The same (spec fb2-parsing, spec epub-parsing) | same |
+
+## 10. Images and tables
+
+| # | Android | Desktop | Status |
+|---|---|---|---|
+| V1 | A tap on an image at least a third of the column wide opens it full screen: pinch to ×5, double tap ×2.5, pan, swipe down or Back closes (`ImageViewer.kt`, A change image-viewer) | None | gap |
+| V2 | A tap on a table opens it full screen: columns by content, pan both ways, pinch 50–300 % (`TableViewer.kt`, A spec tables) | None; a row taller than the page is cut | gap |
+
+## 11. Bookmarks and highlights
+
+| # | Android | Desktop | Status |
+|---|---|---|---|
+| Q1 | Bookmarks: a tap in the top right corner, a ribbon with cloth physics, a list tab in the contents (A spec bookmarks) | None; planned in [`bookmarks`](../openspec/changes/bookmarks/proposal.md) (1.0): `b`, a mark, a list | gap (planned) |
+| Q2 | Selection by long press, highlights, Copy, Share, export, a Highlights tab (`TextSelection.kt`, A spec quotes) | None — not even copying text | intended (Not planned for 1.0, confirmed) |
+
+## 12. Screen, window and the rest
+
+| # | Android | Desktop | Status |
+|---|---|---|---|
+| X1 | Opening a book plays the cover turning to the marbled endpaper and the title page, hiding the load (`BookOpening.kt`, A spec reader-ui "Жест открытия книги") | The first page appears | unclear |
+| X2 | The screen stays on while reading, for 10 minutes after the last touch (`ReaderScreen.kt` `KeepScreenOn`) | The system blanks the screen and sleeps the display as usual | gap |
+| X3 | Always immersive; system bars come with the menu (`SystemBars`) | A window; `f`/`F11` (`⌃⌘F`) full screen | intended (platform) |
+| X4 | TalkBack reads the page and has next/previous page, bookmark and menu actions (`ReaderScreen.kt` `semantics`) | The page is drawn without accessible text (`page_view.rs`, `PageView.swift`) | unclear |
+| X5 | Interface in English and Russian (A spec localization) | English only; planned in [`localization`](../openspec/changes/localization/proposal.md) (1.0) | gap (planned) |
+| X6 | — | `?` shows the keys and the single support line (`gtk/src/main.rs` `HELP`, `main.swift` `helpText`) | intended (desktop only) |
+
+## 13. Android work not shipped yet
+
+| # | Android | Desktop | Status |
+|---|---|---|---|
+| L1 | Reading log by day, finish dates, history that survives deletion (A change reading-log, tasks open, nothing in the app yet) | None | unclear |
+
+## 14. Between the two desktop shells
+
+Found on the way; the by-hand pass would hit them.
+
+| # | GTK | macOS | Status |
+|---|---|---|---|
+| D1 | Opening a book that is already open opens a second window (`gtk/src/main.rs` `connect_open`) | Brings its window forward (`main.swift` `open`) | gap |
+| D2 | Recent books: `j`/`k`, `Enter`, `q`/`Esc` | Arrows, `Return`, double click; no `j`/`k`, no `Esc` (`main.swift` `RecentWindow`) | gap |
+
+## 15. Not planned for 1.0 — to confirm or reopen
+
+From [roadmap.md](roadmap.md):
+
+| # | Item | Rows |
+|---|---|---|
+| NP1 | PDF | F5 |
+| NP2 | Text selection and quotes (highlights, copy, share) | Q2 |
+| NP3 | A library screen with import and covers; recent books are enough | F8, P4, N3, X1 |
+| NP4 | Dictionaries | (Android: draft change `dictionary`, not decided) |
+| NP5 | Formulas (MathML) | F7 |
+| NP6 | Fixed-layout EPUB | F6 |
+| NP7 | Flatpak (AUR and the `.deb` first) | — |
+| NP8 | A Developer ID, notarisation, Homebrew and the App Store | — |
+| NP9 | Following the Omarchy theme colours | — |
+
+## Decisions
+
+Every gap, unclear and "Not planned" row with its proposal. The maintainer accepted every proposal as written on
+2026-10-16. "Lands in" says where the work goes: this change (`android-parity`), its own change, or nowhere.
+
+| # | Decision | Lands in |
+|---|---|---|
+| T2 | Keep Russian and English patterns for 1.0; other languages stay unhyphenated | — |
+| T3 | Detect the language from the text as Android does, in this change (moved from `localization`) | android-parity |
+| T6, T7 | Bundle a monospace OFL font with Cyrillic (PT Mono) for code blocks and inline code; draw strikethrough | android-parity |
+| M2 | A click in the left or right third of the page turns it; the middle does nothing | android-parity |
+| M6 | Two pages side by side when the window is wider than tall and holds two columns: its own change after 0.4 | `two-page-spread` (1.0) |
+| M7 | A plain end page after the last page ("Finished", title and author), marking the book 100 %; no animation | android-parity |
+| N2 | List untitled chapters as "Chapter N" | android-parity |
+| N3 | Keep the plain cover; generated covers belong to the library | — |
+| N6 | Short link targets in the note sheet, by the Android rule, in the core | android-parity |
+| N8 | Keep the `Ctrl+O` stack and show Android's "← Back · Ctrl+O" pill after a jump, gone after two pages on | android-parity |
+| S2 | Search table rows and highlight the match in the cell | android-parity |
+| R1 | Keep chapter pagination and "4 / 22 · 37%": no whole-book layout on every resize | — |
+| R2 | Keep the running head: without a menu it is the only place the chapter title shows | — |
+| R3 | No menu and no time estimate on desktop | — |
+| C3 | Keep following the system's light or dark | — |
+| C4 | A 200 ms cross-fade on theme change | android-parity |
+| C5 | Keep the four bundled fonts with PT Serif first (Noto Serif is Android's system font, not a choice made for the book) | — |
+| C6 | Keep the desktop sizes (a screen read from further away) | — |
+| C8 | Keep the desktop margins (any window width) | — |
+| C10 | The recent-books window in the reader's theme | android-parity |
+| P5 | GTK shows the recent books after the last book closes, as macOS does | android-parity |
+| E1 | A message in both shells with Android's wording and reason; "file unavailable" apart from "not a book" | android-parity |
+| V1, V2 | One viewer for images and tables (`Tab` stops at them, `Enter` or a click opens, `+`/`−` zoom, arrows pan, `Esc` closes): its own change in 0.4 | `viewer` (0.4) |
+| Q1 | Bookmarks stay in `bookmarks` (1.0) | `bookmarks` (1.0) |
+| X1 | No opening animation on desktop | — |
+| X2 | Keep the screen on while reading, for 10 minutes after the last key, turn or scroll | android-parity |
+| X4 | Screen-reader text of the page: its own change after 1.0 | `accessibility` (after 1.0) |
+| X5 | Localisation stays in `localization` (1.0) | `localization` (1.0) |
+| L1 | Out of scope until the Android app ships it | — |
+| D1, D2 | Make the shells agree: GTK brings an open book forward; the Mac recent list takes `j`/`k`/`Esc` | android-parity |
+| NP1–NP9 | Confirm all | — (roadmap unchanged) |
+
+## By-hand pass
+
+Done at the end of `android-parity` (its tasks, group 6) on the Raspberry Pi 5 (labwc, over VNC) and the M1 MacBook
+Pro, against every row above whose status is "same" or whose decision lands in `android-parity`. One line per row that
+did not pass, with what was seen; "nothing new" when every row passed.
+
+| Machine | Date | Build | Result |
+|---|---|---|---|
+| Raspberry Pi 5 | | | |
+| M1 MacBook Pro | | | |

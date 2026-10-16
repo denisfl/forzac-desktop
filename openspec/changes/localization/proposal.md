@@ -6,7 +6,8 @@ the Android app ships both languages.
 ## What Changes
 
 - All interface strings in English (default) and Russian, chosen by the system locale.
-- Hyphenation by the book's language; a book without a language gets it detected from its text (as on Android).
+- Hyphenation by the book's language (detecting the language of a book that names none moved to `android-parity`).
+- The core's "Chapter N" for untitled chapters in the contents (`android-parity`) worded in the interface language.
 
 ## Capabilities
 
@@ -18,4 +19,4 @@ the Android app ships both languages.
 
 ## Impact
 
-String catalogues in both shells (gettext on Linux, `.strings` on macOS); language detection in the core.
+String catalogues in both shells (gettext on Linux, `.strings` on macOS).
