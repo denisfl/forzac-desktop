@@ -61,6 +61,27 @@ Page turns run in the window server (Core Animation): the app does no work per f
 The rendered pages (`--png`) were checked by eye at scale 1 and 2: justified lines, hyphens drawn, glyph positions
 identical to the macOS shell (the core breaks lines the same way on both).
 
+### Raspberry Pi 5 (real hardware)
+
+Pi 5 Model B (8 GB), Raspberry Pi OS 13 (trixie), GTK 4.18.6, Mesa V3D 7.1 (OpenGL ES, Vulkan 1.3), powered from a Mac's
+USB-C port (no throttling). No monitor: `scripts/pi-headless.sh` starts a second labwc with a headless output rendered
+on the GPU (GLES2), set to 1920×1200 at 120 Hz; the binary was built in `ci/debian.Dockerfile` (same base).
+
+| | `ngl` | `vulkan` | `gl` |
+|---|---|---|---|
+| Start to the first presented page (warm) | 139–165 ms | 152–268 ms | 138–177 ms |
+| 20 animated page turns at 120 Hz | 485–493 frames, 1–4 missed | 489–498 frames, 2–4 missed | 0 missed at the 60 Hz threshold; not rerun at 120 |
+| Same at 60 Hz (`ngl`) | 241 frames, 0 missed | | |
+
+- First run ever: 2.6 s (shader and font caches); then ~140 ms.
+- Idle: 0 CPU ticks in 10 s; RSS 100 MB with the V3D driver.
+- Text at scales 1, 1.25, 1.6, 2 (screenshots with `grim`): crisp, no compositor scaling.
+- All GSK renderers work on this Mesa; the GTK default is fine. No crash or regression like the ones reported for the
+  Pi 4.
+- At 120 Hz a few frames per twenty turns miss vsync, none at 60 Hz. Likely the first frame of a turn, when the next
+  page's text nodes are built and its glyphs uploaded. Next step: build the neighbouring pages' nodes while idle.
+- `--turns` now takes the vsync period from the median frame interval: GTK reported 16.67 ms on the 120 Hz output.
+
 ### Linux distributions in containers
 
 No Omarchy machine or Raspberry Pi was at hand, so the Linux side was checked in containers on an Apple Silicon Mac
@@ -117,7 +138,8 @@ Run `scripts/measure.sh book.fb2.zip` and send the output:
 
 1. **Omarchy laptop** at its native refresh rate (ideally 120 Hz) and fractional scale (1.25 / 1.6): startup, turn
    frames (`missed` should be 0), idle CPU, RSS; the look of text at that scale.
-2. **Raspberry Pi 5**: the same with `GSK_RENDERER=ngl` and `GSK_RENDERER=vulkan`, to choose the default.
+2. **Raspberry Pi 5 with a monitor** (done headless above): the look of text on a real display and Hyprland itself
+   (not packaged for Raspberry Pi OS).
 3. **Russian keyboard layout** on Hyprland: `j`/`k` should still turn pages (GTK matches shortcuts in the first
    layout group too). Containers cannot test this: injected keys (`wtype`) come with their own keymap.
 4. **Hyprland itself**: decorations off, fractional scale, `xdg-open book.fb2` (see above).

@@ -133,10 +133,13 @@ fn report_turns(view: &PageView) {
         println!("turns: no animation frames recorded");
         return;
     }
-    let budget = if refresh > 0 { refresh } else { 16_667 };
+    intervals.sort_unstable();
+    // GTK may report a default refresh interval (16.67 ms) on outputs that run faster; the median frame interval of a
+    // smooth animation is the real vsync period, so take whichever is shorter.
+    let median = intervals[intervals.len() / 2];
+    let budget = if refresh > 0 { refresh.min(median) } else { median };
     // A frame later than 1.5 refresh intervals missed at least one vsync.
     let missed = intervals.iter().filter(|&&i| i as f64 > budget as f64 * 1.5).count();
-    intervals.sort_unstable();
     let pct = |p: f64| intervals[((intervals.len() - 1) as f64 * p) as usize] as f64 / 1000.0;
     println!(
         "turns: refresh {:.2} ms ({:.0} Hz), {} frames, missed {}, interval p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms",
