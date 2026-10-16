@@ -76,6 +76,20 @@ behaviour, packaging and the look of text at fractional scales do carry over.
 | Wayland `app_id` | was `forzac` (the binary name); now `app.truenrth.forzac`, matching the `.desktop` file (`glib::set_prgname`) |
 | Raspberry Pi OS userland (Debian trixie arm64, GTK 4.18.6, `ci/debian.Dockerfile`) | builds and runs; Debian's rustc 1.85 is too old for gtk-rs 0.22 (needs 1.92), so builds use rustup — the binary itself only needs the system GTK |
 
+### A Hyprland VM on this Mac: not stable
+
+To get a DRM device for Hyprland, a Fedora aarch64 VM was run on Apple's Virtualization framework (virtio-gpu,
+NAT, cloud-init; a 150-line Swift runner) on an M1 with macOS 14.5. It did not get as far as Hyprland:
+
+- The guest kernel oopsed within minutes on Fedora 44 (6.19) and Fedora 43 (6.17): a jump to address 0 from JIT-ed
+  seccomp BPF, undefined-instruction panics, then slab corruption and garbage SELinux classes during package
+  downloads. `arm64.nopauth arm64.nobti` and dropping the vsock device did not help.
+- This matches reports of random guest crashes on Apple Virtualization ([UTM #4840](https://github.com/utmapp/UTM/issues/4840),
+  [Apple forums](https://developer.apple.com/forums/thread/708063)); a newer macOS or UTM's QEMU backend may behave
+  differently. Not pursued further: real hardware is the better test.
+- Separately, the host could not reach the VM's NAT address at all (several VPN tunnels on the machine); keep that in
+  mind for SSH to a Raspberry Pi over USB or Wi-Fi from this Mac.
+
 ### `xdg-open` and the default reader
 
 `xdg-mime default app.truenrth.forzac.desktop …` writes the defaults correctly, and GIO (Nautilus, and any GTK file
