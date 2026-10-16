@@ -7,11 +7,13 @@ page shows where the reader is. Everything is reachable from the keyboard; the m
 ## Requirements
 
 ### Requirement: Contents
-`o` SHALL open the contents in a panel over the page: the book's titled sections with their nesting and their position
-in the book (in percent), the entry of the current place selected. `j`/`k` or `↓`/`↑` move the selection, `Enter`
-jumps to the entry and closes the panel, `/` filters the entries by the typed text (ignoring case and the difference
-between "ё" and "е"), `Esc` clears the filter or closes the panel, `o` closes it. A book without contents shows its
-chapters. While the panel is open, keys do not turn pages.
+`o` SHALL open the contents in a panel over the page, laid out as the Android design's contents: a "Contents" title
+with a close button, a filter field, the book (cover, title, author and the share read), then the book's titled
+sections with their nesting and their position in the book (in percent), the current one bold and marked. The entry of
+the current place is selected; `j`/`k` or `↓`/`↑` move the selection, `Enter` jumps to the entry and closes the panel,
+`/` filters the entries by the typed text (ignoring case and the difference between "ё" and "е"), `Esc` clears the
+filter or closes the panel, `o` closes it. A book without contents shows its chapters. While the panel is open, keys do
+not turn pages.
 
 #### Scenario: Jumping to a chapter
 - **WHEN** the reader presses `o`, types `/` and "наука", and presses `Enter`
@@ -27,13 +29,13 @@ focus. Without focus, `Enter` turns the page as before. A click on a marker or l
 - **THEN** the second marker's note opens
 
 ### Requirement: Notes
-A note SHALL open in a panel over the lower part of the page, typeset like the book (same fonts, hyphenation and
-justification) in the current theme, scrollable when long. `Esc` or `Enter` closes it; the reading position does not
-change.
+A note SHALL open in a bottom sheet as in the Android design: a grabber, the label "NOTE" with the note's title, then
+the note typeset like the book (same fonts, hyphenation and justification) in the current theme, scrollable when long.
+`Esc` or `Enter` closes it; the reading position does not change.
 
 #### Scenario: Reading a footnote
 - **WHEN** the reader opens a note marker
-- **THEN** the note's title and text appear over the page and `Esc` returns to the unchanged page
+- **THEN** the note's label and text appear over the page and `Esc` returns to the unchanged page
 
 ### Requirement: Links and the way back
 A link to a place in the book SHALL go to the page where the target starts; a link to a note opens the note; a link
