@@ -36,7 +36,9 @@ struct Turn {
     from: gsk::RenderNode,
     /// +1 forward (the new page comes from the right), −1 back.
     dir: f32,
-    start: i64,
+    /// Frame time of the first frame of the animation; `None` until it is drawn. The frame clock's time at the key
+    /// press is stale after a pause, which would make the first frame jump ahead.
+    start: Option<i64>,
 }
 
 pub struct State {
@@ -207,7 +209,11 @@ impl PageView {
         self.with(|s| {
             snapshot.append_color(&rgba(THEMES[s.theme].1), &graphene::Rect::new(0.0, 0.0, w, h));
             let Some(current) = Self::page_node(s, s.page) else { return };
-            let progress: f32 = s.turn.as_ref().map(|t| ((now - t.start) as f32 / TURN as f32).clamp(0.0, 1.0)).unwrap_or(1.0);
+            let progress: f32 = s
+                .turn
+                .as_mut()
+                .map(|t| ((now - *t.start.get_or_insert(now)) as f32 / TURN as f32).clamp(0.0, 1.0))
+                .unwrap_or(1.0);
             match &s.turn {
                 Some(t) if progress < 1.0 => {
                     let p = 1.0 - (1.0 - progress).powi(3); // ease-out cubic
@@ -241,7 +247,6 @@ impl PageView {
     }
 
     pub fn turn(&self, delta: i32) {
-        let start = WidgetExt::frame_clock(self).map_or(0, |c| c.frame_time());
         let animate = self.with(|s| {
             let Some(layout) = &s.layout else { return false };
             let from = s.nodes.get(&s.page).cloned();
@@ -259,7 +264,7 @@ impl PageView {
             } else {
                 return false;
             }
-            s.turn = from.map(|from| Turn { from, dir: delta.signum() as f32, start });
+            s.turn = from.map(|from| Turn { from, dir: delta.signum() as f32, start: None });
             true
         });
         if animate {
@@ -272,7 +277,7 @@ impl PageView {
                 if let Some(t) = clock.current_timings() {
                     view.imp().refresh.set(t.refresh_interval());
                 }
-                let done = view.with(|s| s.turn.as_ref().is_none_or(|t| clock.frame_time() - t.start >= TURN));
+                let done = view.with(|s| s.turn.as_ref().is_none_or(|t| t.start.is_some_and(|start| clock.frame_time() - start >= TURN)));
                 if done { glib::ControlFlow::Break } else { glib::ControlFlow::Continue }
             });
         }
@@ -314,6 +319,11 @@ impl PageView {
     }
 
     /// Frame intervals of the page turns so far: (refresh interval µs, intervals µs).
+    /// Frame times of each page turn, µs.
+    pub fn turn_frames(&self) -> Vec<Vec<i64>> {
+        self.imp().frames.borrow().clone()
+    }
+
     pub fn turn_stats(&self) -> (i64, Vec<i64>) {
         let intervals = self.imp().frames.borrow().iter().flat_map(|t| t.windows(2).map(|w| w[1] - w[0]).collect::<Vec<_>>()).collect();
         (self.imp().refresh.get(), intervals)

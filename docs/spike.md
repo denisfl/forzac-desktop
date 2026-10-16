@@ -78,8 +78,12 @@ on the GPU (GLES2), set to 1920×1200 at 120 Hz; the binary was built in `ci/deb
 - Text at scales 1, 1.25, 1.6, 2 (screenshots with `grim`): crisp, no compositor scaling.
 - All GSK renderers work on this Mesa; the GTK default is fine. No crash or regression like the ones reported for the
   Pi 4.
-- At 120 Hz a few frames per twenty turns miss vsync, none at 60 Hz. Likely the first frame of a turn, when the next
-  page's text nodes are built and its glyphs uploaded. Next step: build the neighbouring pages' nodes while idle.
+- At 120 Hz 2–4 of ~495 frames per twenty turns come late, none at 60 Hz. All of them are the second frame of a turn
+  (`--turns` prints the index): the frame clock waking up from idle takes two vsyncs before the animation runs at
+  full rate. Frames inside the animation never miss. So it is ~8 ms of extra input latency at the start of a turn, not
+  a stutter in the motion. Building the neighbouring pages ahead of time did not change it (tried and dropped). The
+  animation now starts its clock at its first frame; before, a stale frame time after a pause made the first frame
+  jump ahead.
 - `--turns` now takes the vsync period from the median frame interval: GTK reported 16.67 ms on the 120 Hz output.
 
 ### Linux distributions in containers

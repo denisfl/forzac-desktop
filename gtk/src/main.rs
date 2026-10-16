@@ -141,6 +141,17 @@ fn report_turns(view: &PageView) {
     // A frame later than 1.5 refresh intervals missed at least one vsync.
     let missed = intervals.iter().filter(|&&i| i as f64 > budget as f64 * 1.5).count();
     let pct = |p: f64| intervals[((intervals.len() - 1) as f64 * p) as usize] as f64 / 1000.0;
+    // Where in a turn the misses are: (frame index within the turn, interval ms).
+    let late: Vec<String> = view
+        .turn_frames()
+        .iter()
+        .flat_map(|t| t.windows(2).enumerate().map(|(i, w)| (i + 1, w[1] - w[0])).collect::<Vec<_>>())
+        .filter(|&(_, d)| d as f64 > budget as f64 * 1.5)
+        .map(|(i, d)| format!("#{i}:{:.1}ms", d as f64 / 1000.0))
+        .collect();
+    if !late.is_empty() {
+        println!("late frames (index in turn): {}", late.join(" "));
+    }
     println!(
         "turns: refresh {:.2} ms ({:.0} Hz), {} frames, missed {}, interval p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms",
         budget as f64 / 1000.0,
