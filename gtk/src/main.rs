@@ -29,6 +29,9 @@ struct Options {
 
 fn main() -> glib::ExitCode {
     let start = Instant::now();
+    // The Wayland app_id comes from the program name; it must match the .desktop file name for the compositor,
+    // docks and `StartupWMClass`-less matching to tie windows to Forzac.
+    glib::set_prgname(Some(APP_ID));
     let args: Vec<String> = std::env::args().collect();
     let png = args.iter().position(|a| a == "--png").and_then(|i| args.get(i + 1)).map(PathBuf::from);
     let turns = args.iter().position(|a| a == "--turns").and_then(|i| args.get(i + 1)).and_then(|n| n.parse().ok()).unwrap_or(0);

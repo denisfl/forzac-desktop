@@ -61,6 +61,33 @@ Page turns run in the window server (Core Animation): the app does no work per f
 The rendered pages (`--png`) were checked by eye at scale 1 and 2: justified lines, hyphens drawn, glyph positions
 identical to the macOS shell (the core breaks lines the same way on both).
 
+### Linux distributions in containers
+
+No Omarchy machine or Raspberry Pi was at hand, so the Linux side was checked in containers on an Apple Silicon Mac
+(OrbStack). Rendering is software (Mesa llvmpipe / pixman), so frame timings and memory say nothing about hardware;
+behaviour, packaging and the look of text at fractional scales do carry over.
+
+| Check | Result |
+|---|---|
+| Arch Linux x86_64 (as Omarchy; GTK 4.24.1, `ci/arch.Dockerfile`): `makepkg` from `data/PKGBUILD`, install | builds and installs; 4.5 MiB; depends on `gtk4`, `fontconfig`, `perl-file-mimeinfo` |
+| `desktop-file-validate` | valid |
+| Hyprland 0.56 headless | **does not start without a DRM render node** (`CBackend::create() failed`); the container kernel has no `/dev/dri` and no `vgem`. Needs a VM with virtio-gpu or real hardware |
+| sway 1.12 headless (wlroots, pixman), scales 1, 1.25, 1.6, 2 | runs; the window gets the right logical size (1600×1000 → 1280×800, 1000×625, 800×500); screenshots (`grim`) show crisp text at 1.25 and 1.6: GTK renders at the fractional scale through `wp_fractional_scale_v1`, nothing is stretched by the compositor. Hyprland speaks the same protocol, but its own behaviour is unverified |
+| Wayland `app_id` | was `forzac` (the binary name); now `app.truenrth.forzac`, matching the `.desktop` file (`glib::set_prgname`) |
+| Raspberry Pi OS userland (Debian trixie arm64, GTK 4.18.6, `ci/debian.Dockerfile`) | builds and runs; Debian's rustc 1.85 is too old for gtk-rs 0.22 (needs 1.92), so builds use rustup — the binary itself only needs the system GTK |
+
+### `xdg-open` and the default reader
+
+`xdg-mime default app.truenrth.forzac.desktop …` writes the defaults correctly, and GIO (Nautilus, and any GTK file
+chooser) types books by name: `.fb2` → `application/x-fictionbook+xml`, `.fb2.zip` → `application/x-zip-compressed-fb2`,
+`.fb3` → `application/x-fb3` (our MIME file). So a double click in the file manager opens Forzac.
+
+`xdg-open` on Hyprland is different: outside GNOME and KDE, xdg-utils types files with `mimetype` (from
+`perl-file-mimeinfo`) if present, else with `file`, which looks at content: `.fb2` becomes `text/xml` — **Omarchy opens
+that in nvim** — and `.fb2.zip` becomes `application/zip`. With `perl-file-mimeinfo` installed and
+`/usr/bin/vendor_perl` in `PATH` (Arch adds it in login shells), all three resolve to Forzac. The package now depends on
+`perl-file-mimeinfo`; whether a Hyprland session on Omarchy has `vendor_perl` in `PATH` is to be checked.
+
 ### Found along the way
 
 - `PangoGlyphString::set_size` leaves new entries uninitialised; a stray `is_color` bit made GSK draw some glyphs as
@@ -78,8 +105,9 @@ Run `scripts/measure.sh book.fb2.zip` and send the output:
    frames (`missed` should be 0), idle CPU, RSS; the look of text at that scale.
 2. **Raspberry Pi 5**: the same with `GSK_RENDERER=ngl` and `GSK_RENDERER=vulkan`, to choose the default.
 3. **Russian keyboard layout** on Hyprland: `j`/`k` should still turn pages (GTK matches shortcuts in the first
-   layout group too).
-4. **macOS**: page turn smoothness on a ProMotion display; keys in a Russian layout (they use key codes).
+   layout group too). Containers cannot test this: injected keys (`wtype`) come with their own keymap.
+4. **Hyprland itself**: decorations off, fractional scale, `xdg-open book.fb2` (see above).
+5. **macOS**: page turn smoothness on a ProMotion display; keys in a Russian layout (they use key codes).
 
 ## Next steps
 

@@ -51,6 +51,9 @@ Planned: `o` contents, `/` `n` `N` search, `b` bookmark, `m` page / scroll mode,
 
 ## Default reader on Linux
 
+Outside GNOME and KDE (Hyprland, sway), `xdg-open` needs `perl-file-mimeinfo` to type books by name; the package
+depends on it. Then:
+
 ```bash
 xdg-mime default app.truenrth.forzac.desktop application/epub+zip application/x-fictionbook+xml application/x-zip-compressed-fb2 application/x-fb3
 ```
