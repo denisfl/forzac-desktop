@@ -18,7 +18,7 @@
 ## 4. Pages
 
 - [x] 4.1 "Scroll": the continuous column in tiles; `m` switches keeping the top line; `j`/`k`, `⌃D`/`⌃U`
-- [ ] 4.2 Trackpad: swipe turns a page; scrolling in "Scroll"
+- [x] 4.2 Trackpad: swipe turns a page; scrolling in "Scroll"
 
 ## 5. The app
 
