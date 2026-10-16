@@ -1,0 +1,15 @@
+[package]
+name = "forzac-gtk"
+description = "Forzac for Linux: GTK 4 shell"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "forzac"
+path = "src/main.rs"
+
+[dependencies]
+forzac-core = { path = "../core" }
+gtk = { version = "0.11.5", package = "gtk4" }
+pango = "0.22.9"
+pangocairo = "0.22.9"

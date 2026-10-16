@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- FB3 (LitRes) is not in shared-mime-info; FB2, .fb2.zip and EPUB are. Installed to /usr/share/mime/packages/. -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-fb3">
+    <comment>FictionBook 3 document</comment>
+    <comment xml:lang="ru">Документ FictionBook 3</comment>
+    <sub-class-of type="application/zip"/>
+    <glob pattern="*.fb3"/>
+  </mime-type>
+</mime-info>

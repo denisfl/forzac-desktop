@@ -1,0 +1,28 @@
+# Sketch of the AUR package (not yet tested on Arch). Builds from source; links the system GTK 4.
+pkgname=forzac
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Offline FB2 and EPUB reader with book-quality typesetting"
+arch=(x86_64 aarch64)
+url="https://forzac.truenrth.app"
+license=(TBD)
+depends=(gtk4 fontconfig)
+makedepends=(cargo)
+source=("$pkgname-$pkgver.tar.gz::https://github.com/<owner>/forzac-desktop/archive/v$pkgver.tar.gz")
+sha256sums=(SKIP)
+
+build() {
+  cd "forzac-desktop-$pkgver"
+  cargo build --release --locked -p forzac-gtk
+}
+
+package() {
+  cd "forzac-desktop-$pkgver"
+  install -Dm755 target/release/forzac "$pkgdir/usr/bin/forzac"
+  install -d "$pkgdir/usr/share/forzac"
+  cp -r assets/fonts "$pkgdir/usr/share/forzac/"
+  install -Dm644 data/app.truenrth.forzac.desktop -t "$pkgdir/usr/share/applications/"
+  install -Dm644 data/forzac-mime.xml "$pkgdir/usr/share/mime/packages/forzac.xml"
+  install -Dm644 assets/fonts/pt-serif/OFL.txt "$pkgdir/usr/share/licenses/$pkgname/PT-Serif-OFL.txt"
+  install -Dm644 assets/hyph/hyph-ru.lic.txt assets/hyph/hyph-en-us.lic.txt -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

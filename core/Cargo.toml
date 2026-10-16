@@ -1,0 +1,14 @@
+[package]
+name = "forzac-core"
+description = "Book model, parsers and typesetting engine shared by the Forzac desktop shells"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+# rlib for the GTK shell, staticlib for the macOS shell (C ABI in `ffi.rs`).
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+harfrust = "0.14.0"
+quick-xml = { version = "0.42.0", features = ["encoding"] }
+zip = { version = "9.0.3", default-features = false, features = ["deflate"] }

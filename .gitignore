@@ -1,0 +1,4 @@
+target/
+*.png
+/macos/build/
+/target-png/

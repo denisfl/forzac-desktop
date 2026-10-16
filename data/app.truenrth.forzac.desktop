@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Forzac
+Name[ru]=Форзац
+GenericName=Book Reader
+GenericName[ru]=Читалка
+Comment=Offline reader for FB2 and EPUB books
+Comment[ru]=Офлайн-читалка FB2 и EPUB
+Exec=forzac %F
+Icon=app.truenrth.forzac
+Terminal=false
+Categories=Office;Viewer;Literature;
+MimeType=application/x-fictionbook+xml;application/x-zip-compressed-fb2;application/x-fb3;application/epub+zip;
+Keywords=book;reader;ebook;fb2;epub;читалка;книга;
+StartupNotify=true
