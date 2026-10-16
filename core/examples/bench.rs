@@ -20,13 +20,20 @@ fn main() {
     let first = paginate(&book, 0, &style, &mut typesetter);
     let first_chapter = t.elapsed();
     let t = Instant::now();
-    let pages: usize = (0..book.chapters.len()).map(|c| paginate(&book, c, &style, &mut typesetter).pages.len()).sum();
+    let mut pages = 0;
+    let mut slowest = (std::time::Duration::ZERO, 0, 0);
+    for c in 0..book.chapters.len() {
+        let started = Instant::now();
+        let n = paginate(&book, c, &style, &mut typesetter).pages.len();
+        pages += n;
+        slowest = slowest.max((started.elapsed(), c, n));
+    }
     let all = t.elapsed();
     let t = Instant::now();
     let runs = first.render(0, &style, &mut typesetter);
     let render = t.elapsed();
     println!(
-        "{}: {} chapters, {} pages | parse {:?}, hyphenation patterns {:?}, first chapter {:?} (cold), whole book {:?} (warm cache), render page {:?} ({} runs)",
+        "{}: {} chapters, {} pages | parse {:?}, hyphenation patterns {:?}, first chapter {:?} (cold), whole book {:?} (warm cache), slowest chapter {:?} (#{}, {} pages), render page {:?} ({} runs)",
         book.title,
         book.chapters.len(),
         pages,
@@ -34,6 +41,9 @@ fn main() {
         hyph,
         first_chapter,
         all,
+        slowest.0,
+        slowest.1,
+        slowest.2,
         render,
         runs.len()
     );
