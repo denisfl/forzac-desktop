@@ -1,7 +1,7 @@
 # Parity with Forzac for Android
 
 Every reader feature and behaviour of the Android app next to how the desktop app does it, for the
-[`android-parity`](../openspec/changes/android-parity/proposal.md) change (milestone 0.4). Compared on 2026-10-16:
+[`android-parity`](../openspec/changes/archive/2026-10-16-android-parity/proposal.md) change (milestone 0.4). Compared on 2026-10-16:
 Android at `b6b3664`, desktop at `d55130a`.
 
 **Status:** **same** — the reader sees the same thing (the means may differ); **intended** — a difference the plans
