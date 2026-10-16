@@ -12,5 +12,42 @@
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSHumanReadableCopyright</key><string>Mozilla Public License 2.0</string>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>EPUB book</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key><array><string>org.idpf.epub-container</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>FictionBook</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Owner</string>
+      <key>LSItemContentTypes</key><array><string>org.gribuser.fictionbook</string><string>ru.litres.fb3</string></array>
+    </dict>
+    <dict>
+      <!-- .fb2.zip is a zip to macOS: Forzac is offered in "Open With" without taking zips over. -->
+      <key>CFBundleTypeName</key><string>Zipped FictionBook</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key><array><string>public.zip-archive</string></array>
+    </dict>
+  </array>
+  <key>UTImportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key><string>org.gribuser.fictionbook</string>
+      <key>UTTypeDescription</key><string>FictionBook</string>
+      <key>UTTypeConformsTo</key><array><string>public.xml</string></array>
+      <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>fb2</string></array></dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key><string>ru.litres.fb3</string>
+      <key>UTTypeDescription</key><string>FictionBook 3</string>
+      <key>UTTypeConformsTo</key><array><string>public.zip-archive</string></array>
+      <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>fb3</string></array></dict>
+    </dict>
+  </array>
 </dict>
 </plist>

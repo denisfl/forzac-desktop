@@ -32,12 +32,14 @@ cargo run --release -p forzac-gtk -- book.fb2.zip
 macOS (Xcode command line tools, Rust with the `aarch64-apple-darwin` target):
 
 ```bash
-macos/build.sh && macos/build/Forzac book.fb2.zip
+macos/build.sh && open macos/build/Forzac.app
 ```
 
-A book reopens where it was left; the settings are remembered. Until a theme is chosen, Linux follows the desktop's
-light or dark style. Without a file, the Linux shell lists the
-recent books (`Enter` opens one). The state is kept in `$XDG_DATA_HOME/forzac/state` on Linux and
+`Forzac.app` opens books from Finder ("Open With", or set it as the default app for EPUB and FB2), from `⌘O` and from
+the Dock icon. The build is unsigned: macOS asks once on first open (right-click › Open).
+
+A book reopens where it was left; the settings are remembered. Until a theme is chosen, the theme follows the
+system's light or dark appearance. Without a file, Forzac lists the recent books (`Enter` opens one). The state is kept in `$XDG_DATA_HOME/forzac/state` on Linux and
 `~/Library/Application Support/Forzac/state` on macOS.
 
 Tests: `cargo test -p forzac-core`. Measurements on a Linux desktop: `scripts/measure.sh book.fb2.zip`.
@@ -48,22 +50,22 @@ Tests: `cargo test -p forzac-core`. Measurements on a Linux desktop: `scripts/me
 |---|---|
 | `j` `l` `→` `↓` `Space` `PgDn` `Enter` | next page (Scroll mode: `j` `↓` a line, the others a screen) |
 | `k` `h` `←` `↑` `Shift+Space` `PgUp` `Backspace` | previous page (Scroll mode: `k` `↑` a line, the others a screen) |
-| `Ctrl+D` `Ctrl+U` | Scroll mode: half a screen down / up; Linux |
-| `m` | Slide (pages) or Scroll (a continuous column), keeping the top line; Linux |
+| `Ctrl+D` `Ctrl+U` | Scroll mode: half a screen down / up |
+| `m` | Slide (pages) or Scroll (a continuous column), keeping the top line |
 | `]` `[` | next / previous chapter |
 | `g` `G` `Home` `End` | chapter start / end |
-| `o` | contents (`/` filters, `Enter` jumps); Linux |
-| `Tab` `Shift+Tab`, then `Enter` | note markers and links on the page (or click them); Linux |
-| `Ctrl+O` | back after a jump; Linux |
-| `s` | settings: theme, font, text size, line spacing, alignment, margins, pages (`j` `k` choose, `h` `l` change); Linux |
-| `+` `−` | text size (`0` the default; Linux) |
+| `o` | contents (`/` filters, `Enter` jumps) |
+| `Tab` `Shift+Tab`, then `Enter` | note markers and links on the page (or click them) |
+| `Ctrl+O` (macOS also `⌘[`) | back after a jump |
+| `s` | settings: theme, font, text size, line spacing, alignment, margins, pages (`j` `k` choose, `h` `l` change; macOS also `⌘,`) |
+| `+` `−` `0` | text size, the default size |
 | `t` `T` | theme |
 | `f` `F11` (macOS: `⌃⌘F`) | full screen |
 | `?` | help |
 | `q` `Ctrl+W` (macOS: `⌘W`) | close |
 
-A wheel step turns a page; one touchpad swipe turns one page; in Scroll mode the wheel and touchpad scroll smoothly
-(Linux). Planned: `/` `n` `N` search, `b` bookmark.
+A wheel step turns a page; one touchpad swipe turns one page; in Scroll mode the wheel and touchpad scroll smoothly.
+Keys work in any keyboard layout. Planned: `/` `n` `N` search, `b` bookmark.
 
 ## Default reader on Linux
 

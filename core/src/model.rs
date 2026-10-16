@@ -29,6 +29,20 @@ pub struct Book {
     pub images: HashMap<String, Image>,
 }
 
+impl Book {
+    /// The titled sections for the contents: the book's own, else its titled chapters.
+    pub fn contents(&self) -> Vec<TocEntry> {
+        if !self.toc.is_empty() {
+            return self.toc.clone();
+        }
+        self.chapters
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| Some(TocEntry { title: c.title.clone()?, level: 1, target: Locator { chapter: i, ..Locator::default() } }))
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Chapter {
     pub title: Option<String>,

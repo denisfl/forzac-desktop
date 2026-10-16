@@ -326,33 +326,13 @@ impl PageView {
 
     /// The contents: (title, level, place) of every titled section, or of every chapter when the book has none.
     pub fn contents(&self) -> Vec<(String, u32, Locator)> {
-        self.with(|s| {
-            if s.book.toc.is_empty() {
-                s.book
-                    .chapters
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, c)| Some((c.title.clone()?, 1, Locator { chapter: i, ..Locator::default() })))
-                    .collect()
-            } else {
-                s.book.toc.iter().map(|e| (e.title.clone(), e.level, e.target)).collect()
-            }
-        })
+        self.with(|s| s.book.contents().into_iter().map(|e| (e.title, e.level, e.target)).collect())
     }
 
     /// Note `id` typeset at `width` for the note panel: its node and height, in the current theme and text size.
     pub fn note(&self, id: &str, width: f32) -> Option<(gsk::RenderNode, f32)> {
         self.with(|s| {
-            // The design's note: 17 px with 27 px lines next to an 18 px page.
-            let base = s.settings.page_style(width, 100_000.0);
-            let style = PageStyle {
-                text_size: base.text_size * 17.0 / 18.0,
-                line_height: 27.0 / 17.0,
-                margin_h: 0.0,
-                margin_top: 0.0,
-                margin_bottom: 4.0,
-                ..base
-            };
+            let style = s.settings.note_style(width);
             let mut typesetter = Typesetter::new(style, s.hyphenator.clone());
             let layout = layout_note(&s.book, id, &style, &mut typesetter)?;
             let content = layout.render_body(0, &style);

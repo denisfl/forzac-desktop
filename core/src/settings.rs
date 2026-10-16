@@ -26,7 +26,7 @@ pub enum Spacing {
 }
 
 impl Spacing {
-    const ALL: [Spacing; 3] = [Spacing::Compact, Spacing::Normal, Spacing::Loose];
+    pub const ALL: [Spacing; 3] = [Spacing::Compact, Spacing::Normal, Spacing::Loose];
 
     /// Line height in em.
     pub fn em(self) -> f32 {
@@ -54,7 +54,7 @@ pub enum Align {
 }
 
 impl Align {
-    const ALL: [Align; 2] = [Align::Justified, Align::Left];
+    pub const ALL: [Align; 2] = [Align::Justified, Align::Left];
 
     fn key(self) -> &'static str {
         match self {
@@ -74,7 +74,7 @@ pub enum Margins {
 }
 
 impl Margins {
-    const ALL: [Margins; 3] = [Margins::Narrow, Margins::Medium, Margins::Wide];
+    pub const ALL: [Margins; 3] = [Margins::Narrow, Margins::Medium, Margins::Wide];
 
     /// The widest column in em and the least side margin in pixels.
     fn column(self) -> (f32, f32) {
@@ -102,7 +102,7 @@ pub enum Turning {
 }
 
 impl Turning {
-    const ALL: [Turning; 2] = [Turning::Slide, Turning::Scroll];
+    pub const ALL: [Turning; 2] = [Turning::Slide, Turning::Scroll];
 
     fn key(self) -> &'static str {
         match self {
@@ -205,6 +205,20 @@ impl Settings {
             justify: self.align == Align::Justified,
             family: self.family,
             ..PageStyle::column(width, height, self.text_size(), measure, min_margin)
+        }
+    }
+
+    /// A note in a panel `width` wide: the design's 17 px with 27 px lines next to an 18 px page, no margins (the
+    /// panel has its own).
+    pub fn note_style(&self, width: f32) -> PageStyle {
+        let base = self.page_style(width, 100_000.0);
+        PageStyle {
+            text_size: base.text_size * 17.0 / 18.0,
+            line_height: 27.0 / 17.0,
+            margin_h: 0.0,
+            margin_top: 0.0,
+            margin_bottom: 4.0,
+            ..base
         }
     }
 

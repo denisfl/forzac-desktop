@@ -1,28 +1,22 @@
-//! C ABI for the macOS shell (Swift). Small on purpose; the full version may move to UniFFI.
+//! C ABI for the macOS shell (Swift): plain functions over a document, the reading state and the settings.
 //!
-//! A document owns the book, the typesetter and the current chapter layout. Pointers in a [`ForzacPage`] stay valid
-//! until the next call on the same document.
+//! A document owns the book, the typesetter and the layouts of the chapters typeset for the current style (the current
+//! one and a few around it, for "Scroll"). Pointers in a [`ForzacPage`] stay valid until the next call on the same
+//! document; strings and lists a function returns stay valid as long as the function says.
 
 use std::ffi::{CStr, CString, c_char};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::fonts::{self, FontId, FontSource};
+use crate::fonts::{self, Family, FontId, FontSource};
 use crate::hyphen::Hyphenator;
-use crate::layout::{ChapterLayout, PageContent, PageStyle, Rect, Target, Typesetter, paginate};
-use crate::model::Book;
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct ForzacStyle {
-    pub width: f32,
-    pub height: f32,
-    pub text_size: f32,
-}
+use crate::layout::{ChapterLayout, PageContent, PageStyle, Rect, Target, Typesetter, layout_note, paginate};
+use crate::model::{Book, LinkTarget, Locator};
+use crate::settings::{Align, Margins, Setting, Settings, Spacing, TEXT_SIZES, THEMES, Turning};
 
 #[repr(C)]
 pub struct ForzacRun {
-    /// Font id: 0–3 the bundled faces (regular, italic, bold, bold italic), later ids fallback fonts.
+    /// Font id: 0–3 the bundled faces (regular, italic, bold, bold italic), later ids other families and fallbacks.
     pub font: u16,
     /// 0 text, 1 link, 2 secondary.
     pub ink: u8,
@@ -83,20 +77,198 @@ pub struct ForzacPage {
     pub area_count: u32,
 }
 
+/// Reading position: chapter, block, byte offset in the block. Pages are derived from it.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ForzacLocator {
+    pub chapter: u32,
+    pub block: u32,
+    pub offset: u32,
+}
+
+impl From<Locator> for ForzacLocator {
+    fn from(l: Locator) -> Self {
+        ForzacLocator { chapter: l.chapter as u32, block: l.block as u32, offset: l.offset as u32 }
+    }
+}
+
+impl From<ForzacLocator> for Locator {
+    fn from(l: ForzacLocator) -> Self {
+        Locator { chapter: l.chapter as usize, block: l.block as usize, offset: l.offset as usize }
+    }
+}
+
+/// The reader's settings as indices into the presets (`settings`): `theme` −1 follows the system's light or dark.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ForzacSettings {
+    pub theme: i32,
+    pub size: u32,
+    pub family: u32,
+    pub spacing: u32,
+    pub align: u32,
+    pub margins: u32,
+    pub turning: u32,
+}
+
+fn pick<T: Copy + Default>(all: &[T], i: u32) -> T {
+    all.get(i as usize).copied().unwrap_or_default()
+}
+
+fn index<T: PartialEq>(all: &[T], value: T) -> u32 {
+    all.iter().position(|v| *v == value).unwrap_or(0) as u32
+}
+
+impl From<ForzacSettings> for Settings {
+    fn from(s: ForzacSettings) -> Self {
+        Settings {
+            theme: usize::try_from(s.theme).ok().map(|t| t.min(THEMES.len() - 1)),
+            size: (s.size as usize).min(TEXT_SIZES.len() - 1),
+            family: pick(&Family::ALL, s.family),
+            spacing: pick(&Spacing::ALL, s.spacing),
+            align: pick(&Align::ALL, s.align),
+            margins: pick(&Margins::ALL, s.margins),
+            turning: pick(&Turning::ALL, s.turning),
+        }
+    }
+}
+
+impl From<Settings> for ForzacSettings {
+    fn from(s: Settings) -> Self {
+        ForzacSettings {
+            theme: s.theme.map_or(-1, |t| t as i32),
+            size: s.size as u32,
+            family: index(&Family::ALL, s.family),
+            spacing: index(&Spacing::ALL, s.spacing),
+            align: index(&Align::ALL, s.align),
+            margins: index(&Margins::ALL, s.margins),
+            turning: index(&Turning::ALL, s.turning),
+        }
+    }
+}
+
+/// A contents entry: its title, nesting (1 top level), place and share of the book before it.
+#[repr(C)]
+pub struct ForzacTocEntry {
+    pub title: *const c_char,
+    pub level: u32,
+    pub at: ForzacLocator,
+    pub position: f32,
+}
+
+/// How many chapter layouts a document keeps: the current chapter and its neighbours.
+const KEPT_LAYOUTS: usize = 5;
+
 pub struct Document {
     book: Book,
     path: PathBuf,
     title: CString,
+    authors: CString,
     hyphenator: Option<Arc<Hyphenator>>,
     style: Option<PageStyle>,
     typesetter: Option<Typesetter>,
-    chapter: Option<ChapterLayout>,
+    /// Layouts for `style`, by chapter.
+    layouts: Vec<ChapterLayout>,
+    /// The chapter of the last [`forzac_paginate`].
+    current: usize,
     page: PageContent,
     runs: Vec<ForzacRun>,
     images: Vec<ForzacImage>,
     rules: Vec<ForzacRule>,
     areas: Vec<ForzacArea>,
     targets: Vec<CString>,
+    contents: Vec<ForzacTocEntry>,
+    contents_titles: Vec<CString>,
+    /// The last string returned (a note title, a link's address), kept alive for the caller.
+    text: CString,
+}
+
+impl Document {
+    /// The layout of `chapter` for the current style, typeset now if it is not kept.
+    fn layout(&mut self, chapter: usize) -> Option<&ChapterLayout> {
+        let style = self.style?;
+        let chapter = chapter.min(self.book.chapters.len().checked_sub(1)?);
+        if !self.layouts.iter().any(|l| l.chapter == chapter) {
+            let layout = paginate(&self.book, chapter, &style, self.typesetter.as_mut()?);
+            if self.layouts.len() >= KEPT_LAYOUTS {
+                let current = self.current;
+                if let Some(far) = (0..self.layouts.len()).max_by_key(|&i| self.layouts[i].chapter.abs_diff(current)) {
+                    self.layouts.swap_remove(far);
+                }
+            }
+            self.layouts.push(layout);
+        }
+        self.layouts.iter().find(|l| l.chapter == chapter)
+    }
+
+    /// `self.page` as pointers for the caller.
+    fn publish(&mut self) -> ForzacPage {
+        let p = &self.page;
+        self.runs = p
+            .runs
+            .iter()
+            .map(|r| ForzacRun {
+                font: r.font.0,
+                ink: r.ink as u8,
+                size: r.size,
+                count: r.glyphs.len() as u32,
+                glyphs: r.glyphs.as_ptr(),
+                positions: r.positions.as_ptr().cast(),
+            })
+            .collect();
+        let book = &self.book;
+        self.images = p
+            .images
+            .iter()
+            .filter_map(|i| {
+                book.images.get(&i.id).map(|b| ForzacImage { bytes: b.bytes.as_ptr(), len: b.bytes.len(), rect: i.rect.into() })
+            })
+            .collect();
+        self.rules = p.rules.iter().map(|r| ForzacRule { rect: r.rect.into(), strength: r.strength }).collect();
+        let (kinds, targets): (Vec<u8>, Vec<CString>) = p
+            .areas
+            .iter()
+            .map(|a| match &a.target {
+                Target::Note(id) => (0, cstring(id)),
+                Target::Link(key) => (1, cstring(key)),
+            })
+            .unzip();
+        self.targets = targets;
+        self.areas = p
+            .areas
+            .iter()
+            .zip(kinds)
+            .zip(&self.targets)
+            .map(|((a, kind), target)| ForzacArea { rect: a.rect.into(), kind, target: target.as_ptr() })
+            .collect();
+        ForzacPage {
+            runs: self.runs.as_ptr(),
+            run_count: self.runs.len() as u32,
+            images: self.images.as_ptr(),
+            image_count: self.images.len() as u32,
+            rules: self.rules.as_ptr(),
+            rule_count: self.rules.len() as u32,
+            areas: self.areas.as_ptr(),
+            area_count: self.areas.len() as u32,
+        }
+    }
+
+    /// Keeps `s` alive until the next string and returns it; null for `None`.
+    fn text(&mut self, s: Option<&str>) -> *const c_char {
+        let Some(s) = s else { return std::ptr::null() };
+        self.text = cstring(s);
+        self.text.as_ptr()
+    }
+}
+
+fn cstring(s: &str) -> CString {
+    CString::new(s.replace('\0', "")).unwrap_or_default()
+}
+
+/// # Safety
+/// `s` must be a valid NUL-terminated string.
+unsafe fn str<'a>(s: *const c_char) -> std::borrow::Cow<'a, str> {
+    unsafe { CStr::from_ptr(s) }.to_string_lossy()
 }
 
 /// Opens a book; null when the file is not a readable book.
@@ -107,22 +279,28 @@ pub struct Document {
 pub unsafe extern "C" fn forzac_open(path: *const c_char) -> *mut Document {
     let Ok(path) = unsafe { CStr::from_ptr(path) }.to_str() else { return std::ptr::null_mut() };
     let Ok(book) = crate::open(Path::new(path)) else { return std::ptr::null_mut() };
-    let title = CString::new(book.title.replace('\0', "")).unwrap_or_default();
+    let title = cstring(&book.title);
+    let authors = cstring(&book.authors.join(", "));
     let hyphenator = Hyphenator::for_language(book.language.as_deref()).map(Arc::new);
     Box::into_raw(Box::new(Document {
         book,
         path: PathBuf::from(path),
         title,
+        authors,
         hyphenator,
         style: None,
         typesetter: None,
-        chapter: None,
+        layouts: Vec::new(),
+        current: 0,
         page: PageContent::default(),
         runs: Vec::new(),
         images: Vec::new(),
         rules: Vec::new(),
         areas: Vec::new(),
         targets: Vec::new(),
+        contents: Vec::new(),
+        contents_titles: Vec::new(),
+        text: CString::default(),
     }))
 }
 
@@ -133,6 +311,15 @@ pub unsafe extern "C" fn forzac_title(doc: *const Document) -> *const c_char {
     unsafe { &*doc }.title.as_ptr()
 }
 
+/// The authors, comma separated; empty when unknown.
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`] and not be closed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_authors(doc: *const Document) -> *const c_char {
+    unsafe { &*doc }.authors.as_ptr()
+}
+
 /// # Safety
 /// `doc` must come from [`forzac_open`] and not be closed.
 #[unsafe(no_mangle)]
@@ -140,117 +327,233 @@ pub unsafe extern "C" fn forzac_chapter_count(doc: *const Document) -> u32 {
     unsafe { &*doc }.book.chapters.len() as u32
 }
 
-/// Typesets `chapter` for `style` and returns its page count.
+/// Typesets `chapter` (or takes its kept layout) for a window of `width` × `height` with `settings`, makes it the
+/// current chapter and returns its page count.
 ///
 /// # Safety
-/// `doc` must come from [`forzac_open`]; `style` must point to a valid style.
+/// `doc` must come from [`forzac_open`]; `settings` must point to valid settings.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn forzac_paginate(doc: *mut Document, chapter: u32, style: *const ForzacStyle) -> u32 {
+pub unsafe extern "C" fn forzac_paginate(
+    doc: *mut Document,
+    chapter: u32,
+    width: f32,
+    height: f32,
+    settings: *const ForzacSettings,
+) -> u32 {
     let doc = unsafe { &mut *doc };
-    let s = unsafe { *style };
-    let page = PageStyle::for_window(s.width, s.height, s.text_size);
-    if doc.style != Some(page) {
-        doc.typesetter = Some(Typesetter::new(page, doc.hyphenator.clone()));
-        doc.style = Some(page);
+    let style = Settings::from(unsafe { *settings }).page_style(width, height);
+    if doc.style != Some(style) {
+        doc.typesetter = Some(Typesetter::new(style, doc.hyphenator.clone()));
+        doc.style = Some(style);
+        doc.layouts.clear();
     }
-    let chapter = (chapter as usize).min(doc.book.chapters.len().saturating_sub(1));
-    let layout = paginate(&doc.book, chapter, &page, doc.typesetter.as_mut().unwrap());
-    let count = layout.pages.len() as u32;
-    doc.chapter = Some(layout);
-    count
+    doc.current = (chapter as usize).min(doc.book.chapters.len().saturating_sub(1));
+    doc.layout(doc.current).map_or(0, |l| l.pages.len() as u32)
 }
 
-/// What to draw on `page` of the last paginated chapter.
+/// What to draw on `page` of the current chapter.
 ///
 /// # Safety
 /// `doc` must come from [`forzac_open`] after [`forzac_paginate`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn forzac_page(doc: *mut Document, page: u32) -> ForzacPage {
     let doc = unsafe { &mut *doc };
-    if let (Some(chapter), Some(style), Some(t)) = (&doc.chapter, &doc.style, doc.typesetter.as_mut()) {
-        doc.page = chapter.render((page as usize).min(chapter.pages.len() - 1), style, t);
+    let current = doc.current;
+    if let (Some(style), Some(t)) = (doc.style, doc.typesetter.as_mut())
+        && let Some(layout) = doc.layouts.iter().find(|l| l.chapter == current)
+    {
+        doc.page = layout.render((page as usize).min(layout.pages.len() - 1), &style, t);
     }
-    let p = &doc.page;
-    doc.runs = p
-        .runs
-        .iter()
-        .map(|r| ForzacRun {
-            font: r.font.0,
-            ink: r.ink as u8,
-            size: r.size,
-            count: r.glyphs.len() as u32,
-            glyphs: r.glyphs.as_ptr(),
-            positions: r.positions.as_ptr().cast(),
-        })
-        .collect();
-    let book = &doc.book;
-    doc.images = p
-        .images
-        .iter()
-        .filter_map(|i| book.images.get(&i.id).map(|b| ForzacImage { bytes: b.bytes.as_ptr(), len: b.bytes.len(), rect: i.rect.into() }))
-        .collect();
-    doc.rules = p.rules.iter().map(|r| ForzacRule { rect: r.rect.into(), strength: r.strength }).collect();
-    let (kinds, targets): (Vec<u8>, Vec<CString>) = p
-        .areas
-        .iter()
-        .map(|a| match &a.target {
-            Target::Note(id) => (0, CString::new(id.as_str()).unwrap_or_default()),
-            Target::Link(key) => (1, CString::new(key.as_str()).unwrap_or_default()),
-        })
-        .unzip();
-    doc.targets = targets;
-    doc.areas = p
-        .areas
-        .iter()
-        .zip(kinds)
-        .zip(&doc.targets)
-        .map(|((a, kind), target)| ForzacArea { rect: a.rect.into(), kind, target: target.as_ptr() })
-        .collect();
-    ForzacPage {
-        runs: doc.runs.as_ptr(),
-        run_count: doc.runs.len() as u32,
-        images: doc.images.as_ptr(),
-        image_count: doc.images.len() as u32,
-        rules: doc.rules.as_ptr(),
-        rule_count: doc.rules.len() as u32,
-        areas: doc.areas.as_ptr(),
-        area_count: doc.areas.len() as u32,
-    }
+    doc.publish()
 }
 
-/// Reading position: chapter, block, byte offset in the block. Pages are derived from it.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct ForzacLocator {
-    pub chapter: u32,
-    pub block: u32,
-    pub offset: u32,
-}
-
-/// Where `page` of the last paginated chapter starts.
+/// Where `page` of the current chapter starts.
 ///
 /// # Safety
 /// `doc` must come from [`forzac_open`] after [`forzac_paginate`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn forzac_page_start(doc: *const Document, page: u32) -> ForzacLocator {
-    let doc = unsafe { &*doc };
-    let Some(chapter) = &doc.chapter else { return ForzacLocator { chapter: 0, block: 0, offset: 0 } };
-    let l = chapter.page_start((page as usize).min(chapter.pages.len() - 1));
-    ForzacLocator { chapter: l.chapter as u32, block: l.block as u32, offset: l.offset as u32 }
+pub unsafe extern "C" fn forzac_page_start(doc: *mut Document, page: u32) -> ForzacLocator {
+    let doc = unsafe { &mut *doc };
+    let Some(layout) = doc.layout(doc.current) else { return Locator::default().into() };
+    layout.page_start((page as usize).min(layout.pages.len() - 1)).into()
 }
 
-/// The page of the last paginated chapter that holds `at`.
+/// The page of the current chapter that holds `at`.
 ///
 /// # Safety
 /// `doc` must come from [`forzac_open`] after [`forzac_paginate`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn forzac_page_of(doc: *const Document, at: ForzacLocator) -> u32 {
-    let doc = unsafe { &*doc };
-    let Some(chapter) = &doc.chapter else { return 0 };
-    chapter.page_of(crate::model::Locator { chapter: at.chapter as usize, block: at.block as usize, offset: at.offset as usize }) as u32
+pub unsafe extern "C" fn forzac_page_of(doc: *mut Document, at: ForzacLocator) -> u32 {
+    let doc = unsafe { &mut *doc };
+    doc.layout(doc.current).map_or(0, |l| l.page_of(at.into()) as u32)
 }
 
-/// The bundled font file of `font`, so the shell rasterises exactly what was shaped; null for a fallback font.
+/// The current style's text top margin and line height (logical pixels): the column's top line is at its offset plus
+/// the margin; chapters in "Scroll" are four lines apart.
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`] after [`forzac_paginate`]; `margin_top` and `line_height` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_metrics(doc: *const Document, margin_top: *mut f32, line_height: *mut f32) {
+    let doc = unsafe { &*doc };
+    unsafe {
+        *margin_top = doc.style.map_or(0.0, |s| s.margin_top);
+        *line_height = doc.typesetter.as_ref().map_or(0.0, |t| t.line_height);
+    }
+}
+
+/// The height of `chapter` as one continuous column ("Scroll"), without the page margins.
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`] after [`forzac_paginate`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_flow_height(doc: *mut Document, chapter: u32) -> f32 {
+    unsafe { &mut *doc }.layout(chapter as usize).map_or(0.0, |l| l.flow_height())
+}
+
+/// What to draw of `chapter`'s column between `y0` and `y1` (column coordinates; the text's top margin is added).
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`] after [`forzac_paginate`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_flow(doc: *mut Document, chapter: u32, y0: f32, y1: f32) -> ForzacPage {
+    let doc = unsafe { &mut *doc };
+    if let Some(style) = doc.style {
+        doc.page = doc.layout(chapter as usize).map(|l| l.render_flow(y0, y1, &style)).unwrap_or_default();
+    }
+    doc.publish()
+}
+
+/// Where `at` is in its chapter's column.
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`] after [`forzac_paginate`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_flow_y(doc: *mut Document, at: ForzacLocator) -> f32 {
+    unsafe { &mut *doc }.layout(at.chapter as usize).map_or(0.0, |l| l.flow_y(at.into()))
+}
+
+/// The place at `y` of `chapter`'s column.
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`] after [`forzac_paginate`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_flow_locator(doc: *mut Document, chapter: u32, y: f32) -> ForzacLocator {
+    let doc = unsafe { &mut *doc };
+    doc.layout(chapter as usize).map_or(ForzacLocator { chapter, block: 0, offset: 0 }, |l| l.flow_locator(y).into())
+}
+
+/// The contents: the book's titled sections, else its titled chapters. Valid until the document is closed.
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`]; `count` must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_contents(doc: *mut Document, count: *mut u32) -> *const ForzacTocEntry {
+    let doc = unsafe { &mut *doc };
+    if doc.contents.is_empty() {
+        let entries = doc.book.contents();
+        let places: Vec<Locator> = entries.iter().map(|e| e.target).collect();
+        let positions = crate::state::progress_of(&doc.book, &places);
+        doc.contents_titles = entries.iter().map(|e| cstring(&e.title)).collect();
+        doc.contents = entries
+            .iter()
+            .zip(&doc.contents_titles)
+            .zip(positions)
+            .map(|((e, title), position)| ForzacTocEntry { title: title.as_ptr(), level: e.level, at: e.target.into(), position })
+            .collect();
+    }
+    unsafe { *count = doc.contents.len() as u32 };
+    doc.contents.as_ptr()
+}
+
+/// The share of the book's text before `at`, 0 to 1.
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_progress(doc: *const Document, at: ForzacLocator) -> f32 {
+    crate::state::progress(&unsafe { &*doc }.book, at.into())
+}
+
+/// The cover image's file bytes (owned by the document); null when the book has none.
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`]; `len` must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_cover(doc: *const Document, len: *mut usize) -> *const u8 {
+    let book = &unsafe { &*doc }.book;
+    let Some(image) = book.cover.as_ref().and_then(|id| book.images.get(id)) else { return std::ptr::null() };
+    unsafe { *len = image.bytes.len() };
+    image.bytes.as_ptr()
+}
+
+/// Note `id` typeset for a panel `width` wide (the design's note style for `settings`) into `*out`; returns its
+/// height, or a negative number when the book has no such note.
+///
+/// # Safety
+/// `doc` from [`forzac_open`]; `id` a valid NUL-terminated string; `settings` valid; `out` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_note(
+    doc: *mut Document,
+    id: *const c_char,
+    width: f32,
+    settings: *const ForzacSettings,
+    out: *mut ForzacPage,
+) -> f32 {
+    let doc = unsafe { &mut *doc };
+    let id = unsafe { str(id) };
+    let style = Settings::from(unsafe { *settings }).note_style(width);
+    let mut typesetter = Typesetter::new(style, doc.hyphenator.clone());
+    let Some(layout) = layout_note(&doc.book, &id, &style, &mut typesetter) else { return -1.0 };
+    doc.page = layout.render_body(0, &style);
+    unsafe { *out = doc.publish() };
+    style.margin_top + layout.height(0) + style.margin_bottom
+}
+
+/// Note `id`'s title (its number, as a rule); null when it has none. Valid until the next string from `doc`.
+///
+/// # Safety
+/// `doc` from [`forzac_open`]; `id` a valid NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_note_title(doc: *mut Document, id: *const c_char) -> *const c_char {
+    let doc = unsafe { &mut *doc };
+    let title = doc.book.notes.get(unsafe { str(id) }.as_ref()).and_then(|n| n.title.clone()).filter(|t| !t.trim().is_empty());
+    doc.text(title.as_deref())
+}
+
+/// Where link `key` leads: 1 a place in the book (`*at`), 2 a note (`*text` its id), 3 an address outside the book
+/// (`*text`); 0 for an unknown key. `*text` is valid until the next string from `doc`.
+///
+/// # Safety
+/// `doc` from [`forzac_open`]; `key` a valid NUL-terminated string; `at` and `text` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_link(doc: *mut Document, key: *const c_char, at: *mut ForzacLocator, text: *mut *const c_char) -> u8 {
+    let doc = unsafe { &mut *doc };
+    let (kind, place, s) = match doc.book.links.get(unsafe { str(key) }.as_ref()) {
+        Some(LinkTarget::Place { start, .. }) => (1, Some(*start), None),
+        Some(LinkTarget::Note(id)) => (2, None, Some(id.clone())),
+        Some(LinkTarget::External(url)) => (3, None, Some(url.clone())),
+        None => return 0,
+    };
+    unsafe {
+        if let Some(place) = place {
+            *at = place.into();
+        }
+        *text = doc.text(s.as_deref());
+    }
+    kind
+}
+
+/// Where the bundled assets are (`fonts/<family>/…`): the families other than PT Serif are read from there.
+///
+/// # Safety
+/// `dir` must be a valid NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_set_assets(dir: *const c_char) {
+    fonts::set_assets(PathBuf::from(unsafe { str(dir) }.into_owned()));
+}
+
+/// The bundled font file of `font`, so the shell rasterises exactly what was shaped; null for a font read from a file.
 ///
 /// # Safety
 /// `len` must be writable.
@@ -262,8 +565,9 @@ pub unsafe extern "C" fn forzac_font_data(font: u16, len: *mut usize) -> *const 
     data.as_ptr()
 }
 
-/// The file of fallback font `font`: copies its path (NUL-terminated) into `path` and sets `*index` to the face index
-/// in a collection. False for a bundled face, an unknown id or a path longer than `capacity`.
+/// The file of `font` (another family's face or a fallback font): copies its path (NUL-terminated) into `path` and
+/// sets `*index` to the face index in a collection. False for a bundled face, an unknown id or a path longer than
+/// `capacity`.
 ///
 /// # Safety
 /// `path` must be writable for `capacity` bytes and `index` writable.
@@ -280,6 +584,25 @@ pub unsafe extern "C" fn forzac_font_file(font: u16, path: *mut c_char, capacity
         *index = i;
     }
     true
+}
+
+/// The variation-axis values `font` was shaped at (a variable family's face): up to `capacity` tags (the four letters
+/// big-endian, as Core Text's axis identifiers) and values; returns how many. Zero for a font without variations.
+///
+/// # Safety
+/// `tags` and `values` must be writable for `capacity` items.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_font_variations(font: u16, tags: *mut u32, values: *mut f32, capacity: u32) -> u32 {
+    let Some(FontSource::File { variations, .. }) = fonts::font_source(FontId(font)) else { return 0 };
+    let n = variations.len().min(capacity as usize);
+    for (i, (tag, value)) in variations.iter().take(n).enumerate() {
+        let tag = tag.bytes().chain(std::iter::repeat(b' ')).take(4).fold(0u32, |acc, b| acc << 8 | b as u32);
+        unsafe {
+            *tags.add(i) = tag;
+            *values.add(i) = *value;
+        }
+    }
+    n as u32
 }
 
 /// Whether `font` has colour glyphs (emoji), to be drawn in their own colours.
@@ -315,11 +638,66 @@ pub unsafe extern "C" fn forzac_close(doc: *mut Document) {
     }
 }
 
-/// The reading state (positions, settings) in the file at a path the shell chooses.
+/// The default settings.
+#[unsafe(no_mangle)]
+pub extern "C" fn forzac_settings_default() -> ForzacSettings {
+    Settings::default().into()
+}
+
+/// The theme shown for `settings`: the chosen one, else Light or Dark as the system prefers (an index into the
+/// themes: Light, Sepia, Dark, Dawn, Wave, Forest).
+///
+/// # Safety
+/// `settings` must point to valid settings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_settings_theme(settings: *const ForzacSettings, system_dark: bool) -> u32 {
+    Settings::from(unsafe { *settings }).theme_index(system_dark) as u32
+}
+
+/// The text size of `settings` in logical pixels.
+///
+/// # Safety
+/// `settings` must point to valid settings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_settings_text_size(settings: *const ForzacSettings) -> f32 {
+    Settings::from(unsafe { *settings }).text_size()
+}
+
+/// How many text sizes there are (`ForzacSettings::size` is below it).
+#[unsafe(no_mangle)]
+pub extern "C" fn forzac_settings_size_count() -> u32 {
+    TEXT_SIZES.len() as u32
+}
+
+/// Switches `setting` (0 theme, 1 font, 2 size, 3 spacing, 4 alignment, 5 margins, 6 pages) to its next (`delta` 1)
+/// or previous (−1) value: sizes stop at the ends, the others go round; a theme starts from the one shown.
+///
+/// # Safety
+/// `settings` must point to valid, writable settings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_settings_step(settings: *mut ForzacSettings, setting: u32, delta: i32, system_dark: bool) {
+    const SETTINGS: [Setting; 7] =
+        [Setting::Theme, Setting::Font, Setting::Size, Setting::Spacing, Setting::Align, Setting::Margins, Setting::Turning];
+    let Some(&setting) = SETTINGS.get(setting as usize) else { return };
+    let mut s = Settings::from(unsafe { *settings });
+    s.step(setting, delta, system_dark);
+    unsafe { *settings = s.into() };
+}
+
+/// The reading state (positions, recent books, settings) in the file at a path the shell chooses.
 pub struct State {
     store: crate::state::Store,
-    /// The last setting returned, kept alive for the caller.
-    value: CString,
+    recent: Vec<ForzacRecent>,
+    recent_strings: Vec<CString>,
+}
+
+/// A recently read book.
+#[repr(C)]
+pub struct ForzacRecent {
+    pub path: *const c_char,
+    pub title: *const c_char,
+    pub authors: *const c_char,
+    pub progress: f32,
 }
 
 /// Opens the state file at `path` (it need not exist yet).
@@ -328,8 +706,8 @@ pub struct State {
 /// `path` must be a valid NUL-terminated string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn forzac_state_open(path: *const c_char) -> *mut State {
-    let path = unsafe { CStr::from_ptr(path) }.to_string_lossy().into_owned();
-    Box::into_raw(Box::new(State { store: crate::state::Store::open(path), value: CString::default() }))
+    let path = unsafe { str(path) }.into_owned();
+    Box::into_raw(Box::new(State { store: crate::state::Store::open(path), recent: Vec::new(), recent_strings: Vec::new() }))
 }
 
 /// Where the document's book was left; false when it is not remembered.
@@ -340,7 +718,7 @@ pub unsafe extern "C" fn forzac_state_open(path: *const c_char) -> *mut State {
 pub unsafe extern "C" fn forzac_state_position(state: *const State, doc: *const Document, out: *mut ForzacLocator) -> bool {
     let (state, doc) = unsafe { (&*state, &*doc) };
     let Some(l) = state.store.position(&doc.book, &doc.path) else { return false };
-    unsafe { *out = ForzacLocator { chapter: l.chapter as u32, block: l.block as u32, offset: l.offset as u32 } };
+    unsafe { *out = l.into() };
     true
 }
 
@@ -351,32 +729,48 @@ pub unsafe extern "C" fn forzac_state_position(state: *const State, doc: *const 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn forzac_state_save_position(state: *mut State, doc: *const Document, at: ForzacLocator) -> bool {
     let (state, doc) = unsafe { (&mut *state, &*doc) };
-    let at = crate::model::Locator { chapter: at.chapter as usize, block: at.block as usize, offset: at.offset as usize };
-    state.store.save_position(&doc.book, &doc.path, at).is_ok()
+    state.store.save_position(&doc.book, &doc.path, at.into()).is_ok()
 }
 
-/// A setting's value, valid until the next call on `state`; null when it is not set.
+/// Up to `n` books whose files still exist, the last read first; valid until the next call on `state`.
 ///
 /// # Safety
-/// `state` from [`forzac_state_open`]; `key` a valid NUL-terminated string.
+/// `state` from [`forzac_state_open`]; `count` writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn forzac_state_setting(state: *mut State, key: *const c_char) -> *const c_char {
+pub unsafe extern "C" fn forzac_state_recent(state: *mut State, n: u32, count: *mut u32) -> *const ForzacRecent {
     let state = unsafe { &mut *state };
-    let key = unsafe { CStr::from_ptr(key) }.to_string_lossy();
-    let Some(value) = state.store.setting(&key) else { return std::ptr::null() };
-    state.value = CString::new(value).unwrap_or_default();
-    state.value.as_ptr()
+    let books = state.store.recent(n as usize);
+    state.recent_strings =
+        books.iter().flat_map(|e| [cstring(&e.path.to_string_lossy()), cstring(&e.title), cstring(&e.authors)]).collect();
+    state.recent = books
+        .iter()
+        .zip(state.recent_strings.chunks(3))
+        .map(|(e, s)| ForzacRecent { path: s[0].as_ptr(), title: s[1].as_ptr(), authors: s[2].as_ptr(), progress: e.progress })
+        .collect();
+    unsafe { *count = state.recent.len() as u32 };
+    state.recent.as_ptr()
 }
 
-/// Sets a setting; false when the file cannot be written.
+/// The settings remembered in `state` (defaults for anything missing or unknown); the defaults for a null `state`.
 ///
 /// # Safety
-/// `state` from [`forzac_state_open`]; `key` and `value` valid NUL-terminated strings.
+/// `state` null or from [`forzac_state_open`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn forzac_state_set_setting(state: *mut State, key: *const c_char, value: *const c_char) -> bool {
+pub unsafe extern "C" fn forzac_state_settings(state: *const State) -> ForzacSettings {
+    match unsafe { state.as_ref() } {
+        Some(state) => Settings::load(&state.store).into(),
+        None => Settings::default().into(),
+    }
+}
+
+/// Remembers `settings` in `state`; false when the file cannot be written.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`]; `settings` valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_state_save_settings(state: *mut State, settings: *const ForzacSettings) -> bool {
     let state = unsafe { &mut *state };
-    let (key, value) = unsafe { (CStr::from_ptr(key).to_string_lossy(), CStr::from_ptr(value).to_string_lossy()) };
-    state.store.set_setting(&key, &value).is_ok()
+    Settings::from(unsafe { *settings }).save(&mut state.store).is_ok()
 }
 
 /// # Safety
@@ -387,3 +781,6 @@ pub unsafe extern "C" fn forzac_state_close(state: *mut State) {
         drop(unsafe { Box::from_raw(state) });
     }
 }
+
+#[cfg(test)]
+mod tests;
