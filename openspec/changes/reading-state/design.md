@@ -43,8 +43,8 @@ The share of the book's text before the position: the characters of all blocks b
 block, over all characters. Computed in the core when the position is saved.
 
 ### Writing
-The GTK view reports position changes; the window restarts a 1 s timer on each and saves when it fires and on
-`close-request`. The page-turn animation is 200 ms, so a save never lands inside one. Settings are saved at once when
+The window saves once when the book opens (it becomes a recent book). The GTK view reports position changes; the
+window restarts a 1 s timer on each and saves when it fires and on `close-request`. The page-turn animation is 200 ms, so a save never lands inside one. Settings are saved at once when
 changed (they change rarely). The macOS shell does the same with a `Timer` and `windowWillClose`, through new C ABI
 calls (`forzac_state_*`).
 

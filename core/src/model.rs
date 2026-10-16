@@ -8,6 +8,8 @@ use std::sync::Arc;
 /// A parsed book: metadata, chapters and what they refer to. Chapters are what the reader paginates one at a time.
 #[derive(Debug, Clone, Default)]
 pub struct Book {
+    /// Identity by content, for the reading state: a renamed or moved file is the same book.
+    pub id: String,
     pub title: String,
     pub authors: Vec<String>,
     /// BCP 47 tag from the book, e.g. `ru`. Selects hyphenation patterns.

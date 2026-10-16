@@ -35,6 +35,10 @@ macOS (Xcode command line tools, Rust with the `aarch64-apple-darwin` target):
 macos/build.sh && macos/build/Forzac book.fb2.zip
 ```
 
+A book reopens where it was left; the theme and text size are remembered. Without a file, the Linux shell lists the
+recent books (`Enter` opens one). The state is kept in `$XDG_DATA_HOME/forzac/state` on Linux and
+`~/Library/Application Support/Forzac/state` on macOS.
+
 Tests: `cargo test -p forzac-core`. Measurements on a Linux desktop: `scripts/measure.sh book.fb2.zip`.
 
 ## Keys

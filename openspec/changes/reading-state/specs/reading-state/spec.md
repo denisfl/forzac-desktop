@@ -21,8 +21,8 @@ fall back to the nearest valid place.
 - **THEN** it opens where it was left
 
 ### Requirement: When the state is written
-The position SHALL be written 1 s after the last change and when the window closes; never while a page-turn animation
-runs. A write SHALL replace the file atomically and SHALL keep what other Forzac processes wrote (it re-reads the file
+The position SHALL be written when a book is opened (so it is a recent book even if closed at once), 1 s after the
+last change and when the window closes; never while a page-turn animation runs. A write SHALL replace the file atomically and SHALL keep what other Forzac processes wrote (it re-reads the file
 and changes only its own entries). The measurement flags (`--measure`, `--png`, `--turns`, `--chapter`, `--page`) SHALL
 neither read nor write the state, so measurements do not move the reader's place.
 

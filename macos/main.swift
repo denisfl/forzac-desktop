@@ -5,7 +5,8 @@
 // Low Power Mode handled by the system, nothing drawn while idle.
 //
 // Spike flags: --measure (time to the first presented page), --png out.png (first page), --chapter N, --page N (the
-// page of the chapter --png saves).
+// page of the chapter --png saves); with any of them the reading state is neither read nor written. Positions, the
+// theme and the text size are remembered in ~/Library/Application Support/Forzac/state.
 
 import AppKit
 import CoreText
@@ -108,11 +109,16 @@ final class PageView: NSView {
     let current = CALayer()
     let previous = CALayer()
     var onFirstFrame: ((PageView) -> Void)?
+    /// Called when the reading position changes, and when the theme or text size changes (to save them).
+    var onMoved: (() -> Void)?
+    var onStyle: (() -> Void)?
 
-    init(doc: OpaquePointer, chapter: UInt32) {
+    init(doc: OpaquePointer, at: ForzacLocator, theme: Int, sizeStep: Int) {
         self.doc = doc
-        self.chapter = chapter
-        self.locator = ForzacLocator(chapter: chapter, block: 0, offset: 0)
+        self.chapter = at.chapter
+        self.locator = at
+        self.theme = theme
+        self.sizeStep = sizeStep
         super.init(frame: .zero)
         wantsLayer = true
         layerContentsRedrawPolicy = .never
@@ -147,7 +153,12 @@ final class PageView: NSView {
         if let l = laidOutFor, l.0 == size, l.1 == sizeStep, l.2 == chapter { return }
         var style = ForzacStyle(width: Float(size.width), height: Float(size.height), text_size: textSizes[sizeStep])
         pageCount = forzac_paginate(doc, chapter, &style)
-        page = toLast ? pageCount - 1 : forzac_page_of(doc, locator)
+        if toLast {
+            page = pageCount - 1
+            locator = forzac_page_start(doc, page) // turned back into this chapter: its last page
+        } else {
+            page = forzac_page_of(doc, locator)
+        }
         toLast = false
         laidOutFor = (size, sizeStep, chapter)
         images = [:]
@@ -251,6 +262,7 @@ final class PageView: NSView {
             return
         }
         show(animated: CGFloat(delta.signum()))
+        onMoved?()
     }
 
     /// Keys by physical key code, so they work in any layout (Russian included).
@@ -266,7 +278,7 @@ final class PageView: NSView {
         case 0x05, 0x73: edge(end: false)                                      // g Home
         case 0x18: resize(1)                                                   // = +
         case 0x1B: resize(-1)                                                  // -
-        case 0x11: theme = (theme + (shift ? themes.count - 1 : 1)) % themes.count; images = [:]; show(animated: 0) // t T
+        case 0x11: theme = (theme + (shift ? themes.count - 1 : 1)) % themes.count; images = [:]; show(animated: 0); onStyle?() // t T
         case 0x03: window?.toggleFullScreen(nil)                               // f
         case 0x2C where shift: (NSApp.delegate as? AppDelegate)?.toggleHelp()  // ?
         case 0x35: (NSApp.delegate as? AppDelegate)?.hideHelp()               // Esc
@@ -282,18 +294,21 @@ final class PageView: NSView {
         locator = ForzacLocator(chapter: chapter, block: 0, offset: 0)
         relayout()
         show(animated: 0)
+        onMoved?()
     }
 
     func edge(end: Bool) {
         page = end ? pageCount - 1 : 0
         locator = forzac_page_start(doc, page)
         show(animated: 0)
+        onMoved?()
     }
 
     func resize(_ delta: Int) {
         sizeStep = max(0, min(textSizes.count - 1, sizeStep + delta))
         relayout()
         show(animated: 0)
+        onStyle?()
     }
 
     func savePNG(_ path: String) {
@@ -318,10 +333,14 @@ q  ⌘W    close
 Forzac is free. Support it: forzac.truenrth.app
 """
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var window: NSWindow!
     var help: NSTextField!
     let args = CommandLine.arguments
+    /// The reading state; nil for measurement runs, which neither read nor write it.
+    var state: OpaquePointer?
+    var view: PageView?
+    var saveTimer: Timer?
 
     func value(after flag: String) -> String? {
         guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return nil }
@@ -330,6 +349,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ note: Notification) {
         let png = value(after: "--png")
+        let measuring = args.contains("--measure") || png != nil || args.contains("--chapter") || args.contains("--page")
         let chapter = UInt32(value(after: "--chapter") ?? "0") ?? 0
         guard let path = args.dropFirst().first(where: { !$0.hasPrefix("--") && $0 != png && UInt32($0) == nil }),
               let doc = forzac_open(path) else {
@@ -338,10 +358,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let parsed = Date().timeIntervalSince(processStart)
         let title = String(cString: forzac_title(doc))
-        let view = PageView(doc: doc, chapter: chapter)
+        var at = ForzacLocator(chapter: chapter, block: 0, offset: 0)
+        var theme = 0, size = 2
+        if !measuring {
+            let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            let state = forzac_state_open(support.appendingPathComponent("Forzac/state").path)
+            self.state = state
+            _ = forzac_state_position(state, doc, &at)
+            let setting = { (key: String) in forzac_state_setting(state, key).map { String(cString: $0) } }
+            theme = setting("theme").flatMap { name in themes.firstIndex { $0.0 == name } } ?? 0
+            size = setting("text-size").flatMap { px in textSizes.firstIndex { String(format: "%g", $0) == px } } ?? 2
+        }
+        let view = PageView(doc: doc, at: at, theme: theme, sizeStep: size)
+        self.view = view
+        if let state {
+            // The position 1 s after the last move (and when the window closes); settings at once.
+            view.onMoved = { [weak self] in
+                self?.saveTimer?.invalidate()
+                self?.saveTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: false) { _ in self?.savePosition() }
+            }
+            view.onStyle = { [weak view] in
+                guard let view else { return }
+                _ = forzac_state_set_setting(state, "theme", themes[view.theme].0)
+                _ = forzac_state_set_setting(state, "text-size", String(format: "%g", textSizes[view.sizeStep]))
+            }
+        }
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 980), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = title.isEmpty ? "Forzac" : "\(title) — Forzac"
         window.contentView = view
+        window.delegate = self
+        savePosition() // an opened book is a recent book, even if it is closed without turning a page
         help = NSTextField(labelWithString: helpText)
         help.font = .systemFont(ofSize: 13)
         help.isHidden = true
@@ -372,6 +418,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func hideHelp() { help.isHidden = true }
+
+    func savePosition() {
+        saveTimer?.invalidate()
+        saveTimer = nil
+        guard let state, let view else { return }
+        if !forzac_state_save_position(state, view.doc, view.locator) { fputs("cannot save the reading state\n", stderr) }
+    }
+
+    func windowWillClose(_ notification: Notification) { savePosition() }
+
+    func applicationWillTerminate(_ notification: Notification) { savePosition() }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { true }
 }

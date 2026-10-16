@@ -11,6 +11,7 @@ pub mod hyphen;
 pub mod knuth_plass;
 pub mod layout;
 pub mod model;
+pub mod state;
 mod typography;
 mod xml;
 
@@ -38,6 +39,12 @@ pub fn open(path: &std::path::Path) -> Result<Book, Error> {
 /// Parses a book, the format decided by the content: a zip with `META-INF/container.xml` is EPUB, a zip with a
 /// FictionBook 3 relationship is FB3, anything else is tried as FB2.
 pub fn parse(bytes: &[u8]) -> Result<Book, Error> {
+    let mut book = parse_format(bytes)?;
+    book.id = state::book_id(bytes);
+    Ok(book)
+}
+
+fn parse_format(bytes: &[u8]) -> Result<Book, Error> {
     if bytes.starts_with(b"PK") {
         let files = archive::unzip(bytes, archive::MAX_UNPACKED)?;
         if files.contains_key(epub::CONTAINER) {

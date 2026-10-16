@@ -85,6 +85,7 @@ pub struct ForzacPage {
 
 pub struct Document {
     book: Book,
+    path: PathBuf,
     title: CString,
     hyphenator: Option<Arc<Hyphenator>>,
     style: Option<PageStyle>,
@@ -110,6 +111,7 @@ pub unsafe extern "C" fn forzac_open(path: *const c_char) -> *mut Document {
     let hyphenator = Hyphenator::for_language(book.language.as_deref()).map(Arc::new);
     Box::into_raw(Box::new(Document {
         book,
+        path: PathBuf::from(path),
         title,
         hyphenator,
         style: None,
@@ -310,5 +312,78 @@ pub extern "C" fn forzac_set_fallback(provider: ForzacFallback) {
 pub unsafe extern "C" fn forzac_close(doc: *mut Document) {
     if !doc.is_null() {
         drop(unsafe { Box::from_raw(doc) });
+    }
+}
+
+/// The reading state (positions, settings) in the file at a path the shell chooses.
+pub struct State {
+    store: crate::state::Store,
+    /// The last setting returned, kept alive for the caller.
+    value: CString,
+}
+
+/// Opens the state file at `path` (it need not exist yet).
+///
+/// # Safety
+/// `path` must be a valid NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_state_open(path: *const c_char) -> *mut State {
+    let path = unsafe { CStr::from_ptr(path) }.to_string_lossy().into_owned();
+    Box::into_raw(Box::new(State { store: crate::state::Store::open(path), value: CString::default() }))
+}
+
+/// Where the document's book was left; false when it is not remembered.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`], `doc` from [`forzac_open`]; `out` must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_state_position(state: *const State, doc: *const Document, out: *mut ForzacLocator) -> bool {
+    let (state, doc) = unsafe { (&*state, &*doc) };
+    let Some(l) = state.store.position(&doc.book, &doc.path) else { return false };
+    unsafe { *out = ForzacLocator { chapter: l.chapter as u32, block: l.block as u32, offset: l.offset as u32 } };
+    true
+}
+
+/// Remembers that the document's book is read at `at`; false when the file cannot be written.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`], `doc` from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_state_save_position(state: *mut State, doc: *const Document, at: ForzacLocator) -> bool {
+    let (state, doc) = unsafe { (&mut *state, &*doc) };
+    let at = crate::model::Locator { chapter: at.chapter as usize, block: at.block as usize, offset: at.offset as usize };
+    state.store.save_position(&doc.book, &doc.path, at).is_ok()
+}
+
+/// A setting's value, valid until the next call on `state`; null when it is not set.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`]; `key` a valid NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_state_setting(state: *mut State, key: *const c_char) -> *const c_char {
+    let state = unsafe { &mut *state };
+    let key = unsafe { CStr::from_ptr(key) }.to_string_lossy();
+    let Some(value) = state.store.setting(&key) else { return std::ptr::null() };
+    state.value = CString::new(value).unwrap_or_default();
+    state.value.as_ptr()
+}
+
+/// Sets a setting; false when the file cannot be written.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`]; `key` and `value` valid NUL-terminated strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_state_set_setting(state: *mut State, key: *const c_char, value: *const c_char) -> bool {
+    let state = unsafe { &mut *state };
+    let (key, value) = unsafe { (CStr::from_ptr(key).to_string_lossy(), CStr::from_ptr(value).to_string_lossy()) };
+    state.store.set_setting(&key, &value).is_ok()
+}
+
+/// # Safety
+/// `state` must come from [`forzac_state_open`]; it is invalid afterwards.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_state_close(state: *mut State) {
+    if !state.is_null() {
+        drop(unsafe { Box::from_raw(state) });
     }
 }

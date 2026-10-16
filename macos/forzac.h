@@ -77,3 +77,13 @@ bool forzac_font_file(uint16_t font, char *path, size_t capacity, uint32_t *inde
 bool forzac_font_is_color(uint16_t font);
 void forzac_set_fallback(ForzacFallback provider);
 void forzac_close(ForzacDocument *doc);
+
+// Reading state: positions and settings in the file at `path`.
+typedef struct ForzacState ForzacState;
+ForzacState *forzac_state_open(const char *path);
+bool forzac_state_position(const ForzacState *state, const ForzacDocument *doc, ForzacLocator *out);
+bool forzac_state_save_position(ForzacState *state, const ForzacDocument *doc, ForzacLocator at);
+// Valid until the next call on `state`; NULL when not set.
+const char *forzac_state_setting(ForzacState *state, const char *key);
+bool forzac_state_set_setting(ForzacState *state, const char *key, const char *value);
+void forzac_state_close(ForzacState *state);

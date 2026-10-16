@@ -17,7 +17,7 @@ use gtk::{gdk, gio, glib, graphene, gsk, prelude::*};
 use crate::fonts::Fonts;
 
 /// Text size presets in logical pixels: steps, not a slider.
-const TEXT_SIZES: [f32; 7] = [16.0, 18.0, 20.0, 22.0, 24.0, 27.0, 30.0];
+pub const TEXT_SIZES: [f32; 7] = [16.0, 18.0, 20.0, 22.0, 24.0, 27.0, 30.0];
 
 /// Background, ink and link ink of the six themes (docs: the Android app's palettes).
 pub const THEMES: [(&str, u32, u32, u32); 6] = [
@@ -111,6 +111,8 @@ mod imp {
         pub frames: RefCell<Vec<Vec<i64>>>,
         pub refresh: std::cell::Cell<i64>,
         pub on_first_frame: RefCell<Option<FirstFrame>>,
+        /// Called when the reading position changes.
+        pub on_moved: RefCell<Option<Box<dyn Fn()>>>,
     }
 
     #[glib::object_subclass]
@@ -156,10 +158,11 @@ glib::wrapper! {
 }
 
 impl PageView {
-    pub fn new(book: Book, chapter: usize) -> Self {
+    /// A view of `book` at `at`, in theme `theme` (index in `THEMES`) and text size `size_step` (index in `TEXT_SIZES`).
+    pub fn new(book: Book, at: Locator, theme: usize, size_step: usize) -> Self {
         let view: Self = glib::Object::new();
         let hyphenator = Hyphenator::for_language(book.language.as_deref()).map(Arc::new);
-        let chapter = chapter.min(book.chapters.len().saturating_sub(1));
+        let chapter = at.chapter.min(book.chapters.len().saturating_sub(1));
         *view.imp().state.borrow_mut() = Some(State {
             book: Arc::new(book),
             hyphenator,
@@ -173,10 +176,10 @@ impl PageView {
             textures: HashMap::new(),
             style: None,
             page: 0,
-            locator: Locator { chapter, ..Locator::default() },
+            locator: Locator { chapter, ..at },
             to_last: false,
-            size_step: 2,
-            theme: 0,
+            size_step: size_step.min(TEXT_SIZES.len() - 1),
+            theme: theme.min(THEMES.len() - 1),
             nodes: HashMap::new(),
             turn: None,
         });
@@ -184,6 +187,31 @@ impl PageView {
         view.set_vexpand(true);
         view.set_focusable(true);
         view
+    }
+
+    /// Calls `f` whenever the reading position changes (to save it).
+    pub fn connect_moved(&self, f: impl Fn() + 'static) {
+        *self.imp().on_moved.borrow_mut() = Some(Box::new(f));
+    }
+
+    fn moved(&self) {
+        if let Some(f) = self.imp().on_moved.borrow().as_ref() {
+            f();
+        }
+    }
+
+    /// The reading position: where the current page starts.
+    pub fn locator(&self) -> Locator {
+        self.with(|s| s.locator)
+    }
+
+    pub fn book(&self) -> Arc<Book> {
+        self.with(|s| s.book.clone())
+    }
+
+    /// The theme and text size, as indices in `THEMES` and `TEXT_SIZES`.
+    pub fn style(&self) -> (usize, usize) {
+        self.with(|s| (s.theme, s.size_step))
     }
 
     /// Runs once, after the first frame with a page is presented (measurements, `--png`).
@@ -218,7 +246,12 @@ impl PageView {
                 Some(i) => s.neighbours.swap_remove(i),
                 None => paginate(&s.book, s.chapter, &style, s.typesetter.as_mut().unwrap()),
             };
-            s.page = if std::mem::take(&mut s.to_last) { layout.pages.len() - 1 } else { layout.page_of(s.locator) };
+            if std::mem::take(&mut s.to_last) {
+                s.page = layout.pages.len() - 1;
+                s.locator = layout.page_start(s.page); // turned back into this chapter: its last page
+            } else {
+                s.page = layout.page_of(s.locator);
+            }
             if let Some(old) = s.layout.replace(layout) {
                 s.neighbours.push(old);
             }
@@ -403,6 +436,7 @@ impl PageView {
             true
         });
         if animate {
+            self.moved();
             self.imp().frames.borrow_mut().push(Vec::new());
             self.add_tick_callback(move |view, clock| {
                 view.queue_draw();
@@ -426,6 +460,7 @@ impl PageView {
             s.locator = Locator { chapter: target, ..Locator::default() };
             s.turn = None;
         });
+        self.moved();
         self.queue_draw();
     }
 
@@ -437,6 +472,7 @@ impl PageView {
                 s.turn = None;
             }
         });
+        self.moved();
         self.queue_draw();
     }
 
