@@ -179,10 +179,9 @@ pub(crate) fn read(archive: &HashMap<String, Vec<u8>>) -> Result<Book, Error> {
     let images = opf
         .items
         .iter()
-        .filter(|i| i.media_type.starts_with("image/") && i.media_type != "image/svg+xml")
         .filter_map(|i| {
             let bytes = files.get(i.path.as_str()).filter(|b| !b.is_empty())?;
-            Some((i.path.clone(), Image { content_type: i.media_type.clone(), bytes: bytes.to_vec() }))
+            Some((i.path.clone(), Image { content_type: image_type(i, &files)?, bytes: bytes.to_vec() }))
         })
         .collect();
 
@@ -311,7 +310,7 @@ fn read_opf(files: &HashMap<&str, &[u8]>) -> Result<Opf, Error> {
         }
     }
 
-    let images = || items.iter().filter(|i| i.media_type.starts_with("image/"));
+    let images = || items.iter().filter(|i| image_type(i, files).is_some());
     let cover = images()
         .find(|i| i.properties.split_whitespace().any(|p| p == "cover-image"))
         .or_else(|| images().find(|i| Some(&i.id) == cover_id.as_ref()))
@@ -326,6 +325,27 @@ fn read_opf(files: &HashMap<&str, &[u8]>) -> Result<Opf, Error> {
         .or_else(|| items.iter().find(|i| i.media_type == "application/x-dtbncx+xml"))
         .map(|i| i.path.clone());
     Ok(Opf { title: collapse(&title), authors, language: language.map(|l| l.trim().to_owned()), description, items, spine, ncx, cover })
+}
+
+/// The image type of a manifest item: its declared `image/*` type (SVG is read as a document), or, when the manifest
+/// labels it otherwise (`application/octet-stream`), the raster type its bytes start with.
+fn image_type(item: &Item, files: &HashMap<&str, &[u8]>) -> Option<String> {
+    if item.media_type.starts_with("image/") {
+        return (item.media_type != "image/svg+xml").then(|| item.media_type.clone());
+    }
+    let bytes = files.get(item.path.as_str())?;
+    let kind = if bytes.starts_with(b"\xFF\xD8\xFF") {
+        "image/jpeg"
+    } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        "image/png"
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        "image/gif"
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        "image/webp"
+    } else {
+        return None;
+    };
+    Some(kind.to_owned())
 }
 
 /// The first image a cover document shows (or the document itself, when the guide points to an image).

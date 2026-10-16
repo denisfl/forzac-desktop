@@ -225,6 +225,40 @@ fn several_images_are_not_a_cover() {
 }
 
 #[test]
+fn mislabelled_raster_images_are_recognised_by_content() {
+    let mut e = docs(&[(
+        "a.xhtml",
+        r#"<p>Схема</p><p><img src="img/1.jpg"/><img src="img/2.png"/><img src="img/3.gif"/><img src="img/4.webp"/></p>"#,
+    )]);
+    e.manifest = ["1.jpg", "2.png", "3.gif", "4.webp", "5.svg", "6.bin"]
+        .iter()
+        .enumerate()
+        .map(|(i, n)| format!(r#"<item id="m{i}" href="img/{n}" media-type="application/octet-stream"/>"#))
+        .collect();
+    e.binaries = vec![
+        ("OPS/img/1.jpg", b"\xFF\xD8\xFF\xE0 jpeg".to_vec()),
+        ("OPS/img/2.png", b"\x89PNG\r\n\x1a\n png".to_vec()),
+        ("OPS/img/3.gif", b"GIF89a gif".to_vec()),
+        ("OPS/img/4.webp", b"RIFF\0\0\0\0WEBPVP8 ".to_vec()),
+        ("OPS/img/5.svg", b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>".to_vec()),
+        ("OPS/img/6.bin", b"RIFF\0\0\0\0WAVE".to_vec()),
+    ];
+    let b = book(e);
+    let mut types: Vec<(&str, &str)> = b.images.iter().map(|(k, i)| (k.as_str(), i.content_type.as_str())).collect();
+    types.sort();
+    assert_eq!(
+        types,
+        [
+            ("OPS/img/1.jpg", "image/jpeg"),
+            ("OPS/img/2.png", "image/png"),
+            ("OPS/img/3.gif", "image/gif"),
+            ("OPS/img/4.webp", "image/webp"),
+            ("OPS/img/cover.jpg", "image/jpeg"),
+        ]
+    );
+}
+
+#[test]
 fn toc_anchors_point_into_chapter() {
     let mut e = docs(&[("a.xhtml", r#"<h1>Глава</h1><p>Раз</p><h2 id="s2">Раздел</h2><p>Два</p>"#)]);
     e.ncx = vec![("Глава", "a.xhtml"), ("Раздел", "a.xhtml#s2")];
