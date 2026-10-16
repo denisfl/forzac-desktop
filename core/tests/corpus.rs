@@ -24,14 +24,47 @@ fn every_fb2_book_parses() {
         eprintln!("skipped: set FORZAC_CORPUS to a directory of books");
         return;
     };
-    let failures: Vec<String> = books
-        .iter()
-        .filter_map(|path| match forzac_core::open(path) {
-            Ok(book) if !book.chapters.is_empty() => None,
-            Ok(_) => Some(format!("{}: no chapters", path.display())),
-            Err(e) => Some(format!("{}: {e:?}", path.display())),
-        })
-        .collect();
-    eprintln!("{} FB2 books, {} failed", books.len(), failures.len());
+    let mut failures = Vec::new();
+    let (mut notes, mut images, mut links, mut tables, mut chapters, mut pages) = (0, 0, 0, 0, 0, 0);
+    for path in &books {
+        match forzac_core::open(path) {
+            Ok(book) if !book.chapters.is_empty() => {
+                pages += typeset_all(&book);
+                chapters += book.chapters.len();
+                notes += book.notes.len();
+                images += book.images.len();
+                links += book.links.len();
+                tables += book
+                    .chapters
+                    .iter()
+                    .flat_map(|c| &c.blocks)
+                    .filter(|b| matches!(b, forzac_core::Block::TableRow { row: 0, .. }))
+                    .count();
+            }
+            Ok(_) => failures.push(format!("{}: no chapters", path.display())),
+            Err(e) => failures.push(format!("{}: {e:?}", path.display())),
+        }
+    }
+    eprintln!(
+        "{} FB2 books, {} failed; {chapters} chapters, {pages} pages, {notes} notes, {images} images, {links} links, {tables} tables",
+        books.len(),
+        failures.len()
+    );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Lays out every chapter and renders every page: the whole chain must hold for real books. Returns the page count.
+fn typeset_all(book: &forzac_core::Book) -> usize {
+    let style = forzac_core::PageStyle::for_window(760.0, 980.0, 20.0);
+    let hyphenator = forzac_core::hyphen::Hyphenator::for_language(book.language.as_deref()).map(std::rc::Rc::new);
+    let mut typesetter = forzac_core::Typesetter::new(style, hyphenator);
+    let mut pages = 0;
+    for chapter in 0..book.chapters.len() {
+        let layout = forzac_core::paginate(book, chapter, &style, &mut typesetter);
+        for page in 0..layout.pages.len() {
+            assert!(!layout.render(page, &style, &mut typesetter).is_empty());
+        }
+        pages += layout.pages.len();
+    }
+    pages
 }

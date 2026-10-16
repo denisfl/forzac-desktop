@@ -9,11 +9,13 @@ on Linux, so the shared core API is settled before the second shell catches up.
 
 ## Milestone 0.2 — a book you can read every day on Linux
 
+FB2 comes before typesetting: notes, images, links and tables have to be in the model before they can be drawn.
+
 | # | Change | What | Done when | Size |
 |---|---|---|---|---|
 | 1 | `project-setup` | Licence, public repository, CI (fmt, clippy, tests; Linux x86_64 and aarch64, macOS arm64 builds), contributor docs, `CLAUDE.md` | A pull request runs all checks; the repository can be published | 3–4 d |
-| 2 | `typesetting-complete` | Images, footnote markers, links, tables, glyph fallback for characters the bundled fonts lack, background layout of the next chapters, layout cache | A real book's chapters render like the Android app; no `.notdef` boxes | 2–3 w |
-| 3 | `fb2-complete` | Full FB2: notes bodies, images, links, tables, broken and truncated files, encodings; a corpus test | Every FB2 in the local corpus opens | 1 w |
+| 2 | `fb2-complete` | Full FB2: notes bodies, images, links, tables, broken and truncated files, encodings; a corpus test | Every FB2 in the local corpus opens | 1 w |
+| 3 | `typesetting-complete` | Images, footnote markers, links, tables, glyph fallback for characters the bundled fonts lack, background layout of the next chapters, layout cache | A real book's chapters render like the Android app; no `.notdef` boxes | 2–3 w |
 | 4 | `epub` | EPUB 2/3 and FB3: spine, contents, notes, images; format detection by content | Every EPUB in the local corpus opens | 1.5–2 w |
 | 5 | `reading-state` | Reading position per book, reopening where you left off, recent books, settings storage | Closing and reopening a book returns to the same line | 3–4 d |
 | 6 | `reader-navigation` | Contents (`o`), footnotes, internal links with a way back, progress | A book can be read end to end with the keyboard only | 1–1.5 w |

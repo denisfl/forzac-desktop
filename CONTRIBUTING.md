@@ -55,7 +55,8 @@ any network, with nothing to configure on the Mac.
 Once on the Pi: `sudo raspi-config nonint do_vnc 0`, then in `/etc/wayvnc/config` set `address=127.0.0.1` and add
 `relax_encryption=true`, and `sudo systemctl restart wayvnc`. VNC then listens on the Pi only; `pi-vnc.sh` reaches it
 through an SSH tunnel, which also encrypts it. Judge text quality and animation on a real display or with
-`scripts/pi-headless.sh`, not over VNC (it compresses the picture).
+`scripts/pi-headless.sh`, not over VNC or Pi Connect: the picture is compressed, and while the desktop is shared the
+compositor copies every frame — page turns measured ~40 fps in a shared session against a steady 60/120 Hz without.
 
 ## Checks
 

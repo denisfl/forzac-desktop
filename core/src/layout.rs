@@ -146,7 +146,8 @@ impl Typesetter {
         Typesetter { style, shaper: Shaper::new(), hyphenator, line_height }
     }
 
-    pub fn layout(&mut self, block: &Block) -> BlockLayout {
+    /// `None` for blocks the typesetter does not draw yet (images, tables: `typesetting-complete`).
+    pub fn layout(&mut self, block: &Block) -> Option<BlockLayout> {
         let w = self.style.text_width();
         let lh = self.line_height;
         let half = lh / 2.0;
@@ -168,7 +169,8 @@ impl Typesetter {
         };
         let justify = self.style.justify;
         match block {
-            Block::EmptyLine => BlockLayout {
+            Block::Image { .. } | Block::TableRow { .. } => None,
+            Block::EmptyLine => Some(BlockLayout {
                 lines: Vec::new(),
                 line_starts: Vec::new(),
                 x: 0.0,
@@ -178,8 +180,8 @@ impl Typesetter {
                 space_before: 0.0,
                 space_after: 0.0,
                 keep_with_next: false,
-            },
-            Block::Heading { text, level } => self.make(
+            }),
+            Block::Heading { text, level } => Some(self.make(
                 text,
                 Spec {
                     align: Align::Center,
@@ -193,7 +195,7 @@ impl Typesetter {
                     line_scale: 1.15 / self.style.line_height,
                     ..base
                 },
-            ),
+            )),
             Block::Paragraph { text, kind } => {
                 let spec = match kind {
                     Kind::Body => Spec { justify, indent: true, ..base },
@@ -247,7 +249,7 @@ impl Typesetter {
                         ..base
                     },
                 };
-                self.make(text, spec)
+                Some(self.make(text, spec))
             }
         }
     }
@@ -570,7 +572,8 @@ impl ChapterLayout {
     /// Where page `i` starts in the text: the reading position to restore after a re-layout.
     pub fn page_start(&self, i: usize) -> Locator {
         let s = self.pages[i].slices[0];
-        Locator { chapter: self.chapter, block: s.block, offset: self.blocks[s.layout].line_starts.get(s.line_start).copied().unwrap_or(0) }
+        let offset = self.blocks.get(s.layout).and_then(|b| b.line_starts.get(s.line_start)).copied().unwrap_or(0);
+        Locator { chapter: self.chapter, block: s.block, offset }
     }
 
     /// The page that contains `at` (the last one starting at or before it).
@@ -613,7 +616,9 @@ impl ChapterLayout {
 /// Paginates a chapter: a port of the Android `Paginator`, which needs only line counts and heights from its layouts.
 pub fn paginate(book: &Book, chapter: usize, style: &PageStyle, typesetter: &mut Typesetter) -> ChapterLayout {
     let model = &book.chapters[chapter].blocks;
-    let blocks: Vec<BlockLayout> = model.iter().map(|b| typesetter.layout(b)).collect();
+    // Layouts paired with their block index in the chapter: blocks not drawn yet have no layout.
+    let laid: Vec<(usize, BlockLayout)> = model.iter().enumerate().filter_map(|(i, b)| typesetter.layout(b).map(|l| (i, l))).collect();
+    let blocks: Vec<&BlockLayout> = laid.iter().map(|(_, l)| l).collect();
     let page_height = style.text_height();
     let lh = typesetter.line_height;
     let mut pages = Vec::new();
@@ -629,7 +634,7 @@ pub fn paginate(book: &Book, chapter: usize, style: &PageStyle, typesetter: &mut
         *prev = None;
     };
 
-    for (index, block) in blocks.iter().enumerate() {
+    for (index, &block) in blocks.iter().enumerate() {
         if block.lines.is_empty() {
             // An empty line is not needed at the top of a page.
             if y > 0.0 && y + block.height() <= page_height {
@@ -639,7 +644,7 @@ pub fn paginate(book: &Book, chapter: usize, style: &PageStyle, typesetter: &mut
             continue;
         }
         if y > 0.0 {
-            y += match prev.map(|p| &blocks[p]) {
+            y += match prev.map(|p| blocks[p]) {
                 None => block.space_before,
                 Some(p) if p.group == block.group => 0.0,
                 Some(p) => p.space_after.max(block.space_before),
@@ -672,7 +677,7 @@ pub fn paginate(book: &Book, chapter: usize, style: &PageStyle, typesetter: &mut
                     end = end.max(line + 1); // taller than a page: draw as is
                 }
             }
-            slices.push(Slice { layout: index, block: index, line_start: line, line_end: end, top: y });
+            slices.push(Slice { layout: index, block: laid[index].0, line_start: line, line_end: end, top: y });
             y += (end - line) as f32 * block.line_height;
             line = end;
             if line < lines {
@@ -685,7 +690,7 @@ pub fn paginate(book: &Book, chapter: usize, style: &PageStyle, typesetter: &mut
     if pages.is_empty() {
         pages.push(Page { chapter, slices: vec![Slice { layout: 0, block: 0, line_start: 0, line_end: 0, top: 0.0 }] });
     }
-    ChapterLayout { chapter, blocks, pages }
+    ChapterLayout { chapter, blocks: laid.into_iter().map(|(_, l)| l).collect(), pages }
 }
 
 #[cfg(test)]
@@ -699,7 +704,7 @@ mod tests {
         let blocks = (0..paragraphs)
             .map(|_| Block::Paragraph { text: StyledText { text: text.into(), styles: vec![] }, kind: Kind::Body })
             .collect();
-        Book { title: "T".into(), authors: vec![], language: Some("ru".into()), chapters: vec![Chapter { title: None, blocks }] }
+        Book { title: "T".into(), language: Some("ru".into()), chapters: vec![Chapter { title: None, blocks }], ..Book::default() }
     }
 
     #[test]
@@ -707,7 +712,7 @@ mod tests {
         let style = PageStyle::for_window(600.0, 900.0, 20.0);
         let mut t = Typesetter::new(style, Hyphenator::for_language(Some("ru")).map(Rc::new));
         let b = &book(1).chapters[0].blocks[0];
-        let layout = t.layout(b);
+        let layout = t.layout(b).unwrap();
         assert!(layout.lines.len() >= 3);
         // Every line but the last ends at the right edge of the column (a hyphen included).
         let right = |line: &Vec<GlyphRun>| line.iter().flat_map(|r| r.positions.iter()).map(|p| p[0]).fold(0.0f32, f32::max);
