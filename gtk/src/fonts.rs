@@ -54,7 +54,7 @@ unsafe extern "C" {
 }
 
 /// Where the font files are: `FORZAC_ASSETS`, then next to the binary (`../share/forzac`), then the source tree.
-fn assets() -> PathBuf {
+pub fn assets() -> PathBuf {
     if let Some(dir) = std::env::var_os("FORZAC_ASSETS") {
         return dir.into();
     }
@@ -152,8 +152,20 @@ impl Fonts {
                     desc.set_weight(if face.is_bold() { pango::Weight::Bold } else { pango::Weight::Normal });
                 }
                 None => {
+                    // A fallback font, or a face of another book family: by the file's family name, and for a
+                    // family face its style and location on the variation axes (the core shaped that instance).
                     self.add_file(id);
                     desc.set_family(&fonts::font_family(id).unwrap_or_default());
+                    if let Some(face) = fonts::font_style(id) {
+                        desc.set_style(if face.is_italic() { pango::Style::Italic } else { pango::Style::Normal });
+                        desc.set_weight(if face.is_bold() { pango::Weight::Bold } else { pango::Weight::Normal });
+                    }
+                    if let Some(FontSource::File { variations, .. }) = fonts::font_source(id)
+                        && !variations.is_empty()
+                    {
+                        let axes: Vec<String> = variations.iter().map(|(tag, value)| format!("{tag}={value}")).collect();
+                        desc.set_variations(Some(&axes.join(",")));
+                    }
                 }
             }
             desc.set_absolute_size(size as f64 * pango::SCALE as f64);

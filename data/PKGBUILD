@@ -25,6 +25,8 @@ package() {
   cp -r assets/fonts "$pkgdir/usr/share/forzac/"
   install -Dm644 data/app.truenrth.forzac.desktop -t "$pkgdir/usr/share/applications/"
   install -Dm644 data/forzac-mime.xml "$pkgdir/usr/share/mime/packages/forzac.xml"
-  install -Dm644 assets/fonts/pt-serif/OFL.txt "$pkgdir/usr/share/licenses/$pkgname/PT-Serif-OFL.txt"
+  for f in pt-serif pt-sans literata source-serif; do
+    install -Dm644 "assets/fonts/$f/OFL.txt" "$pkgdir/usr/share/licenses/$pkgname/$f-OFL.txt"
+  done
   install -Dm644 assets/hyph/hyph-ru.lic.txt assets/hyph/hyph-en-us.lic.txt -t "$pkgdir/usr/share/licenses/$pkgname/"
 }

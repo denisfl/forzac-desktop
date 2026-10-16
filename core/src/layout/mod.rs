@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 pub use page::{ChapterLayout, Page, PageContent, PageImage, Rule, layout_note, paginate};
 
-use crate::fonts::{self, Face, FontId, Glyph, Shaper};
+use crate::fonts::{self, Face, Family, FontId, Glyph, Shaper};
 use crate::hyphen::Hyphenator;
 use crate::knuth_plass::{self, INFINITY, Item};
 use crate::model::{Block, Book, Kind, Style, StyledText};
@@ -30,13 +30,30 @@ pub struct PageStyle {
     /// Line height of body text in em.
     pub line_height: f32,
     pub justify: bool,
+    pub family: Family,
 }
 
 impl PageStyle {
-    /// The default page for a window: a column of at most ~34 em (about 65 characters), centred.
+    /// The default page for a window: a column of at most 34 em (about 65 characters), centred, in PT Serif with
+    /// the normal line spacing (the default settings, see `settings`).
     pub fn for_window(width: f32, height: f32, text_size: f32) -> Self {
-        let margin_h = (48.0f32).max((width - text_size * 34.0) / 2.0);
-        PageStyle { width, height, margin_h, margin_top: 56.0, margin_bottom: 56.0, text_size, line_height: 1.5, justify: true }
+        Self::column(width, height, text_size, 34.0, 48.0)
+    }
+
+    /// A page with the text column at most `measure` em wide and side margins of at least `min_margin`.
+    pub fn column(width: f32, height: f32, text_size: f32, measure: f32, min_margin: f32) -> Self {
+        let margin_h = min_margin.max((width - text_size * measure) / 2.0);
+        PageStyle {
+            width,
+            height,
+            margin_h,
+            margin_top: 56.0,
+            margin_bottom: 56.0,
+            text_size,
+            line_height: 1.62,
+            justify: true,
+            family: Family::PtSerif,
+        }
     }
 
     pub fn text_width(&self) -> f32 {
@@ -264,12 +281,20 @@ pub struct Typesetter {
     tables: HashMap<usize, Arc<table::Geometry>>,
     /// Body line height: the unit of vertical spacing.
     pub line_height: f32,
+    /// The fonts of the four faces in the style's family.
+    faces: [FontId; 4],
 }
 
 impl Typesetter {
     pub fn new(style: PageStyle, hyphenator: Option<Arc<Hyphenator>>) -> Self {
         let line_height = (style.text_size * style.line_height).floor();
-        Typesetter { style, shaper: Shaper::new(), hyphenator, tables: HashMap::new(), line_height }
+        let faces = Face::ALL.map(|f| style.family.face(f));
+        Typesetter { style, shaper: Shaper::new(), hyphenator, tables: HashMap::new(), line_height, faces }
+    }
+
+    /// The font of `face` in the style's family.
+    fn font_of(&self, face: Face) -> FontId {
+        self.faces[face as usize]
     }
 
     pub fn style(&self) -> &PageStyle {
@@ -433,7 +458,7 @@ impl Typesetter {
         let (lines, starts) = self.lines(&items, &meta, &pieces, &segments, &breaks, spec);
 
         let line_height = (size * self.style.line_height * spec.line_scale).floor();
-        let face = segments.first().map(|s| s.face).unwrap_or(Face::Regular).id();
+        let face = self.font_of(segments.first().map(|s| s.face).unwrap_or(Face::Regular));
         let (asc, desc) = self.shaper.line_metrics(face);
         let units = size / self.shaper.units_per_em(face);
         let baseline = (line_height - (asc - desc) * units) / 2.0 + asc * units;
@@ -468,7 +493,7 @@ impl Typesetter {
             }
             if c == ' ' {
                 let seg = &segments[segment_at(segments, i)];
-                let space = self.width_of(seg.face.id(), " ", seg.size);
+                let space = self.width_of(self.font_of(seg.face), " ", seg.size);
                 if justify {
                     items.push(Item::Glue { width: space, stretch: space * 0.5, shrink: space * 0.33 });
                     meta.push(Meta::Plain);
@@ -500,7 +525,7 @@ impl Typesetter {
     fn word_pieces(&mut self, text: &str, segments: &[Segment], (start, end): (usize, usize), pieces: &mut Vec<Piece>) {
         for (index, seg) in segments.iter().enumerate().filter(|(_, s)| s.start < end && s.end > start) {
             let (a, b) = (seg.start.max(start), seg.end.min(end));
-            let base = seg.face.id();
+            let base = self.font_of(seg.face);
             // Nearly always the book face has every character: no glyph 0 (.notdef), and the shape is cached.
             let whole = self.piece(text, a, b, base, seg, index);
             if whole.glyphs.iter().all(|g| g.id != 0) {
@@ -593,7 +618,7 @@ impl Typesetter {
                 } else if cut == Cut::Hyphen {
                     let index = first_piece + word_pieces.iter().rposition(|p| p.start < pos).unwrap_or(0);
                     let piece = &pieces[index];
-                    let width = self.width_of(segments[piece.segment].face.id(), "-", piece.size);
+                    let width = self.width_of(self.font_of(segments[piece.segment].face), "-", piece.size);
                     items.push(Item::Penalty { width, penalty, flagged: true });
                     meta.push(Meta::Hyphen(index));
                 } else {
@@ -658,7 +683,7 @@ impl Typesetter {
             if let (Item::Penalty { width, flagged: true, .. }, Meta::Hyphen(index)) = (items[br.index], meta[br.index]) {
                 let piece = &pieces[index];
                 let seg = &segments[piece.segment];
-                let font = seg.face.id();
+                let font = self.font_of(seg.face);
                 let scale = piece.size / self.shaper.units_per_em(font);
                 for g in self.shaper.shape(font, "-").iter() {
                     let at = [x + g.x_offset as f32 * scale, -piece.rise - g.y_offset as f32 * scale];

@@ -17,7 +17,7 @@ In Claude Code: `/opsx:propose`, `/opsx:apply`, `/opsx:archive`.
 core/    Rust: model, parsers, hyphenation, shaping (HarfRust), Knuth–Plass, pagination → pages as glyph runs
 gtk/     Linux shell: GTK 4 (Rust), pages drawn as GSK text nodes
 macos/   macOS shell: AppKit (Swift), pages drawn with Core Text, turned with Core Animation
-assets/  bundled fonts (PT Serif, OFL) and hyphenation patterns (hyph-utf8) with their licences
+assets/  bundled fonts (PT Serif, Literata, Source Serif 4, PT Sans; OFL) and hyphenation patterns (hyph-utf8) with their licences
 data/    .desktop file, MIME type for FB3, AUR PKGBUILD sketch
 ```
 
@@ -35,7 +35,8 @@ macOS (Xcode command line tools, Rust with the `aarch64-apple-darwin` target):
 macos/build.sh && macos/build/Forzac book.fb2.zip
 ```
 
-A book reopens where it was left; the theme and text size are remembered. Without a file, the Linux shell lists the
+A book reopens where it was left; the settings are remembered. Until a theme is chosen, Linux follows the desktop's
+light or dark style. Without a file, the Linux shell lists the
 recent books (`Enter` opens one). The state is kept in `$XDG_DATA_HOME/forzac/state` on Linux and
 `~/Library/Application Support/Forzac/state` on macOS.
 
@@ -54,14 +55,15 @@ Tests: `cargo test -p forzac-core`. Measurements on a Linux desktop: `scripts/me
 | `o` | contents (`/` filters, `Enter` jumps); Linux |
 | `Tab` `Shift+Tab`, then `Enter` | note markers and links on the page (or click them); Linux |
 | `Ctrl+O` | back after a jump; Linux |
-| `+` `−` | text size |
+| `s` | settings: theme, font, text size, line spacing, alignment, margins, pages (`j` `k` choose, `h` `l` change); Linux |
+| `+` `−` | text size (`0` the default; Linux) |
 | `t` `T` | theme |
 | `f` `F11` (macOS: `⌃⌘F`) | full screen |
 | `?` | help |
 | `q` `Ctrl+W` (macOS: `⌘W`) | close |
 
 A wheel step turns a page; one touchpad swipe turns one page; in Scroll mode the wheel and touchpad scroll smoothly
-(Linux). Planned: `/` `n` `N` search, `b` bookmark, `s` settings.
+(Linux). Planned: `/` `n` `N` search, `b` bookmark.
 
 ## Default reader on Linux
 
@@ -74,5 +76,5 @@ xdg-mime default app.truenrth.forzac.desktop application/epub+zip application/x-
 
 ## Licences
 
-The code is licensed under the [Mozilla Public License 2.0](LICENSE). Bundled: PT Serif — SIL Open Font License 1.1 (`assets/fonts/pt-serif/OFL.txt`); Russian hyphenation patterns — LPPL 1.2 or later, English — free use
+The code is licensed under the [Mozilla Public License 2.0](LICENSE). Bundled: PT Serif, Literata, Source Serif 4 and PT Sans — SIL Open Font License 1.1 (`OFL.txt` in each `assets/fonts/` folder); Russian hyphenation patterns — LPPL 1.2 or later, English — free use
 with the notice kept (`assets/hyph/*.lic.txt`).

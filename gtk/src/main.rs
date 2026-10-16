@@ -9,9 +9,10 @@
 //! chapter N; `--page N` goes to page N of it
 //! (for `--png` and `--turns`). With any of them the reading state is neither read nor written.
 //!
-//! Without a file, the recent books are listed. Reading positions, the theme and the text size are remembered in
+//! Without a file, the recent books are listed. Reading positions and the settings are remembered in
 //! `$XDG_DATA_HOME/forzac/state`.
 
+mod appearance;
 mod fonts;
 mod page_view;
 mod panels;
@@ -22,9 +23,10 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use forzac_core::Locator;
+use forzac_core::settings::{DEFAULT_SIZE, Setting, Settings, Turning};
 use forzac_core::state::Store;
 use gtk::{gio, glib, graphene, prelude::*};
-use page_view::{Mode, Open, PageView, TEXT_SIZES, THEMES};
+use page_view::{Mode, Open, PageView};
 
 const APP_ID: &str = "app.truenrth.forzac";
 
@@ -58,6 +60,7 @@ fn main() -> glib::ExitCode {
     // The Wayland app_id comes from the program name; it must match the .desktop file name for the compositor,
     // docks and `StartupWMClass`-less matching to tie windows to Forzac.
     glib::set_prgname(Some(APP_ID));
+    forzac_core::fonts::set_assets(fonts::assets());
     fonts::install_fallback_provider();
     let args: Vec<String> = std::env::args().collect();
     let png = args.iter().position(|a| a == "--png").and_then(|i| args.get(i + 1)).map(PathBuf::from);
@@ -104,18 +107,19 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
     let parsed = options.start.elapsed();
     let title = if book.title.is_empty() { "Forzac".to_owned() } else { format!("{} — Forzac", book.title) };
     let stateless = options.stateless();
-    let (at, theme, size, mode) = if stateless {
-        let mode = if options.scrolls > 0 { Mode::Scroll } else { Mode::Slide };
-        (Locator { chapter: options.chapter.unwrap_or(0), ..Locator::default() }, 0, 2, mode)
+    let (at, settings) = if stateless {
+        // Measurements: the defaults in Light, whatever the desktop.
+        let turning = if options.scrolls > 0 { Turning::Scroll } else { Turning::Slide };
+        (
+            Locator { chapter: options.chapter.unwrap_or(0), ..Locator::default() },
+            Settings { theme: Some(0), turning, ..Settings::default() },
+        )
     } else {
         let s = store.borrow();
-        let theme = s.setting("theme").and_then(|name| THEMES.iter().position(|t| t.0 == name)).unwrap_or(0);
-        let size = s.setting("text-size").and_then(|px| TEXT_SIZES.iter().position(|t| t.to_string() == px)).unwrap_or(2);
-        let mode = if s.setting("turning") == Some("scroll") { Mode::Scroll } else { Mode::Slide };
-        (s.position(&book, path).unwrap_or_default(), theme, size, mode)
+        (s.position(&book, path).unwrap_or_default(), Settings::load(&s))
     };
-    let view = PageView::new(book, at, theme, size);
-    view.set_mode(mode);
+    let view = PageView::new(book, at, settings, appearance::dark());
+    view.set_mode(if settings.turning == Turning::Scroll { Mode::Scroll } else { Mode::Slide });
 
     let help = gtk::Label::new(Some(HELP));
     help.add_css_class("osd");
@@ -132,24 +136,35 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
     if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
         window.set_decorated(false);
     }
-    panels::set_theme(theme);
+    panels::set_theme(view.theme());
     let save_style: Rc<dyn Fn()> = if stateless {
         let view = view.clone();
-        Rc::new(move || panels::set_theme(view.style().0))
+        Rc::new(move || panels::set_theme(view.theme()))
     } else {
         let (view, store) = (view.clone(), store.clone());
         Rc::new(move || {
-            let (theme, size) = view.style();
-            panels::set_theme(theme);
-            let turning = if view.mode() == Mode::Scroll { "scroll" } else { "slide" };
-            let mut s = store.borrow_mut();
-            for (key, value) in
-                [("theme", THEMES[theme].0.to_owned()), ("text-size", TEXT_SIZES[size].to_string()), ("turning", turning.to_owned())]
-            {
-                if let Err(e) = s.set_setting(key, &value) {
-                    eprintln!("cannot save the reading state: {e}");
-                }
+            panels::set_theme(view.theme());
+            if let Err(e) = view.settings().save(&mut store.borrow_mut()) {
+                eprintln!("cannot save the reading state: {e}");
             }
+        })
+    };
+    if !stateless {
+        let v = view.downgrade();
+        let watch = std::cell::Cell::new(appearance::watch(move |dark| {
+            if let Some(v) = v.upgrade() {
+                v.set_system_dark(dark);
+                panels::set_theme(v.theme());
+            }
+        }));
+        window.connect_destroy(move |_| drop(watch.take()));
+    }
+    let settings_panel: Rc<RefCell<Option<Rc<panels::SettingsPanel>>>> = Rc::default();
+    let open_settings: Rc<dyn Fn()> = {
+        let (panel, overlay, view, save) = (settings_panel.clone(), overlay.clone(), view.clone(), save_style.clone());
+        Rc::new(move || {
+            let panel = panel.borrow_mut().get_or_insert_with(|| panels::SettingsPanel::new(&overlay, &view, save.clone())).clone();
+            panel.open(&view);
         })
     };
     // The contents panel is built in the first pause in reading (a second without turning), so `o` only shows it and
@@ -183,7 +198,7 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             }
         ),
     );
-    view.add_controller(shortcuts(&view, &help, open_contents, &window, save_style));
+    view.add_controller(shortcuts(&view, &help, open_contents, open_settings, &window, save_style));
     view.connect_open(glib::clone!(
         #[weak]
         overlay,
@@ -306,7 +321,8 @@ g  G  Home  End    chapter start / end
 o    contents  (/ filters)
 Tab  Shift+Tab    notes and links on the page, Enter opens
 Ctrl+O    back after a jump
-+  −    text size
+s    settings
++  −  0    text size, default size
 t  T    theme
 f  F11    full screen
 ?    this help
@@ -436,6 +452,7 @@ fn shortcuts(
     view: &PageView,
     help: &gtk::Label,
     open_contents: Rc<dyn Fn()>,
+    open_settings: Rc<dyn Fn()>,
     window: &gtk::ApplicationWindow,
     save_style: Rc<dyn Fn()>,
 ) -> gtk::ShortcutController {
@@ -484,6 +501,7 @@ fn shortcuts(
         }),
     );
     add("o", Box::new(move || open_contents()));
+    add("s", Box::new(move || open_settings()));
     let v = view.clone();
     add("h|Left|<Shift>space|Page_Up|BackSpace", Box::new(move || v.turn(-1)));
     let v = view.clone();
@@ -500,7 +518,7 @@ fn shortcuts(
     add(
         "plus|equal|KP_Add",
         Box::new(move || {
-            v.text_size(1);
+            v.step(Setting::Size, 1);
             save();
         }),
     );
@@ -508,7 +526,15 @@ fn shortcuts(
     add(
         "minus|KP_Subtract",
         Box::new(move || {
-            v.text_size(-1);
+            v.step(Setting::Size, -1);
+            save();
+        }),
+    );
+    let (v, save) = (view.clone(), save_style.clone());
+    add(
+        "0|KP_0",
+        Box::new(move || {
+            v.set_settings(Settings { size: DEFAULT_SIZE, ..v.settings() });
             save();
         }),
     );
@@ -516,7 +542,7 @@ fn shortcuts(
     add(
         "t",
         Box::new(move || {
-            v.next_theme(1);
+            v.step(Setting::Theme, 1);
             save();
         }),
     );
@@ -524,7 +550,7 @@ fn shortcuts(
     add(
         "<Shift>t",
         Box::new(move || {
-            v.next_theme(-1);
+            v.step(Setting::Theme, -1);
             save();
         }),
     );

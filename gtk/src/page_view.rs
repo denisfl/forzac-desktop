@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use forzac_core::hyphen::Hyphenator;
 use forzac_core::model::LinkTarget;
+use forzac_core::settings::{Setting, Settings, Turning};
 use forzac_core::{
     Area, Block, Book, ChapterLayout, Ink, Locator, PageContent, PageStyle, Rect, Target, Typesetter, fonts, layout_note, paginate,
 };
@@ -32,9 +33,6 @@ pub enum Mode {
     /// One continuous column.
     Scroll,
 }
-
-/// Text size presets in logical pixels: steps, not a slider.
-pub const TEXT_SIZES: [f32; 7] = [16.0, 18.0, 20.0, 22.0, 24.0, 27.0, 30.0];
 
 /// Background, ink and link ink of the six themes (docs: the Android app's palettes).
 pub const THEMES: [(&str, u32, u32, u32); 6] = [
@@ -127,7 +125,11 @@ pub struct State {
     /// The reading position; pages are derived from it after every re-layout.
     locator: Locator,
     to_last: bool,
-    size_step: usize,
+    /// The reader's settings; the page mode is `mode`.
+    settings: Settings,
+    /// Whether the desktop prefers a dark style, for a theme that follows it.
+    system_dark: bool,
+    /// The theme shown, an index in `THEMES`.
     theme: usize,
     nodes: HashMap<usize, gsk::RenderNode>,
     /// Note markers and links of the cached pages.
@@ -205,8 +207,8 @@ glib::wrapper! {
 }
 
 impl PageView {
-    /// A view of `book` at `at`, in theme `theme` (index in `THEMES`) and text size `size_step` (index in `TEXT_SIZES`).
-    pub fn new(book: Book, at: Locator, theme: usize, size_step: usize) -> Self {
+    /// A view of `book` at `at` with `settings`, on a desktop that prefers a dark style or not.
+    pub fn new(book: Book, at: Locator, settings: Settings, system_dark: bool) -> Self {
         let view: Self = glib::Object::new();
         let hyphenator = Hyphenator::for_language(book.language.as_deref()).map(Arc::new);
         let chapter = at.chapter.min(book.chapters.len().saturating_sub(1));
@@ -225,8 +227,9 @@ impl PageView {
             page: 0,
             locator: Locator { chapter, ..at },
             to_last: false,
-            size_step: size_step.min(TEXT_SIZES.len() - 1),
-            theme: theme.min(THEMES.len() - 1),
+            settings,
+            system_dark,
+            theme: settings.theme_index(system_dark),
             nodes: HashMap::new(),
             areas: HashMap::new(),
             focus: None,
@@ -328,8 +331,7 @@ impl PageView {
     /// Note `id` typeset at `width` for the note panel: its node and height, in the current theme and text size.
     pub fn note(&self, id: &str, width: f32) -> Option<(gsk::RenderNode, f32)> {
         self.with(|s| {
-            let text_size = TEXT_SIZES[s.size_step] * 0.9;
-            let base = PageStyle::for_window(width, 100_000.0, text_size);
+            let base = PageStyle { text_size: s.settings.text_size() * 0.9, ..s.settings.page_style(width, 100_000.0) };
             let style = PageStyle { margin_h: 28.0, margin_top: 18.0, margin_bottom: 18.0, ..base };
             let mut typesetter = Typesetter::new(style, s.hyphenator.clone());
             let layout = layout_note(&s.book, id, &style, &mut typesetter)?;
@@ -488,9 +490,56 @@ impl PageView {
         self.with(|s| s.book.clone())
     }
 
-    /// The theme and text size, as indices in `THEMES` and `TEXT_SIZES`.
-    pub fn style(&self) -> (usize, usize) {
-        self.with(|s| (s.theme, s.size_step))
+    /// The theme shown, an index in `THEMES`.
+    pub fn theme(&self) -> usize {
+        self.with(|s| s.theme)
+    }
+
+    pub fn system_dark(&self) -> bool {
+        self.with(|s| s.system_dark)
+    }
+
+    pub fn settings(&self) -> Settings {
+        self.with(|s| Settings { turning: if s.mode == Mode::Scroll { Turning::Scroll } else { Turning::Slide }, ..s.settings })
+    }
+
+    /// Applies `settings`: a new theme only redraws; the page style changes re-typeset at the next frame, keeping the
+    /// reading position; the page mode switches keeping the top line.
+    pub fn set_settings(&self, settings: Settings) {
+        if settings.turning != self.settings().turning {
+            self.toggle_mode();
+        }
+        self.with(|s| {
+            s.settings = settings;
+            Self::show_theme(s);
+        });
+        self.queue_draw();
+    }
+
+    /// Switches `setting` to its next (`delta` 1) or previous (−1) value.
+    pub fn step(&self, setting: Setting, delta: i32) {
+        let mut settings = self.settings();
+        settings.step(setting, delta, self.system_dark());
+        self.set_settings(settings);
+    }
+
+    /// The desktop's light or dark preference changed.
+    pub fn set_system_dark(&self, dark: bool) {
+        self.with(|s| {
+            s.system_dark = dark;
+            Self::show_theme(s);
+        });
+        self.queue_draw();
+    }
+
+    fn show_theme(s: &mut State) {
+        let theme = s.settings.theme_index(s.system_dark);
+        if theme != s.theme {
+            s.theme = theme;
+            s.nodes.clear(); // ink is baked into the nodes; only a redraw, no re-layout
+            s.areas.clear();
+            s.column.tiles.clear();
+        }
     }
 
     /// Runs once, after the first frame with a page is presented (measurements, `--png`).
@@ -510,7 +559,7 @@ impl PageView {
             return false;
         }
         self.with(|s| {
-            let style = PageStyle::for_window(w, h, TEXT_SIZES[s.size_step]);
+            let style = s.settings.page_style(w, h);
             let fresh = s.layout.as_ref().is_some_and(|l| l.chapter == s.chapter) && s.style == Some(style);
             if fresh {
                 return false;
@@ -793,21 +842,6 @@ impl PageView {
             if s.mode == Mode::Scroll {
                 Self::align_column(s);
             }
-        });
-        self.queue_draw();
-    }
-
-    pub fn text_size(&self, delta: i32) {
-        self.with(|s| s.size_step = (s.size_step as i32 + delta).clamp(0, TEXT_SIZES.len() as i32 - 1) as usize);
-        self.queue_draw();
-    }
-
-    pub fn next_theme(&self, delta: i32) {
-        self.with(|s| {
-            s.theme = (s.theme as i32 + delta).rem_euclid(THEMES.len() as i32) as usize;
-            s.nodes.clear(); // ink is baked into the nodes; only a redraw, no re-layout
-            s.areas.clear();
-            s.column.tiles.clear();
         });
         self.queue_draw();
     }

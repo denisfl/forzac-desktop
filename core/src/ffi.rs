@@ -269,7 +269,7 @@ pub unsafe extern "C" fn forzac_font_data(font: u16, len: *mut usize) -> *const 
 /// `path` must be writable for `capacity` bytes and `index` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn forzac_font_file(font: u16, path: *mut c_char, capacity: usize, index: *mut u32) -> bool {
-    let Some(FontSource::File { path: file, index: i }) = fonts::font_source(FontId(font)) else { return false };
+    let Some(FontSource::File { path: file, index: i, .. }) = fonts::font_source(FontId(font)) else { return false };
     let bytes = file.as_os_str().as_encoded_bytes();
     if bytes.len() >= capacity {
         return false;

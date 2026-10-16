@@ -237,7 +237,7 @@ fn draw_block(out: &mut PageContent, b: &BlockLayout, lines: std::ops::Range<usi
 
 /// A line of secondary text centred on `center` at baseline `y`, shortened with "…" to `max_width`.
 fn label(typesetter: &mut Typesetter, text: &str, size: f32, center: f32, y: f32, max_width: f32) -> GlyphRun {
-    let font = Face::Regular.id();
+    let font = typesetter.font_of(Face::Regular);
     let scale = size / typesetter.shaper.units_per_em(font);
     let mut text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut glyphs = typesetter.shaper.shape(font, &text);

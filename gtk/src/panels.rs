@@ -1,10 +1,11 @@
-//! Panels over the page: the contents (`o`) and a note. They use the reader's theme and take the focus while open;
-//! closing one gives the focus back to the page.
+//! Panels over the page: the contents (`o`), the settings (`s`) and a note. They use the reader's theme and take the
+//! focus while open; closing one gives the focus back to the page.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use forzac_core::Locator;
+use forzac_core::settings::Setting;
 use gtk::subclass::prelude::*;
 use gtk::{gdk, glib, gsk, prelude::*};
 
@@ -38,7 +39,7 @@ impl Theme {
             ".forzac-panel {{ background-color: {bg}; color: {ink}; }}
              .forzac-panel.side {{ border-left: 1px solid alpha({ink}, 0.15); box-shadow: -8px 0 24px alpha(black, 0.12); }}
              .forzac-panel.bottom {{ border-top: 1px solid alpha({ink}, 0.15); box-shadow: 0 -8px 24px alpha(black, 0.12); }}
-             .forzac-panel listview, .forzac-panel row, .forzac-panel scrolledwindow {{ background: transparent; color: {ink}; }}
+             .forzac-panel listview, .forzac-panel list, .forzac-panel row, .forzac-panel scrolledwindow {{ background: transparent; color: {ink}; }}
              .forzac-panel row:selected {{ background-color: alpha({link}, 0.22); color: {ink}; }}
              .forzac-panel .dim {{ color: alpha({ink}, 0.6); }}
              .forzac-panel entry {{ background-color: alpha({ink}, 0.06); color: {ink}; margin: 10px 12px 4px 12px; }}",
@@ -250,6 +251,119 @@ fn panel_width(width: i32) -> i32 {
 /// The entry index an item of the contents model stands for.
 fn index_of(item: &glib::Object) -> Option<usize> {
     item.downcast_ref::<gtk::StringObject>()?.string().parse().ok()
+}
+
+/// The settings panel over the lower part of the page: each setting with its value. Built on the first `s`, then shown
+/// and hidden. `j`/`k` choose a setting, `h`/`l` switch its value and the page behind shows it at once (`Enter` or a
+/// click switches to the next value); `Esc` or `s` closes.
+pub struct SettingsPanel {
+    panel: gtk::Box,
+    list: gtk::ListBox,
+    values: Vec<gtk::Label>,
+}
+
+impl SettingsPanel {
+    /// `save` remembers the settings and recolours the panels after a change.
+    pub fn new(overlay: &gtk::Overlay, view: &PageView, save: Rc<dyn Fn()>) -> Rc<Self> {
+        let list = gtk::ListBox::new();
+        list.set_selection_mode(gtk::SelectionMode::Browse);
+        list.set_halign(gtk::Align::Center);
+        list.set_width_request(400);
+        list.set_margin_top(10);
+        list.set_margin_bottom(14);
+        let values: Vec<gtk::Label> = Setting::ALL
+            .iter()
+            .map(|setting| {
+                let row = gtk::Box::new(gtk::Orientation::Horizontal, 24);
+                row.set_margin_top(7);
+                row.set_margin_bottom(7);
+                row.set_margin_start(16);
+                row.set_margin_end(16);
+                let name = gtk::Label::new(Some(setting.name()));
+                name.add_css_class("dim");
+                name.set_xalign(0.0);
+                name.set_hexpand(true);
+                let value = gtk::Label::new(None);
+                row.append(&name);
+                row.append(&value);
+                list.append(&row);
+                value
+            })
+            .collect();
+        let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        panel.add_css_class("forzac-panel");
+        panel.add_css_class("bottom");
+        panel.set_valign(gtk::Align::End);
+        panel.append(&list);
+        panel.set_visible(false);
+        overlay.add_overlay(&panel);
+
+        let this = Rc::new(SettingsPanel { panel, list: list.clone(), values });
+        let weak = Rc::downgrade(&this);
+        let view = view.downgrade();
+        let with = move |f: &dyn Fn(&SettingsPanel, &PageView)| {
+            if let (Some(p), Some(v)) = (weak.upgrade(), view.upgrade()) {
+                f(&p, &v);
+            }
+        };
+        let change = {
+            let with = with.clone();
+            Rc::new(move |delta: i32| {
+                with(&|p, v| {
+                    let Some(i) = p.list.selected_row().map(|r| r.index() as usize) else { return };
+                    v.step(Setting::ALL[i], delta);
+                    save();
+                    p.show_values(v);
+                })
+            })
+        };
+        let c = change.clone();
+        list.connect_row_activated(move |_, _| c(1));
+
+        // Capture: the list's own arrow-key navigation would otherwise run first.
+        let keys = gtk::ShortcutController::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let w = with.clone();
+        shortcut(&keys, "j|Down", move || w(&|p, _| p.select_by(1)));
+        let w = with.clone();
+        shortcut(&keys, "k|Up", move || w(&|p, _| p.select_by(-1)));
+        let c = change.clone();
+        shortcut(&keys, "l|Right", move || c(1));
+        shortcut(&keys, "h|Left", move || change(-1));
+        shortcut(&keys, "Escape|s|q", move || {
+            with(&|p, v| {
+                p.panel.set_visible(false);
+                v.grab_focus();
+            })
+        });
+        list.add_controller(keys);
+        this
+    }
+
+    pub fn open(&self, view: &PageView) {
+        self.show_values(view);
+        self.panel.set_visible(true);
+        let row = self.list.selected_row().or_else(|| self.list.row_at_index(0));
+        if let Some(row) = row {
+            self.list.select_row(Some(&row));
+            row.grab_focus();
+        }
+    }
+
+    fn show_values(&self, view: &PageView) {
+        let (settings, dark) = (view.settings(), view.system_dark());
+        for (label, setting) in self.values.iter().zip(Setting::ALL) {
+            label.set_text(&settings.value(setting, dark));
+        }
+    }
+
+    fn select_by(&self, delta: i32) {
+        let i = self.list.selected_row().map_or(0, |r| r.index());
+        if let Some(row) = self.list.row_at_index((i + delta).clamp(0, Setting::ALL.len() as i32 - 1)) {
+            self.list.select_row(Some(&row));
+            row.grab_focus();
+        }
+    }
 }
 
 /// Note `id` in a panel over the lower part of the page, typeset by the core; `Esc`, `Enter` or `q` closes it.

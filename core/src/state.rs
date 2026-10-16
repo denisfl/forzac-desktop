@@ -78,8 +78,15 @@ impl Store {
     }
 
     pub fn set_setting(&mut self, key: &str, value: &str) -> io::Result<()> {
+        self.set_settings(&[(key, value.to_owned())])
+    }
+
+    /// Several settings in one write.
+    pub fn set_settings(&mut self, values: &[(&str, String)]) -> io::Result<()> {
         self.write(|_, settings| {
-            settings.insert(key.to_owned(), value.to_owned());
+            for (key, value) in values {
+                settings.insert((*key).to_owned(), value.clone());
+            }
         })
     }
 

@@ -64,7 +64,7 @@ impl Typesetter {
                 let mut col = 0;
                 for cell in row {
                     if cell.col_span == 1 && col < columns {
-                        let face = Face::of(false, cell.header).id();
+                        let face = self.font_of(Face::of(false, cell.header));
                         let text = &cell.text.text;
                         // +2: a word exactly as wide as its cell would otherwise wrap after rounding.
                         let word = text.split([' ', '\n', '\u{a0}']).map(|w| self.width_of(face, w, size)).fold(0.0, f32::max);

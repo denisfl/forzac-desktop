@@ -11,6 +11,7 @@ pub mod hyphen;
 pub mod knuth_plass;
 pub mod layout;
 pub mod model;
+pub mod settings;
 pub mod state;
 mod typography;
 mod xml;
