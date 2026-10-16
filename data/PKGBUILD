@@ -6,7 +6,9 @@ pkgdesc="Offline FB2 and EPUB reader with book-quality typesetting"
 arch=(x86_64 aarch64)
 url="https://forzac.truenrth.app"
 license=(TBD)
-depends=(gtk4 fontconfig)
+# perl-file-mimeinfo gives xdg-open (outside GNOME/KDE, e.g. on Hyprland) types by file name, as file managers do;
+# without it `xdg-open book.fb2` sees text/xml by content (Omarchy opens that in nvim) and .fb2.zip as application/zip.
+depends=(gtk4 fontconfig perl-file-mimeinfo)
 makedepends=(cargo)
 source=("$pkgname-$pkgver.tar.gz::https://github.com/<owner>/forzac-desktop/archive/v$pkgver.tar.gz")
 sha256sums=(SKIP)

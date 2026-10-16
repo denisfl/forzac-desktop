@@ -17,12 +17,12 @@ pacman -Ql forzac | awk '{print $2}' | grep -vE '/$'
 
 # Desktop integration: the .desktop file validates, MIME types resolve, Forzac becomes the default.
 desktop-file-validate /usr/share/applications/app.truenrth.forzac.desktop && echo "desktop file: valid"
-mkdir -p ~/.local/share/applications
+mkdir -p ~/.local/share/applications ~/.config
 xdg-mime default app.truenrth.forzac.desktop application/epub+zip application/x-fictionbook+xml application/x-zip-compressed-fb2 application/x-fb3
 cp "$book" ~/book.fb2.zip
 echo "book.fb2.zip is $(xdg-mime query filetype ~/book.fb2.zip), opens with $(xdg-mime query default "$(xdg-mime query filetype ~/book.fb2.zip)")"
-printf '<?xml version="1.0"?><FictionBook/>' > ~/x.fb2; touch ~/x.fb3
-echo "x.fb2 is $(xdg-mime query filetype ~/x.fb2), x.fb3 is $(xdg-mime query filetype ~/x.fb3)"
+printf '<?xml version="1.0"?><FictionBook/>' > ~/x.fb2; cp ~/book.fb2.zip ~/x.fb3
+for f in x.fb2 x.fb3; do t=$(xdg-mime query filetype ~/$f); echo "$f is $t, opens with $(xdg-mime query default "$t")"; done
 
 export XDG_RUNTIME_DIR=/tmp/xdg; mkdir -p -m 700 $XDG_RUNTIME_DIR
 for scale in 1 1.25 1.6 2; do
