@@ -39,6 +39,21 @@ macOS (Xcode command line tools, Rust with the `aarch64-apple-darwin` target):
 macos/build.sh && open macos/build/Forzac.app --args "$PWD/book.fb2.zip"
 ```
 
+## Developing for Linux from a Mac
+
+The core builds and tests natively anywhere. The GTK shell can be developed on a Mac with a Raspberry Pi 5 (Raspberry
+Pi OS 13 with its desktop) as the Linux machine, no monitor needed:
+
+```bash
+PI=user@pi.local scripts/pi-dev.sh book.fb2.zip       # build for aarch64 in Docker, copy, open on the Pi's desktop
+PI=user@pi.local scripts/pi-vnc.sh                    # watch the Pi's desktop in macOS Screen Sharing
+```
+
+Once on the Pi: `sudo raspi-config nonint do_vnc 0`, then in `/etc/wayvnc/config` set `address=127.0.0.1` and add
+`relax_encryption=true`, and `sudo systemctl restart wayvnc`. VNC then listens on the Pi only; `pi-vnc.sh` reaches it
+through an SSH tunnel, which also encrypts it. Judge text quality and animation on a real display or with
+`scripts/pi-headless.sh`, not over VNC (it compresses the picture).
+
 ## Checks
 
 CI runs these on every pull request; run them before pushing:

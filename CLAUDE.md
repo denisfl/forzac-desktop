@@ -37,11 +37,14 @@ cargo run --release -p forzac-core --example bench -- book.fb2.zip
 scripts/measure.sh book.fb2.zip                            # Linux desktop measurements
 scripts/pi-headless.sh target/release/forzac book.fb2.zip  # headless measurements on GPU (Raspberry Pi)
 scripts/package-linux.sh forzac-X.Y.Z-linux-ARCH           # release archive layout
+PI=user@host scripts/pi-dev.sh book.fb2.zip [flags]        # build for aarch64, run on the Pi's desktop
+PI=user@host scripts/pi-vnc.sh                             # watch the Pi's desktop from macOS
 ```
 
 GTK shell flags for measurements: `--measure`, `--png out.png`, `--turns N`, `--chapter N`.
 Containers in `ci/` build and run the GTK shell on Fedora, Arch (makepkg) and Debian/Raspberry Pi OS.
 Books are never committed; test books live outside the repository.
+The development Linux machine is a Raspberry Pi 5 without a monitor, watched over VNC (`scripts/pi-vnc.sh`).
 
 ## Process: OpenSpec
 
