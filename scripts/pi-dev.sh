@@ -21,7 +21,9 @@ ssh_pi 'pkill -f "[f]orzac-dev/bin/forzac" || true; rm -rf ~/forzac-dev && mkdir
 ssh_pi 'tar xzf - -C ~' < "$root/target/forzac-dev.tar.gz"
 # shellcheck disable=SC2094  # reads the local book, writes a copy on the Pi
 ssh_pi "cat > ~/forzac-dev/books/$(basename "$book")" < "$book"
-args=$(printf ' %q' "$@")
+# Extra flags for forzac, quoted for the remote shell; nothing at all when there are none (printf would emit '').
+args=""
+if [ $# -gt 0 ]; then args=$(printf ' %q' "$@"); fi
 # Separate statements: a trailing `&` after `a && b && c` backgrounds the whole list, and that subshell would keep the
 # SSH channel open.
 ssh_pi "cd ~/forzac-dev; export XDG_RUNTIME_DIR=/run/user/\$(id -u) WAYLAND_DISPLAY=wayland-0; \
