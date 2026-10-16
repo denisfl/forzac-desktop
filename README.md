@@ -4,8 +4,12 @@ An offline reader for FB2 and EPUB books with book-quality typesetting — hyphe
 at page edges — for Linux (first of all [Omarchy](https://omarchy.org)) and macOS. Keyboard first, few settings,
 free. The desktop sibling of Forzac for Android.
 
-**Status: spike.** The stack is described in [ADR 0001](docs/adr/0001-stack.md), the results in
-[docs/spike.md](docs/spike.md).
+**Status: spike done, planning the full version.** The stack is described in [ADR 0001](docs/adr/0001-stack.md),
+the spike results in [docs/spike.md](docs/spike.md), the plan to 1.0 in [docs/roadmap.md](docs/roadmap.md).
+
+Work is planned with [OpenSpec](https://github.com/Fission-AI/OpenSpec): each feature is a change in
+`openspec/changes/<name>` (`proposal → specs → design → tasks`), implemented from its tasks and archived when done.
+In Claude Code: `/opsx:propose`, `/opsx:apply`, `/opsx:archive`.
 
 ## How it is built
 

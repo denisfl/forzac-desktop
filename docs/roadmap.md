@@ -1,0 +1,45 @@
+# Roadmap
+
+From the spike ([docs/spike.md](spike.md)) to 1.0. Each row is an OpenSpec change in `openspec/changes/<name>`
+(`proposal → specs → design → tasks`, then implementation and `openspec archive`). Sizes are rough, for one developer,
+and get refined in each change's design.
+
+Linux comes first: Omarchy and the Raspberry Pi 5 are the primary audience. macOS follows once the reader is complete
+on Linux, so the shared core API is settled before the second shell catches up.
+
+## Milestone 0.2 — a book you can read every day on Linux
+
+| # | Change | What | Done when | Size |
+|---|---|---|---|---|
+| 1 | `project-setup` | Licence, public repository, CI (fmt, clippy, tests; Linux x86_64 and aarch64, macOS arm64 builds), contributor docs, `CLAUDE.md` | A pull request runs all checks; the repository can be published | 3–4 d |
+| 2 | `typesetting-complete` | Images, footnote markers, links, tables, glyph fallback for characters the bundled fonts lack, background layout of the next chapters, layout cache | A real book's chapters render like the Android app; no `.notdef` boxes | 2–3 w |
+| 3 | `fb2-complete` | Full FB2: notes bodies, images, links, tables, broken and truncated files, encodings; a corpus test | Every FB2 in the local corpus opens | 1 w |
+| 4 | `epub` | EPUB 2/3 and FB3: spine, contents, notes, images; format detection by content | Every EPUB in the local corpus opens | 1.5–2 w |
+| 5 | `reading-state` | Reading position per book, reopening where you left off, recent books, settings storage | Closing and reopening a book returns to the same line | 3–4 d |
+| 6 | `reader-navigation` | Contents (`o`), footnotes, internal links with a way back, progress | A book can be read end to end with the keyboard only | 1–1.5 w |
+| 7 | `page-turning` | The "Slide" mode specified, plus "Scroll" (continuous); switching with `m` | Both modes keep the reading position | 1 w |
+| 8 | `reader-settings` | The preset settings of the Android app (theme, font, size, line spacing, alignment, margins) in a keyboard panel (`s`); light/dark from the system by default | Changing any setting keeps the reading position | 1 w |
+| 9 | `book-search` | Search in the book (`/`, `n`, `N`), ё/е and case insensitive | A search jumps to the match and highlights it | 4–5 d |
+| 10 | `linux-integration` | AUR package, `.desktop` and MIME, `xdg-open`, one process per user, icon, help and the support link | `yay -S forzac` on Omarchy, then `xdg-open book.fb2` opens Forzac | 3–4 d |
+
+## Milestone 0.3 — macOS
+
+| # | Change | What | Done when | Size |
+|---|---|---|---|---|
+| 11 | `macos-app` | The AppKit shell catches up with 5–9; a signed, notarised `.app`; Homebrew cask | Feature parity with the Linux shell on an Apple Silicon Mac | 2–3 w |
+
+## Milestone 1.0
+
+| # | Change | What | Done when | Size |
+|---|---|---|---|---|
+| 12 | `localization` | Interface in English and Russian | Every screen checked in both languages | 2–3 d |
+| 13 | `bookmarks` | Bookmarks (`b`) and their list in the contents panel | A bookmark survives re-layout and restart | 3–4 d |
+| 14 | `release-1-0` | Performance budgets checked on the Pi 5, an Omarchy laptop and a Mac; release notes; packages published | Budgets met on all three | 3–4 d |
+
+Total: about 14–18 weeks.
+
+## Not planned for 1.0
+
+PDF; text selection and quotes (mouse-first on desktop; revisit after 1.0); a library screen with import and covers
+(books open in place; recent books are enough); dictionaries; formulas (MathML); fixed-layout EPUB; Flatpak (AUR and
+Homebrew first); following the Omarchy theme colours (a possible later change).

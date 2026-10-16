@@ -1,0 +1,42 @@
+schema: spec-driven
+
+context: |
+  Language: English. All artifacts, code comments, docs and commit messages are written in English.
+  Keep OpenSpec structural headings and SHALL/MUST keywords in English.
+
+  Forzac for desktop: an offline FB2/FB3/EPUB reader with book-quality typesetting (hyphenation, justification,
+  no lone lines at page edges) for Linux — first of all Omarchy (Arch + Hyprland, Wayland) and the Raspberry Pi 5 —
+  and macOS. The desktop sibling of Forzac for Android; the code is separate, the product principles are shared.
+  Open source, free; one unobtrusive "support" link, no nagging. No PDF.
+
+  Product principle: few settings, great defaults. Presets instead of sliders. Keyboard first (Vim keys and
+  arrows/space), the mouse is secondary. Page turning modes: "Slide" (paged) and "Scroll" only.
+
+  Architecture (docs/adr/0001-stack.md): a Rust core (`core/`) parses books, hyphenates, shapes text with HarfRust
+  over bundled OFL fonts, breaks lines with Knuth–Plass and paginates; it outputs pages as positioned glyph runs.
+  Thin native shells only draw and handle input: GTK 4 in Rust on Linux (`gtk/`), AppKit in Swift on macOS (`macos/`,
+  through the C ABI in `core/src/ffi.rs`).
+
+  Invariants:
+  - The reading position is a Locator (chapter, block, offset), never a page number; pages derive from
+    book × settings × window size.
+  - The core has no UI or platform code and is tested on its own (`cargo test -p forzac-core`).
+  - Shells rasterise exactly the font files the core shaped with.
+  - Nothing is drawn while idle; animations run on the compositor's frame clock (GTK) or Core Animation (macOS).
+  - Theme change is a redraw only; font, size, spacing, alignment and margins re-typeset and keep the Locator.
+
+  Reference hardware: a Raspberry Pi 5 (8 GB, Raspberry Pi OS 13, V3D), an Omarchy laptop, an Apple Silicon Mac.
+  Spike results: docs/spike.md. Order of work: docs/roadmap.md.
+
+rules:
+  proposal:
+    - If the change adds a user-visible setting, explain why a good default is not enough.
+    - Name what is out of scope ("Non-goals") when the change could plausibly grow.
+  specs:
+    - State performance requirements measurably (ms to first page, missed frames at a given refresh rate, CPU while idle).
+    - Describe keyboard behaviour with the exact keys.
+  design:
+    - Say which side each piece lives on (core or shell) and what crosses the C ABI.
+  tasks:
+    - The last group of tasks is verification on hardware (Pi 5, Omarchy, macOS) with scripts/measure.sh or
+      scripts/pi-headless.sh output and screenshots.
