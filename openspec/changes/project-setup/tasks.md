@@ -24,4 +24,4 @@
 
 - [x] 5.1 Run every CI command locally (macOS for the core and the Mac app, the `ci/` containers for Linux)
 - [x] 5.2 Build a Linux archive with the release layout and open a book from it on the Raspberry Pi 5
-- [ ] 5.3 After the repository is published: the first pull request shows all checks green
+- [ ] 5.3 After the repository is published: the first pull request shows all checks green (deferred: developing locally until publication, decided 2026-10-16)
