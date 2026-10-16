@@ -21,6 +21,18 @@ use gtk::{gdk, gio, glib, graphene, gsk, prelude::*};
 
 use crate::fonts::Fonts;
 
+#[path = "scroll.rs"]
+mod scroll;
+
+/// How the reader moves through the text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// A page per window, sliding.
+    Slide,
+    /// One continuous column.
+    Scroll,
+}
+
 /// Text size presets in logical pixels: steps, not a slider.
 pub const TEXT_SIZES: [f32; 7] = [16.0, 18.0, 20.0, 22.0, 24.0, 27.0, 30.0];
 
@@ -125,6 +137,9 @@ pub struct State {
     /// Where jumps started, the latest last.
     back: Vec<Locator>,
     turn: Option<Turn>,
+    mode: Mode,
+    /// "Scroll": the column's offset, tiles and movement.
+    column: scroll::Column,
 }
 
 mod imp {
@@ -217,6 +232,8 @@ impl PageView {
             focus: None,
             back: Vec::new(),
             turn: None,
+            mode: Mode::Slide,
+            column: scroll::Column::default(),
         });
         view.set_hexpand(true);
         view.set_vexpand(true);
@@ -232,8 +249,18 @@ impl PageView {
         ));
         view.add_controller(click);
 
-        // A wheel step turns a page; a touchpad swipe turns at most one.
-        let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+        // "Slide": a wheel step turns a page, a touchpad swipe at most one. "Scroll": the wheel scrolls three lines a
+        // step, smoothly; the touchpad moves the column and glides on after a flick.
+        let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL | gtk::EventControllerScrollFlags::KINETIC);
+        scroll.connect_decelerate(glib::clone!(
+            #[weak]
+            view,
+            move |_, _, vy| {
+                if view.mode() == Mode::Scroll {
+                    view.glide(vy as f32);
+                }
+            }
+        ));
         scroll.connect_scroll_begin(glib::clone!(
             #[weak]
             view,
@@ -250,6 +277,14 @@ impl PageView {
             #[upgrade_or]
             glib::Propagation::Proceed,
             move |c, _, dy| {
+                if view.mode() == Mode::Scroll {
+                    if c.unit() == gdk::ScrollUnit::Wheel {
+                        view.scroll_by(dy as f32 * 3.0 * view.line_height());
+                    } else {
+                        view.scroll_pixels(dy as f32);
+                    }
+                    return glib::Propagation::Stop;
+                }
                 let (mut acc, mut turned) = view.imp().scroll.get();
                 acc += dy;
                 if c.unit() == gdk::ScrollUnit::Wheel {
@@ -306,9 +341,14 @@ impl PageView {
 
     /// `Tab` (`delta` 1) and `Shift+Tab` (−1): focus the next or previous note marker or link of the page.
     pub fn focus_next(&self, delta: i32) {
+        let h = WidgetExt::height(self) as f32;
         self.with(|s| {
-            let Some(page) = Self::page_node(s, s.page).map(|_| s.page) else { return };
-            let count = s.areas.get(&page).map_or(0, |a| stops(a).len()) as i32;
+            let count = if s.mode == Mode::Scroll {
+                stops(Self::visible_areas(s, h)).len() as i32
+            } else {
+                let Some(page) = Self::page_node(s, s.page).map(|_| s.page) else { return };
+                s.areas.get(&page).map_or(0, |a| stops(a).len()) as i32
+            };
             if count == 0 {
                 return;
             }
@@ -330,9 +370,11 @@ impl PageView {
 
     /// Opens the focused note marker or link; false when nothing is focused.
     pub fn open_focused(&self) -> bool {
+        let h = WidgetExt::height(self) as f32;
         let target = self.with(|s| {
-            let areas = s.areas.get(&s.page)?;
-            let (first, _) = *stops(areas).get(s.focus?)?;
+            let focus = s.focus?;
+            let areas = if s.mode == Mode::Scroll { Self::visible_areas(s, h) } else { s.areas.get(&s.page)? };
+            let (first, _) = *stops(areas).get(focus)?;
             Some(areas[first].target.clone())
         });
         match target {
@@ -345,8 +387,9 @@ impl PageView {
     }
 
     fn click(&self, x: f32, y: f32) {
+        let h = WidgetExt::height(self) as f32;
         let target = self.with(|s| {
-            let areas = s.areas.get(&s.page)?;
+            let areas = if s.mode == Mode::Scroll { Self::visible_areas(s, h) } else { s.areas.get(&s.page)? };
             // A little slack: markers are small.
             let hit =
                 |a: &&Area| x >= a.rect.x - 4.0 && x <= a.rect.x + a.rect.w + 4.0 && y >= a.rect.y - 4.0 && y <= a.rect.y + a.rect.h + 4.0;
@@ -406,9 +449,17 @@ impl PageView {
             if let Some(layout) = s.layout.as_ref().filter(|l| l.chapter == at.chapter) {
                 s.page = layout.page_of(at);
             }
+            if s.mode == Mode::Scroll {
+                Self::align_column(s);
+            }
         });
         self.moved();
         self.queue_draw();
+    }
+
+    /// The body text's line height.
+    fn line_height(&self) -> f32 {
+        self.with(|s| s.typesetter.as_ref().map_or(30.0, |t| t.line_height))
     }
 
     /// Calls `f` whenever the reading position changes (to save it).
@@ -486,6 +537,10 @@ impl PageView {
             s.nodes.clear();
             s.areas.clear();
             s.focus = None;
+            if s.mode == Mode::Scroll {
+                s.column.tiles.clear();
+                Self::align_column(s);
+            }
             true
         })
     }
@@ -495,14 +550,21 @@ impl PageView {
         let job = self.with(|s| {
             let style = s.style?;
             let chapter = s.chapter;
-            s.neighbours.retain(|l| l.chapter.abs_diff(chapter) == 1);
+            // "Scroll" shows the next chapter while the current one is still on screen: one more ahead.
+            let ahead = if s.mode == Mode::Scroll { 2 } else { 1 };
+            // Layouts no longer needed are freed on a worker: thousands of small allocations, not a frame's work.
+            let (keep, old): (Vec<_>, Vec<_>) = s.neighbours.drain(..).partition(|l| (1..=ahead).contains(&l.chapter.abs_diff(chapter)));
+            s.neighbours = keep;
+            if !old.is_empty() {
+                std::thread::spawn(move || drop(old));
+            }
             let near = || (chapter.saturating_sub(1)..=chapter + 1).filter(|&c| c < s.book.chapters.len());
             let wanted: HashSet<String> = image_ids(&s.book, near());
             s.textures.retain(|id, _| wanted.contains(id));
             if s.busy {
                 return None;
             }
-            let chapters: Vec<usize> = [chapter + 1, chapter.wrapping_sub(1)]
+            let chapters: Vec<usize> = [chapter + 1, chapter.wrapping_sub(1), if ahead > 1 { chapter + 2 } else { usize::MAX }]
                 .into_iter()
                 .filter(|&c| c < s.book.chapters.len() && !s.neighbours.iter().any(|l| l.chapter == c))
                 .collect();
@@ -559,10 +621,21 @@ impl PageView {
     }
 
     fn draw(&self, snapshot: &gtk::Snapshot) {
+        self.draw_page(snapshot);
+        if self.mode() == Mode::Scroll && self.with(Self::placed) {
+            self.prepare();
+        }
+    }
+
+    fn draw_page(&self, snapshot: &gtk::Snapshot) {
         let (w, h) = (WidgetExt::width(self) as f32, WidgetExt::height(self) as f32);
         let now = WidgetExt::frame_clock(self).map_or(0, |c| c.frame_time());
         self.with(|s| {
             snapshot.append_color(&rgba(THEMES[s.theme].1), &graphene::Rect::new(0.0, 0.0, w, h));
+            if s.mode == Mode::Scroll {
+                Self::draw_column(s, snapshot, h);
+                return;
+            }
             let Some(current) = Self::page_node(s, s.page) else { return };
             let progress: f32 =
                 s.turn.as_mut().map(|t| ((now - *t.start.get_or_insert(now)) as f32 / TURN as f32).clamp(0.0, 1.0)).unwrap_or(1.0);
@@ -613,7 +686,13 @@ impl PageView {
         })
     }
 
+    /// "Slide": turns `delta` pages. "Scroll": moves by a screen less a line.
     pub fn turn(&self, delta: i32) {
+        if self.mode() == Mode::Scroll {
+            let h = WidgetExt::height(self) as f32;
+            self.scroll_by(delta as f32 * (h - self.line_height()));
+            return;
+        }
         let animate = self.with(|s| {
             let Some(layout) = &s.layout else { return false };
             let from = s.nodes.get(&s.page).cloned();
@@ -653,6 +732,24 @@ impl PageView {
         self.queue_draw();
     }
 
+    /// "Slide": turns a page. "Scroll": moves by a line.
+    pub fn line(&self, delta: i32) {
+        if self.mode() == Mode::Scroll {
+            self.scroll_by(delta as f32 * self.line_height());
+        } else {
+            self.turn(delta);
+        }
+    }
+
+    /// "Slide": turns a page. "Scroll": moves by half a screen.
+    pub fn half(&self, delta: i32) {
+        if self.mode() == Mode::Scroll {
+            self.scroll_by(delta as f32 * WidgetExt::height(self) as f32 / 2.0);
+        } else {
+            self.turn(delta);
+        }
+    }
+
     pub fn chapter(&self, delta: i32) {
         self.with(|s| {
             let target = (s.chapter as i64 + delta as i64).clamp(0, s.book.chapters.len() as i64 - 1) as usize;
@@ -660,12 +757,19 @@ impl PageView {
             s.locator = Locator { chapter: target, ..Locator::default() };
             s.turn = None;
             s.focus = None;
+            if s.mode == Mode::Scroll {
+                Self::align_column(s);
+            }
         });
         self.moved();
         self.queue_draw();
     }
 
     pub fn chapter_edge(&self, end: bool) {
+        if self.mode() == Mode::Scroll {
+            self.column_edge(end);
+            return;
+        }
         self.with(|s| {
             if let Some(layout) = &s.layout {
                 s.page = if end { layout.pages.len() - 1 } else { 0 };
@@ -678,13 +782,16 @@ impl PageView {
         self.queue_draw();
     }
 
-    /// Page `page` of the current chapter (the last one if there are fewer).
+    /// Page `page` of the current chapter (the last one if there are fewer); in "Scroll" its first line at the top.
     pub fn go_to_page(&self, page: usize) {
         self.with(|s| {
             if let Some(layout) = &s.layout {
                 s.page = page.min(layout.pages.len() - 1);
                 s.locator = layout.page_start(s.page);
                 s.turn = None;
+            }
+            if s.mode == Mode::Scroll {
+                Self::align_column(s);
             }
         });
         self.queue_draw();
@@ -700,6 +807,7 @@ impl PageView {
             s.theme = (s.theme as i32 + delta).rem_euclid(THEMES.len() as i32) as usize;
             s.nodes.clear(); // ink is baked into the nodes; only a redraw, no re-layout
             s.areas.clear();
+            s.column.tiles.clear();
         });
         self.queue_draw();
     }

@@ -210,3 +210,44 @@ fn notes_are_typeset_as_one_tall_page() {
     assert!(bottom <= style.margin_top + height && height > 100.0, "height {height}, last baseline {bottom}");
     assert!(layout_note(&b, "missing", &style, &mut t).is_none());
 }
+
+/// How many lines the runs make: distinct baselines.
+fn line_count(runs: &[GlyphRun]) -> usize {
+    let mut ys: Vec<f32> = runs.iter().map(|r| r.positions[0][1]).collect();
+    ys.sort_by(f32::total_cmp);
+    ys.dedup_by(|a, b| (*a - *b).abs() < 0.01);
+    ys.len()
+}
+
+#[test]
+fn the_column_holds_every_line_once_and_places_round_trip() {
+    let style = PageStyle::for_window(600.0, 500.0, 20.0);
+    let mut blocks: Vec<Block> = (0..12).map(|_| paragraph(TEXT)).collect();
+    blocks.insert(5, Block::EmptyLine);
+    let b = book(blocks);
+    let mut t = typesetter(style);
+    let ch = paginate(&b, 0, &style, &mut t);
+    let lines_on_pages: usize = (0..ch.pages.len()).map(|i| line_count(&ch.render_body(i, &style).runs)).sum();
+    // The whole column at once: every line exactly once.
+    assert_eq!(line_count(&ch.render_flow(0.0, ch.flow_height(), &style).runs), lines_on_pages);
+    // Slices of it draw the lines whose tops are inside them, shifted to the slice's top; tiles add up to the column.
+    let (y0, y1) = (300.0, 700.0);
+    let slice = ch.render_flow(y0, y1, &style);
+    for r in &slice.runs {
+        let y = r.positions[0][1];
+        assert!(y > 0.0 && y < (y1 - y0) + t.line_height, "baseline {y} outside the slice");
+    }
+    assert!(!slice.runs.is_empty());
+    let tile = 333.0;
+    let tiles = (0..(ch.flow_height() / tile).ceil() as usize)
+        .map(|k| line_count(&ch.render_flow(k as f32 * tile, (k + 1) as f32 * tile, &style).runs));
+    assert_eq!(tiles.sum::<usize>(), lines_on_pages, "no line in two tiles, none missing");
+    // Page starts are lines of the column and come back.
+    for i in 0..ch.pages.len() {
+        let at = ch.page_start(i);
+        assert_eq!(ch.flow_locator(ch.flow_y(at)), at, "page {i}");
+    }
+    let ys: Vec<f32> = (0..ch.pages.len()).map(|i| ch.flow_y(ch.page_start(i))).collect();
+    assert!(ys.windows(2).all(|w| w[0] < w[1]) && *ys.last().unwrap() < ch.flow_height());
+    assert_eq!(ch.flow_locator(1e9), ch.flow_locator(ch.flow_height()), "past the end: the last line");
+}

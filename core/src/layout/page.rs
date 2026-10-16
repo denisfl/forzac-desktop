@@ -51,6 +51,11 @@ pub struct ChapterLayout {
     /// The chapter's title, for the running head.
     title: Option<String>,
     position: Position,
+    /// The model block index of each block layout.
+    block_index: Vec<usize>,
+    /// The chapter as one column ("Scroll"): each block layout's top, and the column's height.
+    flow: Vec<f32>,
+    flow_height: f32,
 }
 
 /// Where the chapter's text lies in the book, to tell how far a page is (text lengths, see `Block::text_len`).
@@ -122,35 +127,111 @@ impl ChapterLayout {
     pub fn render_body(&self, i: usize, style: &PageStyle) -> PageContent {
         let mut out = PageContent::default();
         for s in &self.pages[i].slices {
-            let Some(b) = self.blocks.get(s.layout) else { continue };
-            let left = style.margin_h + b.x;
-            let top = style.margin_top + s.top;
-            match &b.content {
-                Content::Text(t) => {
-                    for line in s.line_start..s.line_end {
-                        let y = top + (line - s.line_start) as f32 * t.line_height + t.baseline;
-                        push_line(&mut out, &t.lines[line], left, y);
-                    }
-                }
-                Content::Empty => {}
-                Content::Image { id, w, h } => out.images.push(PageImage { id: id.clone(), rect: Rect { x: left, y: top, w: *w, h: *h } }),
-                Content::Row { cells, rules, height, width } => {
-                    for cell in cells {
-                        for (n, line) in cell.text.lines.iter().enumerate() {
-                            let y = top + cell.y + n as f32 * cell.text.line_height + cell.text.baseline;
-                            push_line(&mut out, line, left + cell.x, y);
-                        }
-                    }
-                    for (strength, y) in [(rules.0, top), (rules.1, top + height)] {
-                        if strength > 0 {
-                            let h = [0.0, 0.5, 1.0, 1.5][strength as usize];
-                            out.rules.push(Rule { rect: Rect { x: left, y: y - h / 2.0, w: *width, h }, strength });
-                        }
-                    }
-                }
+            if let Some(b) = self.blocks.get(s.layout) {
+                draw_block(&mut out, b, s.line_start..s.line_end, style.margin_h + b.x, style.margin_top + s.top);
             }
         }
         out
+    }
+
+    /// The height of the chapter as one column ("Scroll").
+    pub fn flow_height(&self) -> f32 {
+        self.flow_height
+    }
+
+    /// The lines of the column whose tops lie between heights `y0` and `y1`, drawn with `y0` at the top. Each line
+    /// belongs to one slice, so slices drawn next to each other never draw a line twice (the last one may hang below
+    /// its slice, by at most a line, an image or a table row).
+    pub fn render_flow(&self, y0: f32, y1: f32, style: &PageStyle) -> PageContent {
+        let mut out = PageContent::default();
+        for (b, &top) in self.blocks.iter().zip(&self.flow) {
+            if top >= y1 || top + b.height() <= y0 {
+                continue;
+            }
+            let lines = match &b.content {
+                Content::Text(t) => {
+                    let first = ((y0 - top) / t.line_height).ceil().max(0.0) as usize;
+                    let last = (((y1 - top) / t.line_height).ceil().max(0.0) as usize).min(t.lines.len());
+                    first..last.max(first)
+                }
+                _ if top < y0 => continue,
+                _ => 0..1,
+            };
+            let first = lines.start;
+            let line_top = match &b.content {
+                Content::Text(t) => top + first as f32 * t.line_height,
+                _ => top,
+            };
+            draw_block(&mut out, b, lines, style.margin_h + b.x, line_top - y0);
+        }
+        out
+    }
+
+    /// Where in the column the line holding `at` starts.
+    pub fn flow_y(&self, at: Locator) -> f32 {
+        let Some(i) = self.block_index.iter().rposition(|&b| b <= at.block) else { return 0.0 };
+        let top = self.flow[i];
+        match &self.blocks[i].content {
+            Content::Text(t) if self.block_index[i] == at.block => {
+                let line = t.starts.iter().rposition(|&s| s <= at.offset).unwrap_or(0);
+                top + line as f32 * t.line_height
+            }
+            _ => top,
+        }
+    }
+
+    /// The first line starting at or below height `y` of the column (the last line when `y` is past the end).
+    pub fn flow_locator(&self, y: f32) -> Locator {
+        let at = |i: usize, offset: usize| Locator { chapter: self.chapter, block: self.block_index[i], offset };
+        let mut last = Locator { chapter: self.chapter, ..Locator::default() };
+        for (i, (b, &top)) in self.blocks.iter().zip(&self.flow).enumerate() {
+            match &b.content {
+                Content::Text(t) => {
+                    for (line, &start) in t.starts.iter().enumerate() {
+                        if top + line as f32 * t.line_height >= y - 0.5 {
+                            return at(i, start);
+                        }
+                        last = at(i, start);
+                    }
+                }
+                Content::Empty => {}
+                _ => {
+                    if top >= y - 0.5 {
+                        return at(i, 0);
+                    }
+                    last = at(i, 0);
+                }
+            }
+        }
+        last
+    }
+}
+
+/// Lines `lines` of block `b` (one "line" for an image or a table row) with the first at `top`, the column at `left`.
+fn draw_block(out: &mut PageContent, b: &BlockLayout, lines: std::ops::Range<usize>, left: f32, top: f32) {
+    match &b.content {
+        Content::Text(t) => {
+            for line in lines.clone() {
+                let y = top + (line - lines.start) as f32 * t.line_height + t.baseline;
+                push_line(out, &t.lines[line], left, y);
+            }
+        }
+        Content::Empty => {}
+        Content::Image { id, w, h } => out.images.push(PageImage { id: id.clone(), rect: Rect { x: left, y: top, w: *w, h: *h } }),
+        Content::Row { cells, rules, height, width } => {
+            for cell in cells {
+                for (n, line) in cell.text.lines.iter().enumerate() {
+                    let y = top + cell.y + n as f32 * cell.text.line_height + cell.text.baseline;
+                    push_line(out, line, left + cell.x, y);
+                }
+            }
+            for (strength, y) in [(rules.0, top), (rules.1, top + height)] {
+                if strength > 0 {
+                    let h = [0.0, 0.5, 1.0, 1.5][strength as usize];
+                    out.rules.push(Rule { rect: Rect { x: left, y: y - h / 2.0, w: *width, h }, strength });
+                }
+            }
+        }
     }
 }
 
@@ -315,6 +396,25 @@ fn paginate_from(book: &Book, chapter: usize, style: &PageStyle, typesetter: &mu
             }
         }
     }
+    // The column ("Scroll"): the same gaps, no page breaks.
+    let mut flow = Vec::with_capacity(blocks.len());
+    let mut y = start;
+    let mut prev: Option<&BlockLayout> = None;
+    for &block in &blocks {
+        if matches!(block.content, Content::Empty) {
+            flow.push(y);
+            y += lh;
+            prev = Some(block);
+            continue;
+        }
+        y += gap(prev, block);
+        flow.push(y);
+        y += block.height();
+        prev = Some(block);
+    }
+    let flow_height = y + lh * 2.0;
+
     let title = book.chapters[chapter].title.clone();
-    ChapterLayout { chapter, blocks: laid.into_iter().map(|(_, l)| l).collect(), pages, title, position }
+    let block_index = laid.iter().map(|(i, _)| *i).collect();
+    ChapterLayout { chapter, blocks: laid.into_iter().map(|(_, l)| l).collect(), pages, title, position, block_index, flow, flow_height }
 }

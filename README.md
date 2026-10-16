@@ -45,8 +45,10 @@ Tests: `cargo test -p forzac-core`. Measurements on a Linux desktop: `scripts/me
 
 | Keys | Action |
 |---|---|
-| `j` `l` `→` `↓` `Space` `PgDn` `Enter` | next page |
-| `k` `h` `←` `↑` `Shift+Space` `PgUp` `Backspace` | previous page |
+| `j` `l` `→` `↓` `Space` `PgDn` `Enter` | next page (Scroll mode: `j` `↓` a line, the others a screen) |
+| `k` `h` `←` `↑` `Shift+Space` `PgUp` `Backspace` | previous page (Scroll mode: `k` `↑` a line, the others a screen) |
+| `Ctrl+D` `Ctrl+U` | Scroll mode: half a screen down / up; Linux |
+| `m` | Slide (pages) or Scroll (a continuous column), keeping the top line; Linux |
 | `]` `[` | next / previous chapter |
 | `g` `G` `Home` `End` | chapter start / end |
 | `o` | contents (`/` filters, `Enter` jumps); Linux |
@@ -58,7 +60,8 @@ Tests: `cargo test -p forzac-core`. Measurements on a Linux desktop: `scripts/me
 | `?` | help |
 | `q` `Ctrl+W` (macOS: `⌘W`) | close |
 
-A wheel step turns a page; one touchpad swipe turns one page (Linux). Planned: `/` `n` `N` search, `b` bookmark, `m` page / scroll mode, `s` settings.
+A wheel step turns a page; one touchpad swipe turns one page; in Scroll mode the wheel and touchpad scroll smoothly
+(Linux). Planned: `/` `n` `N` search, `b` bookmark, `s` settings.
 
 ## Default reader on Linux
 

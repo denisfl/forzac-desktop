@@ -5,7 +5,8 @@
 //!
 //! Spike flags: `--measure` prints the time to the first presented page and quits; `--png out.png` saves the first
 //! page as rendered by the window's renderer and quits; `--turns N` turns N pages with the animation and prints
-//! frame-interval statistics; `--chapter N` opens chapter N; `--page N` goes to page N of it
+//! frame-interval statistics; `--scrolls N` the same in the "Scroll" mode, a screen at a time; `--chapter N` opens
+//! chapter N; `--page N` goes to page N of it
 //! (for `--png` and `--turns`). With any of them the reading state is neither read nor written.
 //!
 //! Without a file, the recent books are listed. Reading positions, the theme and the text size are remembered in
@@ -23,7 +24,7 @@ use std::time::{Duration, Instant};
 use forzac_core::Locator;
 use forzac_core::state::Store;
 use gtk::{gio, glib, graphene, prelude::*};
-use page_view::{Open, PageView, TEXT_SIZES, THEMES};
+use page_view::{Mode, Open, PageView, TEXT_SIZES, THEMES};
 
 const APP_ID: &str = "app.truenrth.forzac";
 
@@ -33,6 +34,7 @@ struct Options {
     measure: bool,
     png: Option<PathBuf>,
     turns: usize,
+    scrolls: usize,
     chapter: Option<usize>,
     page: usize,
 }
@@ -40,7 +42,7 @@ struct Options {
 impl Options {
     /// Measurement runs neither read nor write the reading state.
     fn stateless(&self) -> bool {
-        self.measure || self.png.is_some() || self.turns > 0 || self.chapter.is_some() || self.page > 0
+        self.measure || self.png.is_some() || self.turns > 0 || self.scrolls > 0 || self.chapter.is_some() || self.page > 0
     }
 }
 
@@ -61,8 +63,9 @@ fn main() -> glib::ExitCode {
     let png = args.iter().position(|a| a == "--png").and_then(|i| args.get(i + 1)).map(PathBuf::from);
     let turns = args.iter().position(|a| a == "--turns").and_then(|i| args.get(i + 1)).and_then(|n| n.parse().ok()).unwrap_or(0);
     let chapter = args.iter().position(|a| a == "--chapter").and_then(|i| args.get(i + 1)).and_then(|n| n.parse().ok());
+    let scrolls = args.iter().position(|a| a == "--scrolls").and_then(|i| args.get(i + 1)).and_then(|n| n.parse().ok()).unwrap_or(0);
     let page = args.iter().position(|a| a == "--page").and_then(|i| args.get(i + 1)).and_then(|n| n.parse().ok()).unwrap_or(0);
-    let options = Options { start, measure: args.iter().any(|a| a == "--measure"), png, turns, chapter, page };
+    let options = Options { start, measure: args.iter().any(|a| a == "--measure"), png, turns, scrolls, chapter, page };
     let files: Vec<&String> = args
         .iter()
         .skip(1)
@@ -70,7 +73,7 @@ fn main() -> glib::ExitCode {
         .collect();
 
     let mut flags = gio::ApplicationFlags::HANDLES_OPEN;
-    if options.measure || options.png.is_some() || options.turns > 0 {
+    if options.measure || options.png.is_some() || options.turns > 0 || options.scrolls > 0 {
         flags |= gio::ApplicationFlags::NON_UNIQUE;
     }
     let app = gtk::Application::builder().application_id(APP_ID).flags(flags).build();
@@ -101,15 +104,18 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
     let parsed = options.start.elapsed();
     let title = if book.title.is_empty() { "Forzac".to_owned() } else { format!("{} — Forzac", book.title) };
     let stateless = options.stateless();
-    let (at, theme, size) = if stateless {
-        (Locator { chapter: options.chapter.unwrap_or(0), ..Locator::default() }, 0, 2)
+    let (at, theme, size, mode) = if stateless {
+        let mode = if options.scrolls > 0 { Mode::Scroll } else { Mode::Slide };
+        (Locator { chapter: options.chapter.unwrap_or(0), ..Locator::default() }, 0, 2, mode)
     } else {
         let s = store.borrow();
         let theme = s.setting("theme").and_then(|name| THEMES.iter().position(|t| t.0 == name)).unwrap_or(0);
         let size = s.setting("text-size").and_then(|px| TEXT_SIZES.iter().position(|t| t.to_string() == px)).unwrap_or(2);
-        (s.position(&book, path).unwrap_or_default(), theme, size)
+        let mode = if s.setting("turning") == Some("scroll") { Mode::Scroll } else { Mode::Slide };
+        (s.position(&book, path).unwrap_or_default(), theme, size, mode)
     };
     let view = PageView::new(book, at, theme, size);
+    view.set_mode(mode);
 
     let help = gtk::Label::new(Some(HELP));
     help.add_css_class("osd");
@@ -135,8 +141,11 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
         Rc::new(move || {
             let (theme, size) = view.style();
             panels::set_theme(theme);
+            let turning = if view.mode() == Mode::Scroll { "scroll" } else { "slide" };
             let mut s = store.borrow_mut();
-            for (key, value) in [("theme", THEMES[theme].0.to_owned()), ("text-size", TEXT_SIZES[size].to_string())] {
+            for (key, value) in
+                [("theme", THEMES[theme].0.to_owned()), ("text-size", TEXT_SIZES[size].to_string()), ("turning", turning.to_owned())]
+            {
                 if let Err(e) = s.set_setting(key, &value) {
                     eprintln!("cannot save the reading state: {e}");
                 }
@@ -191,7 +200,7 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
         remember_position(&view, &window, path, store);
     }
 
-    if options.measure || options.png.is_some() || options.turns > 0 {
+    if options.measure || options.png.is_some() || options.turns > 0 || options.scrolls > 0 {
         let options = options.clone();
         let window = window.clone();
         view.connect_first_frame(move |view| {
@@ -208,14 +217,20 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             if let Some(png) = &options.png {
                 save_png(view, png);
             }
-            if options.turns == 0 {
+            if options.turns == 0 && options.scrolls == 0 {
                 window.close();
                 return;
             }
-            // One turn every 400 ms (the animation takes 200), then the statistics.
-            let left = std::cell::Cell::new(options.turns);
+            // One turn (or scroll by a screen) every 400 ms (the animation takes 200 or 150), then the statistics; the
+            // first 1.2 s after the first frame, as a reader would, when the neighbouring chapters are laid out.
+            let left = std::cell::Cell::new(options.turns.max(options.scrolls));
             let (view, window) = (view.clone(), window.clone());
+            let wait = std::cell::Cell::new(2); // ticks before the first turn
             glib::timeout_add_local(std::time::Duration::from_millis(400), move || {
+                if wait.get() > 0 {
+                    wait.set(wait.get() - 1);
+                    return glib::ControlFlow::Continue;
+                }
                 if left.get() == 0 {
                     report_turns(&view);
                     window.close();
@@ -283,8 +298,9 @@ fn save_png(view: &PageView, path: &std::path::Path) {
 }
 
 const HELP: &str = "\
-j  l  →  ↓  Space  PgDn  Enter    next page
-k  h  ←  ↑  Shift+Space  PgUp    previous page
+j  l  →  ↓  Space  PgDn  Enter    next page (Scroll: j ↓ a line, Ctrl+D half a screen)
+k  h  ←  ↑  Shift+Space  PgUp    previous page (Scroll: k ↑ a line, Ctrl+U half a screen)
+m    page or scroll
 ]  [    next / previous chapter
 g  G  Home  End    chapter start / end
 o    contents  (/ filters)
@@ -432,7 +448,21 @@ fn shortcuts(
         controller.add_shortcut(gtk::Shortcut::new(gtk::ShortcutTrigger::parse_string(trigger), Some(action)));
     };
     let v = view.clone();
-    add("j|l|Right|Down|space|Page_Down", Box::new(move || v.turn(1)));
+    add("l|Right|space|Page_Down", Box::new(move || v.turn(1)));
+    let v = view.clone();
+    add("j|Down", Box::new(move || v.line(1)));
+    let v = view.clone();
+    add("<Control>d", Box::new(move || v.half(1)));
+    let v = view.clone();
+    add("<Control>u", Box::new(move || v.half(-1)));
+    let (v, save) = (view.clone(), save_style.clone());
+    add(
+        "m",
+        Box::new(move || {
+            v.toggle_mode();
+            save();
+        }),
+    );
     let v = view.clone();
     add(
         "Return|KP_Enter",
@@ -455,7 +485,9 @@ fn shortcuts(
     );
     add("o", Box::new(move || open_contents()));
     let v = view.clone();
-    add("k|h|Left|Up|<Shift>space|Page_Up|BackSpace", Box::new(move || v.turn(-1)));
+    add("h|Left|<Shift>space|Page_Up|BackSpace", Box::new(move || v.turn(-1)));
+    let v = view.clone();
+    add("k|Up", Box::new(move || v.line(-1)));
     let v = view.clone();
     add("bracketright", Box::new(move || v.chapter(1)));
     let v = view.clone();
