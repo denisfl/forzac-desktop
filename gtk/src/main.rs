@@ -162,31 +162,82 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
         window.connect_destroy(move |_| drop(watch.take()));
     }
     let settings_panel: Rc<RefCell<Option<Rc<settings_sheet::SettingsSheet>>>> = Rc::default();
-    let open_settings: Rc<dyn Fn()> = {
-        let (panel, overlay, view, save) = (settings_panel.clone(), overlay.clone(), view.clone(), save_style.clone());
-        Rc::new(move || {
-            let panel = panel.borrow_mut().get_or_insert_with(|| settings_sheet::SettingsSheet::new(&overlay, &view, save.clone())).clone();
-            panel.open(&view);
-        })
-    };
     // The contents panel is built in the first pause in reading (a second without turning), so `o` only shows it and
     // the building never delays a page turn.
     let contents: Rc<RefCell<Option<Rc<panels::Contents>>>> = Rc::default();
     let search: Rc<RefCell<Option<Rc<panels::SearchPanel>>>> = Rc::default();
+    let note: Rc<RefCell<Option<gtk::Box>>> = Rc::default();
+    // Closes whatever panel is over the page; false when none was.
+    let close_panels: Rc<dyn Fn() -> bool> = {
+        let (settings_panel, contents, search, note, overlay, view) =
+            (settings_panel.clone(), contents.clone(), search.clone(), note.clone(), overlay.clone(), view.clone());
+        Rc::new(move || {
+            let mut closed = false;
+            if let Some(p) = settings_panel.borrow().as_ref().filter(|p| p.is_open()) {
+                p.close(&view);
+                closed = true;
+            }
+            if let Some(p) = contents.borrow().as_ref().filter(|p| p.is_open()) {
+                p.close(&view);
+                closed = true;
+            }
+            if let Some(p) = search.borrow().as_ref().filter(|p| p.is_open()) {
+                p.close(&view);
+                closed = true;
+            }
+            if let Some(n) = note.borrow_mut().take().filter(|n| n.parent().is_some()) {
+                overlay.remove_overlay(&n);
+                view.grab_focus();
+                closed = true;
+            }
+            closed
+        })
+    };
+    // `s`, `o` and `/` open their panel (closing the others) or close it when it is open.
+    let open_settings: Rc<dyn Fn()> = {
+        let (panel, overlay, view, save, close) =
+            (settings_panel.clone(), overlay.clone(), view.clone(), save_style.clone(), close_panels.clone());
+        Rc::new(move || {
+            let panel = panel.borrow_mut().get_or_insert_with(|| settings_sheet::SettingsSheet::new(&overlay, &view, save.clone())).clone();
+            let was_open = panel.is_open();
+            close();
+            if !was_open {
+                panel.open(&view);
+            }
+        })
+    };
     let open_search: Rc<dyn Fn()> = {
-        let (search, overlay, view) = (search.clone(), overlay.clone(), view.clone());
+        let (search, overlay, view, close) = (search.clone(), overlay.clone(), view.clone(), close_panels.clone());
         Rc::new(move || {
             let s = search.borrow_mut().get_or_insert_with(|| panels::SearchPanel::new(&overlay, &view)).clone();
-            s.open(&view);
+            let was_open = s.is_open();
+            close();
+            if !was_open {
+                s.open(&view);
+            }
         })
     };
     let open_contents: Rc<dyn Fn()> = {
-        let (contents, overlay, view) = (contents.clone(), overlay.clone(), view.clone());
+        let (contents, overlay, view, close) = (contents.clone(), overlay.clone(), view.clone(), close_panels.clone());
         Rc::new(move || {
             let c = contents.borrow_mut().get_or_insert_with(|| panels::Contents::new(&overlay, &view)).clone();
-            c.open(&view);
+            let was_open = c.is_open();
+            close();
+            if !was_open {
+                c.open(&view);
+            }
         })
     };
+    // A click on the page while a panel is over it closes the panel, and only that.
+    let click = gtk::GestureClick::new();
+    click.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let c = close_panels.clone();
+    click.connect_pressed(move |g, _, _, _| {
+        if c() {
+            g.set_state(gtk::EventSequenceState::Claimed);
+        }
+    });
+    view.add_controller(click);
     glib::timeout_add_local(
         Duration::from_millis(500),
         glib::clone!(
@@ -208,7 +259,13 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             }
         ),
     );
-    view.add_controller(shortcuts(&view, &help, open_contents, open_settings, open_search, &window, save_style));
+    view.add_controller(shortcuts(
+        &view,
+        &help,
+        PanelKeys { contents: open_contents, settings: open_settings, search: open_search, close: close_panels },
+        &window,
+        save_style,
+    ));
     view.connect_open(glib::clone!(
         #[weak]
         overlay,
@@ -217,7 +274,7 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
         #[weak]
         view,
         move |open| match open {
-            Open::Note(id) => panels::note(&overlay, &view, &id),
+            Open::Note(id) => *note.borrow_mut() = panels::note(&overlay, &view, &id),
             Open::External(url) => gtk::UriLauncher::new(&url).launch(Some(&window), gio::Cancellable::NONE, |_| {}),
         }
     ));
@@ -459,15 +516,22 @@ fn recent_window(app: &gtk::Application, options: &Options, store: &SharedStore)
 
 /// Keys by keyval; GTK also matches them in the first (Latin) layout group, so `j`/`k` work in a Russian layout.
 /// They act while the page has the focus: an open panel has keys of its own.
+/// What the reader's keys open and close: `o`, `s`, `/` and closing whatever panel is open.
+struct PanelKeys {
+    contents: Rc<dyn Fn()>,
+    settings: Rc<dyn Fn()>,
+    search: Rc<dyn Fn()>,
+    close: Rc<dyn Fn() -> bool>,
+}
+
 fn shortcuts(
     view: &PageView,
     help: &gtk::Label,
-    open_contents: Rc<dyn Fn()>,
-    open_settings: Rc<dyn Fn()>,
-    open_search: Rc<dyn Fn()>,
+    panels: PanelKeys,
     window: &gtk::ApplicationWindow,
     save_style: Rc<dyn Fn()>,
 ) -> gtk::ShortcutController {
+    let PanelKeys { contents: open_contents, settings: open_settings, search: open_search, close: close_panels } = panels;
     let controller = gtk::ShortcutController::new();
     let add = |trigger: &str, f: Box<dyn Fn()>| {
         let action = gtk::CallbackAction::new(move |_, _| {
@@ -577,10 +641,10 @@ fn shortcuts(
     add(
         "Escape",
         Box::new(move || {
-            // The help, else the focused marker or link, else the match highlight.
+            // The help, else a panel, else the focused marker or link, else the match highlight.
             if h.is_visible() {
                 h.set_visible(false);
-            } else if !v.unfocus() {
+            } else if !close_panels() && !v.unfocus() {
                 v.clear_match();
             }
         }),

@@ -397,7 +397,11 @@ impl Contents {
         self.list.grab_focus();
     }
 
-    fn close(&self, view: &PageView) {
+    pub fn is_open(&self) -> bool {
+        self.panel.is_visible() && self.panel.opacity() > 0.0
+    }
+
+    pub fn close(&self, view: &PageView) {
         self.panel.set_visible(false);
         view.grab_focus();
     }
@@ -651,7 +655,11 @@ impl SearchPanel {
         self.field.select_region(0, -1);
     }
 
-    fn close(&self, view: &PageView) {
+    pub fn is_open(&self) -> bool {
+        self.panel.is_visible() && self.panel.opacity() > 0.0
+    }
+
+    pub fn close(&self, view: &PageView) {
         self.panel.set_visible(false);
         view.grab_focus();
     }
@@ -710,10 +718,11 @@ impl SearchPanel {
 
 /// Note `id` in a bottom sheet over the page, as the Android note (`NoteSheet.kt`, the design's `Footnote.dc.html`): a
 /// grabber, "NOTE" with the note's title, then the note typeset by the core. `Esc`, `Enter` or `q` closes it.
-pub fn note(overlay: &gtk::Overlay, view: &PageView, id: &str) {
+/// Returns the sheet, so a click on the page can close it.
+pub fn note(overlay: &gtk::Overlay, view: &PageView, id: &str) -> Option<gtk::Box> {
     crate::fonts::add_interface_fonts();
     let width = overlay.width().min(SHEET_WIDTH);
-    let Some((node, height)) = view.note(id, (width - 48) as f32) else { return };
+    let (node, height) = view.note(id, (width - 48) as f32)?;
     let panel = gtk::Box::new(gtk::Orientation::Vertical, 12);
     panel.add_css_class("forzac-panel");
     panel.add_css_class("forzac-sheet");
@@ -747,6 +756,7 @@ pub fn note(overlay: &gtk::Overlay, view: &PageView, id: &str) {
     });
     note.add_controller(keys);
     note.grab_focus();
+    Some(panel)
 }
 
 mod imp {

@@ -23,6 +23,8 @@ pub struct SettingsSheet {
     /// The widget outlined for each of `CONTROLS`.
     controls: Vec<gtk::Widget>,
     current: Cell<usize>,
+    /// The keys were used since the sheet opened: only then is the control they change outlined.
+    keyboard: Cell<bool>,
     circles: Vec<gtk::Button>,
     size: gtk::Label,
     smaller: gtk::Button,
@@ -195,6 +197,7 @@ impl SettingsSheet {
             panel,
             controls,
             current: Cell::new(0),
+            keyboard: Cell::new(false),
             circles,
             size,
             smaller,
@@ -249,24 +252,20 @@ impl SettingsSheet {
 
         let keys = gtk::ShortcutController::new();
         let w = with.clone();
-        shortcut(&keys, "j|Down", move || w(&|s, _| s.focus(s.current.get() as i32 + 1)));
+        shortcut(&keys, "j|Down", move || w(&|s, _| s.keys_used(s.current.get() as i32 + 1)));
         let w = with.clone();
-        shortcut(&keys, "k|Up", move || w(&|s, _| s.focus(s.current.get() as i32 - 1)));
+        shortcut(&keys, "k|Up", move || w(&|s, _| s.keys_used(s.current.get() as i32 - 1)));
         for (trigger, delta) in [("l|Right", 1), ("h|Left", -1)] {
             let (w, apply) = (with.clone(), apply.clone());
             shortcut(&keys, trigger, move || {
                 w(&|s, _| {
+                    s.keys_used(s.current.get() as i32);
                     let setting = CONTROLS[s.current.get()];
                     apply(&|v| v.step(setting, delta));
                 })
             });
         }
-        shortcut(&keys, "Escape|s|q", move || {
-            with(&|s, v| {
-                s.panel.set_visible(false);
-                v.grab_focus();
-            })
-        });
+        shortcut(&keys, "Escape|s|q", move || with(&|s, v| s.close(v)));
         sheet.panel.add_controller(keys);
         sheet
     }
@@ -275,13 +274,25 @@ impl SettingsSheet {
         let width = view.parent().map_or(SHEET_WIDTH, |p| p.width()).min(SHEET_WIDTH);
         self.panel.set_width_request(width);
         self.show(view);
-        self.focus(self.current.get() as i32);
+        self.keyboard.set(false);
+        self.controls[self.current.get()].remove_css_class("keys");
         self.panel.set_visible(true);
         self.panel.grab_focus();
     }
 
-    /// Outlines control `i` (clamped) as the one the keys change.
-    fn focus(&self, i: i32) {
+    pub fn is_open(&self) -> bool {
+        self.panel.is_visible()
+    }
+
+    pub fn close(&self, view: &PageView) {
+        self.panel.set_visible(false);
+        view.grab_focus();
+    }
+
+    /// Makes control `i` (clamped) the one the keys change and outlines it: the outline shows once the keys are used,
+    /// not for the mouse.
+    fn keys_used(&self, i: i32) {
+        self.keyboard.set(true);
         let i = i.clamp(0, CONTROLS.len() as i32 - 1) as usize;
         self.controls[self.current.get()].remove_css_class("keys");
         self.controls[i].add_css_class("keys");

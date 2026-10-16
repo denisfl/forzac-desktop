@@ -85,6 +85,7 @@ final class Reader: NSObject, NSWindowDelegate {
         help.layer?.cornerRadius = 12
         container.addSubview(help)
         view.onCommand = { [weak self] in self?.run($0) }
+        view.panelOpen = { [weak self] in self?.panelOpen ?? false }
         view.onMoved = { [weak self] in
             self?.saveTimer?.invalidate()
             self?.saveTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: false) { _ in self?.savePosition() }
@@ -111,10 +112,10 @@ final class Reader: NSObject, NSWindowDelegate {
             if settingsSheet == nil {
                 let sheet = SettingsSheet(view: view)
                 sheet.pin(in: container)
+                sheet.isHidden = true
                 settingsSheet = sheet
             }
-            closePanels()
-            settingsSheet?.open()
+            if let sheet = settingsSheet { toggle(sheet) { sheet.open() } }
         case .contents:
             if contents == nil {
                 let panel = ContentsPanel(view: view)
@@ -126,10 +127,10 @@ final class Reader: NSObject, NSWindowDelegate {
                     panel.trailingAnchor.constraint(equalTo: container.trailingAnchor), share,
                     panel.widthAnchor.constraint(greaterThanOrEqualToConstant: 280), panel.widthAnchor.constraint(lessThanOrEqualToConstant: 460),
                 ])
+                panel.isHidden = true
                 contents = panel
             }
-            closePanels()
-            contents?.open()
+            if let panel = contents { toggle(panel) { panel.open() } }
         case .search:
             if search == nil {
                 let panel = SearchPanel(view: view)
@@ -141,10 +142,10 @@ final class Reader: NSObject, NSWindowDelegate {
                     panel.trailingAnchor.constraint(equalTo: container.trailingAnchor), share,
                     panel.widthAnchor.constraint(greaterThanOrEqualToConstant: 280), panel.widthAnchor.constraint(lessThanOrEqualToConstant: 460),
                 ])
+                panel.isHidden = true
                 search = panel
             }
-            closePanels()
-            search?.open()
+            if let panel = search { toggle(panel) { panel.open() } }
         case .note(let id):
             closePanels()
             guard let sheet = NoteSheet(view: view, id: id, windowSize: container.bounds.size) else { return }
@@ -156,8 +157,21 @@ final class Reader: NSObject, NSWindowDelegate {
             help.setFrameOrigin(NSPoint(x: (container.bounds.width - help.frame.width) / 2, y: (container.bounds.height - help.frame.height) / 2))
             help.isHidden.toggle()
         case .closePanels:
-            help.isHidden = true
+            closePanels()
+            window.makeFirstResponder(view)
         }
+    }
+
+    /// Shows `panel` (closing the others), or closes it when it is open: `s`, `o` and `/` open and close their panels.
+    private func toggle(_ panel: NSView, open: () -> Void) {
+        let wasOpen = !panel.isHidden
+        closePanels()
+        if wasOpen { window.makeFirstResponder(view) } else { open() }
+    }
+
+    /// Whether a panel or the help is over the page: a click on the page then closes it.
+    var panelOpen: Bool {
+        [settingsSheet, contents, search].contains { $0?.isHidden == false } || note?.superview != nil || !help.isHidden
     }
 
     private func closePanels() {

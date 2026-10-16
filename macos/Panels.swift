@@ -367,10 +367,10 @@ final class SettingsSheet: SheetView {
 
     override func keyDown(with e: NSEvent) {
         switch e.shortcutKey {
-        case 0x26, 0x7D: current = min(controls.count - 1, current + 1); placeRings()  // j ↓
-        case 0x28, 0x7E: current = max(0, current - 1); placeRings()                    // k ↑
-        case 0x25, 0x7C: change(controls[current].1, 1)                                 // l →
-        case 0x04, 0x7B: change(controls[current].1, -1)                                // h ←
+        case 0x26, 0x7D: keysUsed(); current = min(controls.count - 1, current + 1); placeRings() // j ↓
+        case 0x28, 0x7E: keysUsed(); current = max(0, current - 1); placeRings()                    // k ↑
+        case 0x25, 0x7C: keysUsed(); change(controls[current].1, 1)                                 // l →
+        case 0x04, 0x7B: keysUsed(); change(controls[current].1, -1)                                // h ←
         case 0x35, 0x01, 0x0C: close()                                                  // Esc s q
         default: super.keyDown(with: e)
         }
@@ -378,8 +378,14 @@ final class SettingsSheet: SheetView {
 
     func open() {
         isHidden = false
+        keysRing.isHidden = true
         show()
         window?.makeFirstResponder(self)
+    }
+
+    /// The outline of the control the keys change shows once the keys are used, not for the mouse.
+    private func keysUsed() {
+        keysRing.isHidden = false
     }
 
     func close() {

@@ -58,6 +58,8 @@ final class PageView: NSView {
     /// The settings changed (to save them and recolour the panels).
     var onSettings: (() -> Void)?
     var onCommand: ((Command) -> Void)?
+    /// Whether a panel is over the page: a click on the page closes it instead of acting.
+    var panelOpen: (() -> Bool)?
 
     init(doc: OpaquePointer, at: ForzacLocator, settings: ForzacSettings, systemDark: Bool) {
         self.doc = doc
@@ -595,6 +597,7 @@ final class PageView: NSView {
     }
 
     override func mouseUp(with e: NSEvent) {
+        if panelOpen?() == true { return onCommand?(.closePanels) ?? () }
         let p = convert(e.locationInWindow, from: nil)
         let y = bounds.height - p.y
         if let a = visibleAreas().first(where: { $0.rect.insetBy(dx: -4, dy: -4).contains(CGPoint(x: p.x, y: y)) }) {
