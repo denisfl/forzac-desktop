@@ -5,6 +5,9 @@
   <key>CFBundleIdentifier</key><string>app.truenrth.forzac</string>
   <key>CFBundleName</key><string>Forzac</string>
   <key>CFBundleDisplayName</key><string>Forzac</string>
+  <!-- The interface is in English and Russian: the system's own panels (open, share, alerts) follow the language. -->
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>CFBundleLocalizations</key><array><string>en</string><string>ru</string></array>
   <key>CFBundleExecutable</key><string>Forzac</string>
   <key>CFBundleIconFile</key><string>Forzac</string>
   <key>CFBundlePackageType</key><string>APPL</string>

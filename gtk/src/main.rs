@@ -31,6 +31,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use forzac_core::Locator;
+use forzac_core::i18n::{fill, tr};
 use forzac_core::settings::{DEFAULT_SIZE, Setting, Settings, Turning};
 use forzac_core::state::Store;
 use gtk::{gio, glib, graphene, prelude::*};
@@ -99,6 +100,9 @@ fn open_book_window(w: &glib::WeakRef<gtk::ApplicationWindow>) -> Option<gtk::Ap
 
 fn main() -> glib::ExitCode {
     let start = Instant::now();
+    // The interface language, from the environment as GLib reads it (`LANGUAGE`, `LC_ALL`, `LC_MESSAGES`, `LANG`).
+    let languages = glib::language_names();
+    forzac_core::i18n::set_language(forzac_core::i18n::Language::from_locales(languages.iter().map(|l| l.as_str())));
     // The Wayland app_id comes from the program name; it must match the .desktop file name for the compositor,
     // docks and `StartupWMClass`-less matching to tie windows to Forzac.
     glib::set_prgname(Some(APP_ID));
@@ -162,18 +166,18 @@ fn main() -> glib::ExitCode {
 /// Why a file cannot be read, in the Android app's words (without PDF).
 fn reason(e: forzac_core::Error) -> &'static str {
     match e {
-        forzac_core::Error::NotABook => "unsupported format — FB2, FB3 or EPUB needed",
-        forzac_core::Error::Damaged => "the file is damaged",
-        forzac_core::Error::Protected => "the book is DRM-protected and can't be opened",
-        forzac_core::Error::NoText => "the book has no text",
-        forzac_core::Error::Unavailable => "the file is unavailable",
+        forzac_core::Error::NotABook => tr("unsupported format — FB2, FB3 or EPUB needed"),
+        forzac_core::Error::Damaged => tr("the file is damaged"),
+        forzac_core::Error::Protected => tr("the book is DRM-protected and can't be opened"),
+        forzac_core::Error::NoText => tr("the book has no text"),
+        forzac_core::Error::Unavailable => tr("the file is unavailable"),
     }
 }
 
 /// Says why `path` cannot be opened; then, when no book is open, the recent books follow.
 fn cannot_open(app: &gtk::Application, path: &Path, e: forzac_core::Error, options: &Options, store: &SharedStore) {
     let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
-    let message = format!("Couldn't open “{name}”: {}", reason(e));
+    let message = fill(tr("Couldn't open “{name}”: {reason}"), &[("name", &name), ("reason", reason(e))]);
     eprintln!("{message}");
     if options.stateless() {
         return;
@@ -182,12 +186,16 @@ fn cannot_open(app: &gtk::Application, path: &Path, e: forzac_core::Error, optio
     let hold = app.hold();
     let parent = app.active_window();
     let (app, options, store) = (app.clone(), options.clone(), store.clone());
-    gtk::AlertDialog::builder().message(message).modal(true).build().choose(parent.as_ref(), gio::Cancellable::NONE, move |_| {
-        if !has_book_window() {
-            recent_window(&app, &options, &store);
-        }
-        drop(hold);
-    });
+    gtk::AlertDialog::builder().message(message).buttons([tr("Close")]).cancel_button(0).default_button(0).modal(true).build().choose(
+        parent.as_ref(),
+        gio::Cancellable::NONE,
+        move |_| {
+            if !has_book_window() {
+                recent_window(&app, &options, &store);
+            }
+            drop(hold);
+        },
+    );
 }
 
 /// Whether a book window is open.
@@ -215,7 +223,7 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
         }
     };
     let parsed = options.start.elapsed();
-    let title = if book.title.is_empty() { "Forzac".to_owned() } else { format!("{} — Forzac", book.title) };
+    let title = if book.title.is_empty() { tr("Forzac").to_owned() } else { fill(tr("{title} — Forzac"), &[("title", &book.title)]) };
     let stateless = options.stateless();
     let (at, settings) = if stateless {
         // Measurements: the defaults in Light, whatever the desktop.
@@ -231,7 +239,7 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
     let view = PageView::new(book, at, settings, appearance::dark());
     view.set_mode(if settings.turning == Turning::Scroll { Mode::Scroll } else { Mode::Slide });
 
-    let help = gtk::Label::new(Some(HELP));
+    let help = gtk::Label::new(Some(forzac_core::i18n::help(forzac_core::i18n::Platform::Linux)));
     help.add_css_class("osd");
     help.set_halign(gtk::Align::Center);
     help.set_valign(gtk::Align::Center);
@@ -524,7 +532,7 @@ fn keep_awake(app: &gtk::Application, window: &gtk::ApplicationWindow) {
                 return;
             }
             if cookie.get().is_none() {
-                cookie.set(Some(app.inhibit(Some(&window), gtk::ApplicationInhibitFlags::IDLE, Some("Reading a book"))));
+                cookie.set(Some(app.inhibit(Some(&window), gtk::ApplicationInhibitFlags::IDLE, Some(tr("Reading a book")))));
             }
             if let Some(id) = timer.borrow_mut().take() {
                 id.remove();
@@ -613,32 +621,6 @@ fn save_png(view: &PageView, path: &std::path::Path) {
     }
 }
 
-const HELP: &str = "\
-j  l  →  ↓  Space  PgDn  Enter    next page (Scroll: j ↓ a line, Ctrl+D half a screen)
-k  h  ←  ↑  Shift+Space  PgUp    previous page (Scroll: k ↑ a line, Ctrl+U half a screen)
-m    page or scroll
-]  [    next / previous chapter
-g  G  Home  End    chapter start / end
-o    contents  (/ filters, ← → tabs)
-b    bookmark the page, again to remove it
-B    bookmarks  (Enter goes, d removes)
-v    select: h l words, j k lines, v anchors, o other end, Enter highlight, c copy, Esc back
-Tab  Shift+Tab    notes, links, pictures and tables on the page, Enter opens
-Ctrl+O    back after a jump
-s    settings
-/  n  N    search, next / previous match
-+  −  0    text size, default size
-t  T    theme
-f  F11    full screen
-?    this help
-q  Ctrl+W    close
-click    the left or right third of the page turns it; a picture or a table opens; a drag selects (a double click
-         in the middle: a word, a triple: the paragraph)
-
-Picture or table:  + − 0  zoom, fit    arrows  h j k l  Space  move    Esc  q  close
-
-Forzac is free. Support it: forzac.truenrth.app";
-
 /// Saves the reading position when the book opens, `SAVE_DELAY` after the last move and when the window closes.
 fn remember_position(view: &PageView, window: &gtk::ApplicationWindow, path: &Path, store: &SharedStore) {
     let save = {
@@ -690,7 +672,7 @@ fn recent_window(app: &gtk::Application, options: &Options, store: &SharedStore)
         })
         .collect();
     let (width, height) = fitted(560, 640);
-    let window = gtk::ApplicationWindow::builder().application(app).title("Forzac").default_width(width).default_height(height).build();
+    let window = gtk::ApplicationWindow::builder().application(app).title(tr("Forzac")).default_width(width).default_height(height).build();
     if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
         window.set_decorated(false);
     }
@@ -717,7 +699,7 @@ fn recent_window(app: &gtk::Application, options: &Options, store: &SharedStore)
         list.append(&row);
     }
     if books.is_empty() {
-        let empty = gtk::Label::new(Some("No books yet.\n\nOpen one from your file manager, or run\nforzac book.epub"));
+        let empty = gtk::Label::new(Some(tr("No books yet.\n\nOpen one from your file manager, or run\nforzac book.epub")));
         empty.set_justify(gtk::Justification::Center);
         empty.add_css_class("muted");
         window.set_child(Some(&empty));

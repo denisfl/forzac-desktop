@@ -499,7 +499,7 @@ pub fn end_page(book: &Book, style: &PageStyle, typesetter: &mut Typesetter) -> 
         out.runs.push(label(typesetter, &authors, Ink::Text, size, center, y + size, width));
         y += 2.0 * lh;
     }
-    out.runs.push(label(typesetter, "Finished", Ink::Secondary, size * 0.85, center, y + size, width));
+    out.runs.push(label(typesetter, crate::i18n::tr("Finished"), Ink::Secondary, size * 0.85, center, y + size, width));
     out
 }
 

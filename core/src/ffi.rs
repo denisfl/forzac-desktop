@@ -1179,6 +1179,59 @@ pub unsafe extern "C" fn forzac_search_free(search: *mut Search) {
     }
 }
 
+/// Sets the interface language from the preferred languages, comma separated, preferred first (`ru-RU,en`).
+///
+/// # Safety
+/// `locales` must be a valid NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_set_language(locales: *const c_char) {
+    let locales = unsafe { str(locales) };
+    crate::i18n::set_language(crate::i18n::Language::from_locales(locales.split(',').map(str::trim)));
+}
+
+/// A static string as a C string, made once.
+fn c_static(s: &'static str) -> *const c_char {
+    static STRINGS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<&'static str, CString>>> = std::sync::OnceLock::new();
+    let mut map = STRINGS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    map.entry(s).or_insert_with(|| cstring(s)).as_ptr()
+}
+
+/// `english` in the interface language; null when it stays English (the caller keeps its own). Valid for good.
+///
+/// # Safety
+/// `english` must be a valid NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_tr(english: *const c_char) -> *const c_char {
+    if crate::i18n::language() == crate::i18n::Language::English {
+        return std::ptr::null();
+    }
+    match crate::i18n::russian(&unsafe { str(english) }) {
+        Some(russian) => c_static(russian),
+        None => std::ptr::null(),
+    }
+}
+
+/// A count with its noun (`one` and `other` the English forms with `{n}`) in the interface language; valid until the
+/// next call on this thread.
+///
+/// # Safety
+/// `one` and `other` must be valid NUL-terminated strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_tr_count(n: u32, one: *const c_char, other: *const c_char) -> *const c_char {
+    thread_local!(static LAST: std::cell::RefCell<CString> = std::cell::RefCell::default());
+    let text = crate::i18n::tr_count(n as usize, &unsafe { str(one) }, &unsafe { str(other) });
+    LAST.with(|l| {
+        *l.borrow_mut() = cstring(&text);
+        l.borrow().as_ptr()
+    })
+}
+
+/// The keys and the support line in the interface language (`platform` 0 Linux, 1 macOS); valid for good.
+#[unsafe(no_mangle)]
+pub extern "C" fn forzac_help(platform: u32) -> *const c_char {
+    c_static(crate::i18n::help(if platform == 1 { crate::i18n::Platform::Mac } else { crate::i18n::Platform::Linux }))
+}
+
 /// Where the bundled assets are (`fonts/<family>/…`): the families other than PT Serif are read from there.
 ///
 /// # Safety

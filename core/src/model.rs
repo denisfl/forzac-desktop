@@ -30,7 +30,8 @@ pub struct Book {
 }
 
 impl Book {
-    /// The entries of the contents: the book's own, else every chapter, an untitled one as "Chapter N" (as on Android).
+    /// The entries of the contents: the book's own, else every chapter, an untitled one as "Chapter N" in the interface
+    /// language (as on Android).
     pub fn contents(&self) -> Vec<TocEntry> {
         if !self.toc.is_empty() {
             return self.toc.clone();
@@ -39,7 +40,11 @@ impl Book {
             .iter()
             .enumerate()
             .map(|(i, c)| TocEntry {
-                title: c.title.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| format!("Chapter {}", i + 1)),
+                title: c
+                    .title
+                    .clone()
+                    .filter(|t| !t.trim().is_empty())
+                    .unwrap_or_else(|| crate::i18n::fill(crate::i18n::tr("Chapter {n}"), &[("n", &(i + 1).to_string())])),
                 level: 1,
                 target: Locator { chapter: i, ..Locator::default() },
             })

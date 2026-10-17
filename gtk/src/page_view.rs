@@ -81,7 +81,6 @@ const PILL_FADE: i64 = 150_000;
 
 /// The pill after a jump, as on Android: it goes when the reader turns this many pages (or screens) away.
 const PILL_PAGES: i32 = 2;
-const PILL_TEXT: &str = "← Back · Ctrl+O";
 
 /// The bookmark ribbon (Android's): its width, the length below the window's top edge, the part tucked above it, the
 /// swallowtail's depth; bordeaux on light and on dark themes.
@@ -1166,7 +1165,7 @@ impl PageView {
             return;
         }
         crate::fonts::add_interface_fonts();
-        let layout = self.create_pango_layout(Some(PILL_TEXT));
+        let layout = self.create_pango_layout(Some(forzac_core::i18n::tr("← Back · Ctrl+O")));
         layout.set_font_description(Some(&gtk::pango::FontDescription::from_string("Golos Text 14px")));
         let (tw, th) = layout.pixel_size();
         let (pw, ph) = (tw as f32 + 36.0, th as f32 + 20.0);

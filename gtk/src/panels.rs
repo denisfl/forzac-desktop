@@ -5,6 +5,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use forzac_core::Locator;
+use forzac_core::i18n::{fill, tr, tr_count};
 use forzac_core::search::Hit;
 use gtk::subclass::prelude::*;
 use gtk::{gdk, gio, glib, graphene, gsk, prelude::*};
@@ -164,7 +165,17 @@ pub enum Tab {
     Highlights,
 }
 
-const TABS: [(Tab, &str); 3] = [(Tab::Contents, "Contents"), (Tab::Bookmarks, "Bookmarks"), (Tab::Highlights, "Highlights")];
+const TABS: [Tab; 3] = [Tab::Contents, Tab::Bookmarks, Tab::Highlights];
+
+impl Tab {
+    fn title(self) -> &'static str {
+        match self {
+            Tab::Contents => tr("Contents"),
+            Tab::Bookmarks => tr("Bookmarks"),
+            Tab::Highlights => tr("Highlights"),
+        }
+    }
+}
 
 /// The contents panel of a reader window, laid out as the Android contents (`TocScreen.kt`, the design's
 /// `Toc.dc.html`): the tabs with a close button, a filter field, the book, then the entries with their position in the
@@ -287,8 +298,8 @@ impl Contents {
         header.set_margin_top(4);
         let tabs: Vec<gtk::Button> = TABS
             .iter()
-            .map(|(_, name)| {
-                let tab = gtk::Button::with_label(name);
+            .map(|t| {
+                let tab = gtk::Button::with_label(t.title());
                 tab.add_css_class("tab");
                 tab.set_focusable(false);
                 tab.set_valign(gtk::Align::Center);
@@ -316,7 +327,7 @@ impl Contents {
         icon.add_css_class("muted");
         field.append(&icon);
         let search = gtk::Text::new();
-        search.set_placeholder_text(Some("Filter contents"));
+        search.set_placeholder_text(Some(tr("Filter contents")));
         search.set_hexpand(true);
         field.append(&search);
         panel.append(&field);
@@ -353,10 +364,12 @@ impl Contents {
         let stack = gtk::Stack::new();
         stack.add_named(&scrolled, Some("contents"));
         let (marks, marks_selection, marks_model, marks_page) =
-            list_page(bookmark_row, ("No bookmarks yet", "Press b on a page — a ribbon marks the place."));
+            list_page(bookmark_row, (tr("No bookmarks yet"), tr("Press b on a page — a ribbon marks the place.")));
         stack.add_named(&marks_page, Some("bookmarks"));
-        let (quotes, quotes_selection, quotes_model, quotes_page) =
-            list_page(highlight_row, ("No highlights yet", "Select text with the mouse, or press v on a page, then choose Highlight."));
+        let (quotes, quotes_selection, quotes_model, quotes_page) = list_page(
+            highlight_row,
+            (tr("No highlights yet"), tr("Select text with the mouse, or press v on a page, then choose Highlight.")),
+        );
         stack.add_named(&quotes_page, Some("highlights"));
         stack.set_vexpand(true);
         panel.append(&stack);
@@ -409,7 +422,7 @@ impl Contents {
 
         let w = with.clone();
         close.connect_clicked(move |_| w(&|c, v| c.close(v)));
-        for (tab, (t, _)) in tabs.iter().zip(TABS) {
+        for (tab, t) in tabs.iter().zip(TABS) {
             let w = with.clone();
             tab.connect_clicked(move |_| w(&|c, v| c.show(v, t)));
         }
@@ -477,6 +490,8 @@ impl Contents {
         shortcut(&mark_keys, "d|Delete|KP_Delete", move || w(&|c, v| c.remove_bookmark(v)));
         let w = with.clone();
         shortcut(&mark_keys, "Escape|o|q", move || w(&|c, v| c.close(v)));
+        // Before the list view's own arrow keys.
+        mark_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         marks_page.add_controller(mark_keys);
         let quote_keys = gtk::ShortcutController::new();
         tab_keys(&quote_keys);
@@ -498,6 +513,8 @@ impl Contents {
         });
         let w = with.clone();
         shortcut(&quote_keys, "Escape|o|q", move || w(&|c, v| c.close(v)));
+        // Before the list view's own arrow keys.
+        quote_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         quotes_page.add_controller(quote_keys);
         let w = with.clone();
         search.connect_changed(move |entry| {
@@ -548,7 +565,8 @@ impl Contents {
         let here = view.locator();
         let book = view.book();
         let read = (forzac_core::state::progress(&book, here) * 100.0).round() as u32;
-        let meta: Vec<String> = book.authors.first().cloned().into_iter().chain([format!("{read}% read")]).collect();
+        let meta: Vec<String> =
+            book.authors.first().cloned().into_iter().chain([fill(tr("{n}% read"), &[("n", &read.to_string())])]).collect();
         self.meta.set_text(&meta.join(" · "));
         self.search.set_text("");
         let current = self.places.iter().rposition(|p| *p <= here).unwrap_or(0);
@@ -576,7 +594,7 @@ impl Contents {
     /// Shows `tab`, with the bookmarks read afresh, and gives it the keys.
     pub fn show(&self, view: &PageView, tab: Tab) {
         self.tab.set(tab);
-        for (button, (t, _)) in self.tabs.iter().zip(TABS) {
+        for (button, t) in self.tabs.iter().zip(TABS) {
             if t == tab {
                 button.add_css_class("selected");
             } else {
@@ -645,8 +663,8 @@ impl Contents {
 
     /// The next (`delta` 1) or previous (−1) tab.
     fn switch(&self, view: &PageView, delta: i32) {
-        let i = TABS.iter().position(|(t, _)| *t == self.tab.get()).unwrap_or(0) as i32;
-        self.show(view, TABS[(i + delta).rem_euclid(TABS.len() as i32) as usize].0);
+        let i = TABS.iter().position(|t| *t == self.tab.get()).unwrap_or(0) as i32;
+        self.show(view, TABS[(i + delta).rem_euclid(TABS.len() as i32) as usize]);
     }
 
     /// Lists the view's bookmarks with `selected` selected (the last one when it is past the end).
@@ -906,7 +924,7 @@ impl SearchPanel {
         icon.add_css_class("muted");
         field_row.append(&icon);
         let field = gtk::Text::new();
-        field.set_placeholder_text(Some("Search in book"));
+        field.set_placeholder_text(Some(tr("Search in book")));
         field.set_hexpand(true);
         field_row.append(&field);
         let clear = gtk::Button::new();
@@ -1072,9 +1090,8 @@ impl SearchPanel {
         }
         let count = match hits.len() {
             _ if query.trim().chars().count() < 2 => String::new(),
-            0 => "No matches".to_owned(),
-            1 => "1 match".to_owned(),
-            n => format!("{n} matches"),
+            0 => tr("No matches").to_owned(),
+            n => tr_count(n, "{n} match", "{n} matches"),
         };
         self.count.set_text(&count);
         let n = hits.len();
@@ -1114,7 +1131,7 @@ pub fn note(overlay: &gtk::Overlay, view: &PageView, id: &str) -> Option<gtk::Bo
     let width = overlay.width().min(SHEET_WIDTH);
     let (node, height) = view.note(id, (width - 48) as f32)?;
     let title = view.book().notes.get(id).and_then(|n| n.title.clone()).filter(|t| !t.trim().is_empty());
-    let label = ["Note", title.as_deref().unwrap_or("")].join(" ").trim().to_uppercase();
+    let label = [tr("Note"), title.as_deref().unwrap_or("")].join(" ").trim().to_uppercase();
     Some(sheet(overlay, view, Some(&label), node, height, width))
 }
 

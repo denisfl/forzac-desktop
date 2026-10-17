@@ -6,6 +6,7 @@
 
 use std::time::Duration;
 
+use forzac_core::i18n::tr;
 use forzac_core::{Area, Locator, Rect, Target, Word, selection};
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
@@ -784,8 +785,8 @@ impl PageView {
             })?;
             let since = *s.text.bar_since.get_or_insert(now);
             let items: Vec<(&str, Action)> = match bar {
-                Bar::Selection => vec![("Highlight", Action::Highlight), ("Copy", Action::Copy)],
-                Bar::Highlight(_) => vec![("Delete", Action::Delete), ("Copy", Action::Copy)],
+                Bar::Selection => vec![(tr("Highlight"), Action::Highlight), (tr("Copy"), Action::Copy)],
+                Bar::Highlight(_) => vec![(tr("Delete"), Action::Delete), (tr("Copy"), Action::Copy)],
             };
             Some((bounds, items, THEMES[s.theme], ((now - since) as f32 / BAR_FADE as f32).clamp(0.0, 1.0)))
         });

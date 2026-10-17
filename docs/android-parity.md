@@ -146,7 +146,7 @@ modules (`core/typesetting/src/main/kotlin/app/truenrth/forzac/typesetting/…` 
 | X2 | The screen stays on while reading, for 10 minutes after the last touch (`ReaderScreen.kt` `KeepScreenOn`) | The system blanks the screen and sleeps the display as usual | gap |
 | X3 | Always immersive; system bars come with the menu (`SystemBars`) | A window; `f`/`F11` (`⌃⌘F`) full screen | intended (platform) |
 | X4 | TalkBack reads the page and has next/previous page, bookmark and menu actions (`ReaderScreen.kt` `semantics`) | The page is drawn without accessible text (`page_view.rs`, `PageView.swift`) | unclear |
-| X5 | Interface in English and Russian (A spec localization) | English only; planned in [`localization`](../openspec/changes/localization/proposal.md) (1.0) | gap (planned) |
+| X5 | Interface in English and Russian (A spec localization) | English and Russian by the system's preferred languages, one catalogue in the core in the Android app's words (`core/src/i18n.rs`; change `localization`) | same |
 | X6 | — | `?` shows the keys and the single support line (`gtk/src/main.rs` `HELP`, `main.swift` `helpText`) | intended (desktop only) |
 
 ## 13. Android work not shipped yet
@@ -352,3 +352,29 @@ handlers the gestures call. The clipboard was read with `pbpaste` on the Mac.
 - Not checked by hand: a real pointer on the Pi (the gestures themselves), `Shift`+click and the drag out of the window
   in "Scroll" on both, the clipboard on the Pi (no `wl-paste` there), the Share menu and the menus Edit → Copy and
   View → Highlights on the Mac. The maintainer accepted the pass as it is (2026-10-17).
+
+### The interface in Russian (`localization`, X5)
+
+Checked on 2026-10-17 with the build of the change: the Pi with `LANG=ru_RU.UTF-8` and `en_US.UTF-8` in the headless
+labwc (`wtype`, `grim`), the Mac build with `-AppleLanguages (ru)` and `(en)` and `--panel`/`--keys`.
+
+- Both, in Russian: the window title "— Форзац"; the contents panel ("Содержание · Закладки · Цитаты", "Найти в
+  оглавлении", "прочитано 12%"), the bookmarks and highlights lists and their empty hints; the settings sheet (the
+  themes "Светлая … Лес", "Интервал", "Поля", "Листание" with "Сдвиг" and "Лента"); the search ("Поиск по книге",
+  "455 совпадений"); the bars "Цитата · Копировать" (macOS "· Поделиться") and "Удалить · Копировать"; the note sheet
+  "ПРИМЕЧАНИЕ 1"; the end page "Прочитано"; the help. The Pi also: the message "Не удалось открыть «photo.zip»: формат
+  не поддерживается — нужен FB2, FB3 или EPUB" with "Закрыть", the recent books. In English the same screens read as
+  before.
+- Found and fixed: the Russian help was wider than the Mac window (long lines are wrapped now in both languages); the
+  empty-list hint was cut to one line on the Mac (in English too); `←`/`→` did not switch tabs from the GTK bookmarks
+  and highlights lists (the list view took the arrows); GTK's alert button came from GTK's own translations, missing on
+  the Pi (the button is Forzac's string now).
+- Cost on the Pi 5 (`scripts/pi-headless.sh`, 123 Hz): first page 151–154 ms in English and 149–157 ms in Russian
+  (default renderer, three starts each); page turns 0 missed frames with the default, `ngl` and `gl` renderers, 1 with
+  `vulkan`, in both languages; idle 0 CPU ticks in both.
+- The Mac menus, printed with the new `--menus` from the `.app`: "Форзац" (О программе «Форзац», Настройки…, Скрыть,
+  Завершить), "Файл", "Правка" (Копировать, Найти…), "Вид" (Содержание, Закладки, Цитаты, Страницы или лента, Крупнее,
+  Мельче, Во весь экран), "Переход" (… Закладка), "Окно", "Справка"; AppKit's own items (Закрыть все, Эмодзи и символы)
+  follow the language because `Info.plist` lists Russian. Found, not fixed (older than this change): "Enter Full Screen"
+  appears twice in View, AppKit's and Forzac's.
+- Not checked by hand: the Mac's alert for a file that cannot be opened (measurement runs show no alerts).

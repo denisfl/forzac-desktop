@@ -19,7 +19,18 @@ let themes: [Palette] = [
     Palette(paper: 0x1F1F28, ink: 0xDCD7BA, muted: 0x9A9585, line: 0x363646, sheet: 0x2A2A37, link: 0xDCA561),
     Palette(paper: 0x2D353B, ink: 0xD3C6AA, muted: 0x9DA9A0, line: 0x475258, sheet: 0x343F44, link: 0xDBBC7F),
 ]
-let themeNames = ["Light", "Sepia", "Dark", "Dawn", "Wave", "Forest"]
+/// `english` in the interface language (the core's catalogue, `forzac_tr`).
+func tr(_ english: String) -> String { forzac_tr(english).map { String(cString: $0) } ?? english }
+
+/// A count with its noun: `one` and `other` the English forms with `{n}`; Russian takes its plural forms.
+func trCount(_ n: Int, _ one: String, _ other: String) -> String { String(cString: forzac_tr_count(UInt32(n), one, other)) }
+
+/// `text` with each `{key}` replaced by its value.
+func fill(_ text: String, _ values: [String: String]) -> String {
+    values.reduce(text) { $0.replacingOccurrences(of: "{\($1.key)}", with: $1.value) }
+}
+
+let themeNames = [tr("Light"), tr("Sepia"), tr("Dark"), tr("Dawn"), tr("Wave"), tr("Forest")]
 
 /// The book families, in the core's order: their names and the family names Core Text knows them by.
 let familyNames = ["PT Serif", "Literata", "Source Serif", "PT Sans"]

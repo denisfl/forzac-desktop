@@ -79,7 +79,8 @@ top right corner above the text sets or removes a bookmark); a drag selects text
 the middle third takes a word, a triple click the paragraph), a click on a highlight offers Delete and Copy;
 in Scroll mode the wheel and touchpad scroll smoothly. A link to a short passage (a figure, a table, a paragraph)
 opens it over the page, like a note. After the last page comes an end page that marks the book as finished.
-Keys work in any keyboard layout.
+Keys work in any keyboard layout. The interface is in English or Russian, as the system prefers (on Linux `LANGUAGE`, `LC_ALL`,
+`LC_MESSAGES`, `LANG`; on macOS the preferred languages).
 
 ## Install on Linux
 

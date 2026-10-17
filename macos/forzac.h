@@ -217,6 +217,14 @@ ForzacSearch *forzac_search(const ForzacBook *book, const char *query);
 const ForzacHit *forzac_search_hits(const ForzacSearch *search, uint32_t *count);
 void forzac_search_free(ForzacSearch *search);
 
+// The interface language from the preferred languages, comma separated ("ru-RU,en"); then the catalogue: the Russian
+// of an English string (NULL: keep the English), a count with its noun ("{n} match", "{n} matches"; valid until the
+// next call), the help (platform 0 Linux, 1 macOS).
+void forzac_set_language(const char *locales);
+const char *forzac_tr(const char *english);
+const char *forzac_tr_count(uint32_t n, const char *one, const char *other);
+const char *forzac_help(uint32_t platform);
+
 void forzac_set_assets(const char *dir);
 void forzac_set_fallback(ForzacFallback provider);
 // The bundled PT Serif face of `font`; NULL for a font read from a file.

@@ -5,42 +5,16 @@
 // ~/Library/Application Support/Forzac/state.
 //
 // Spike flags: --measure (time to the first presented page), --png out.png (first page), --chapter N, --page N (the
-// page of the chapter --png saves), --panel settings|contents|bookmarks|highlights|note:ID|image:ID|table:CHAPTER.BLOCK and --theme N (with
+// page of the chapter --png saves), --panel settings|contents|bookmarks|highlights|help|note:ID|image:ID|table:CHAPTER.BLOCK and --theme N (with
 // --png: the whole window with that panel or view open, in that theme; --keys "ll+\t\r" then sends those keys to it
 // first, 0.3 s apart: letters, digits, + - =, \t Tab, \r Return, \e Esc, an upper-case letter with Shift; --mouse
 // "down X Y; drag X Y; up X Y; click X Y N" then sends those mouse events to the page, 0.15 s apart, at points of the
-// page, y down), --scroll (in "Scroll"); with any of them the reading state is neither read nor written.
+// page, y down), --scroll (in "Scroll"), --menus (prints the menus' titles and quits); with any of them the reading
+// state is neither read nor written.
 
 import AppKit
 
 let processStart = Date()
-
-let helpText = """
-j  l  →  ↓  Space  PgDn  Return    next page (Scroll: j ↓ a line, ⌃D half a screen)
-k  h  ←  ↑  Shift+Space  PgUp    previous page (Scroll: k ↑ a line, ⌃U half a screen)
-m    pages or scroll
-]  [    next / previous chapter
-g  G  Home  End    chapter start / end
-o    contents  (/ filters, ← → tabs)
-b  ⌘D    bookmark the page, again to remove it
-B    bookmarks  (Return goes, d removes)
-v    select: h l words, j k lines, v anchors, o other end, Return highlight, c ⌘C copy, s share, Esc back
-Tab  Shift+Tab    notes, links, pictures and tables on the page, Return opens
-⌃O  ⌘[    back after a jump
-s  ⌘,    settings
-/  ⌘F    search;  n  N  ⌘G  ⇧⌘G    next / previous match
-+  −  0    text size, default size
-t  T    theme
-f  ⌃⌘F    full screen
-?    this help
-q  ⌘W    close
-click    the left or right third of the page turns it; a picture or a table opens; a drag selects (a double click
-         in the middle: a word, a triple: the paragraph)
-
-Picture or table:  + − 0  zoom, fit    arrows  h j k l  Space  move    Esc  q  close
-
-Forzac is free. Support it: forzac.truenrth.app
-"""
 
 /// `\t`, `\r` and `\e` in a `--keys` value as Tab, Return and Esc.
 func unescape(_ s: String) -> String {
@@ -56,7 +30,7 @@ final class Reader: NSObject, NSWindowDelegate {
     let view: PageView
     let path: String
     private let container = NSView()
-    private let help = NSTextField(labelWithString: helpText)
+    private let help = NSTextField(labelWithString: String(cString: forzac_help(1)))
     private var settingsSheet: SettingsSheet?
     private var contents: ContentsPanel?
     private var search: SearchPanel?
@@ -93,7 +67,7 @@ final class Reader: NSObject, NSWindowDelegate {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 980), styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
         super.init()
-        window.title = title.isEmpty ? "Forzac" : title
+        window.title = title.isEmpty ? tr("Forzac") : title
         window.representedURL = URL(fileURLWithPath: path)
         window.tabbingMode = .disallowed
         window.isReleasedWhenClosed = false
@@ -150,7 +124,7 @@ final class Reader: NSObject, NSWindowDelegate {
     func touch() {
         guard window.isKeyWindow else { return }
         if activity == nil {
-            activity = ProcessInfo.processInfo.beginActivity(options: [.idleDisplaySleepDisabled], reason: "Reading a book")
+            activity = ProcessInfo.processInfo.beginActivity(options: [.idleDisplaySleepDisabled], reason: tr("Reading a book"))
         }
         awakeTimer?.invalidate()
         awakeTimer = Timer.scheduledTimer(withTimeInterval: 10 * 60, repeats: false) { [weak self] _ in self?.sleepAllowed() }
@@ -342,11 +316,11 @@ final class RecentWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         palette = themes[Int(forzac_settings_theme(&settings, systemIsDark()))]
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 640), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init()
-        window.title = "Forzac"
+        window.title = tr("Forzac")
         window.isReleasedWhenClosed = false
         window.backgroundColor = nsColor(palette.paper)
         window.appearance = NSAppearance(named: palette.paper < 0x808080 ? .darkAqua : .aqua)
-        let hint = label(books.isEmpty ? "Open a book: ⌘O, or drop it on Forzac in the Dock." : "Recent books — Return opens, ⌘O opens another.", interfaceFont(13), palette.muted)
+        let hint = label(books.isEmpty ? tr("Open a book: ⌘O, or drop it on Forzac in the Dock.") : tr("Recent books — Return opens, ⌘O opens another."), interfaceFont(13), palette.muted)
         hint.textColor = nsColor(palette.muted)
         table.addTableColumn(NSTableColumn(identifier: .init("book")))
         table.headerView = nil
@@ -417,7 +391,7 @@ final class RecentWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         let title = label(b.title.isEmpty ? URL(fileURLWithPath: b.path).lastPathComponent : b.title, bookFont("PT Serif", 15, bold: true), palette.ink)
         title.textColor = nsColor(palette.ink)
         title.lineBreakMode = .byTruncatingTail
-        let detail = label([b.authors, "\(Int((b.progress * 100).rounded()))% read"].filter { !$0.isEmpty }.joined(separator: " · "), interfaceFont(12), palette.muted)
+        let detail = label([b.authors, fill(tr("{n}% read"), ["n": "\(Int((b.progress * 100).rounded()))"])].filter { !$0.isEmpty }.joined(separator: " · "), interfaceFont(12), palette.muted)
         detail.textColor = nsColor(palette.muted)
         let column = NSStackView(views: [title, detail])
         column.orientation = .vertical
@@ -441,7 +415,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return args[i + 1]
     }
 
-    var measuring: Bool { ["--measure", "--png", "--chapter", "--page", "--panel", "--scroll"].contains { args.contains($0) } }
+    var measuring: Bool { ["--measure", "--png", "--chapter", "--page", "--panel", "--scroll", "--menus"].contains { args.contains($0) } }
 
     func applicationWillFinishLaunching(_ note: Notification) {
         if !measuring {
@@ -452,6 +426,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        // `--menus`: the menus' titles, to check the interface language, then quit.
+        if args.contains("--menus") {
+            for top in NSApp.mainMenu?.items ?? [] {
+                print("\(top.submenu?.title ?? ""): " + (top.submenu?.items.map { $0.isSeparatorItem ? "|" : $0.title } ?? []).joined(separator: ", "))
+            }
+            exit(0)
+        }
         let png = value(after: "--png")
         if let path = args.dropFirst().first(where: { !$0.hasPrefix("--") && $0 != png && UInt32($0) == nil && !$0.hasPrefix("-NS") }) {
             guard let reader = open(path, chapter: value(after: "--chapter").flatMap { UInt32($0) }) else {
@@ -484,9 +465,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         guard let reader = Reader(path: path, state: state, chapter: chapter) else {
             // In the Android app's words, without PDF.
-            let reason = [1: "unsupported format — FB2, FB3 or EPUB needed", 2: "the book has no text",
-                          3: "the book is DRM-protected and can't be opened", 4: "the file is damaged", 5: "the file is unavailable"][Reader.openError] ?? "the file is damaged"
-            let message = "Couldn't open “\(URL(fileURLWithPath: path).lastPathComponent)”: \(reason)"
+            let reason = [1: tr("unsupported format — FB2, FB3 or EPUB needed"), 2: tr("the book has no text"),
+                          3: tr("the book is DRM-protected and can't be opened"), 4: tr("the file is damaged"), 5: tr("the file is unavailable")][Reader.openError] ?? tr("the file is damaged")
+            let message = fill(tr("Couldn't open “{name}”: {reason}"), ["name": URL(fileURLWithPath: path).lastPathComponent, "reason": reason])
             fputs(message + "\n", stderr)
             // Also for a book that arrives with the launch (Finder, the Dock): after it, so the alert has an app to show in.
             if !measuring {
@@ -555,6 +536,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let arg = String(panel.drop { $0 != ":" }.dropFirst())
         switch panel {
         case "settings": return .settings
+        case "help": return .help
         case "contents": return .contents
         case "bookmarks": return .bookmarks
         case "highlights": return .highlights
@@ -640,52 +622,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             i.target = target ?? self
             return i
         }
-        submenu("Forzac", [
-            item("About Forzac", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), target: NSApp),
+        submenu(tr("Forzac"), [
+            item(tr("About Forzac"), #selector(NSApplication.orderFrontStandardAboutPanel(_:)), target: NSApp),
             .separator(),
-            item("Settings…", #selector(showSettings(_:)), ","),
+            item(tr("Settings…"), #selector(showSettings(_:)), ","),
             .separator(),
-            item("Hide Forzac", #selector(NSApplication.hide(_:)), "h", target: NSApp),
-            item("Quit Forzac", #selector(NSApplication.terminate(_:)), "q", target: NSApp),
+            item(tr("Hide Forzac"), #selector(NSApplication.hide(_:)), "h", target: NSApp),
+            item(tr("Quit Forzac"), #selector(NSApplication.terminate(_:)), "q", target: NSApp),
         ])
-        let recentItem = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
-        let recentMenu = NSMenu(title: "Open Recent")
+        let recentItem = NSMenuItem(title: tr("Open Recent"), action: nil, keyEquivalent: "")
+        let recentMenu = NSMenu(title: tr("Open Recent"))
         recentMenu.delegate = self
         recentItem.submenu = recentMenu
-        let close = NSMenuItem(title: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
-        submenu("File", [item("Open…", #selector(openDocument(_:)), "o"), recentItem, .separator(), close])
-        let copy = NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        submenu("Edit", [
+        let close = NSMenuItem(title: tr("Close"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        submenu(tr("File"), [item(tr("Open…"), #selector(openDocument(_:)), "o"), recentItem, .separator(), close])
+        let copy = NSMenuItem(title: tr("Copy"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        submenu(tr("Edit"), [
             copy, .separator(),
-            item("Find…", #selector(find(_:)), "f"), item("Find Next", #selector(findNext(_:)), "g"),
-            item("Find Previous", #selector(findPrevious(_:)), "g", [.command, .shift]),
+            item(tr("Find…"), #selector(find(_:)), "f"), item(tr("Find Next"), #selector(findNext(_:)), "g"),
+            item(tr("Find Previous"), #selector(findPrevious(_:)), "g", [.command, .shift]),
         ])
-        let fullScreen = NSMenuItem(title: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
+        let fullScreen = NSMenuItem(title: tr("Enter Full Screen"), action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
         fullScreen.keyEquivalentModifierMask = [.control, .command]
-        submenu("View", [
-            item("Contents", #selector(showContents(_:))), item("Bookmarks", #selector(showBookmarks(_:))), item("Highlights", #selector(showHighlights(_:))),
-            item("Pages or Scroll", #selector(toggleScroll(_:))), item("Next Theme", #selector(nextTheme(_:))),
+        submenu(tr("View"), [
+            item(tr("Contents"), #selector(showContents(_:))), item(tr("Bookmarks"), #selector(showBookmarks(_:))), item(tr("Highlights"), #selector(showHighlights(_:))),
+            item(tr("Pages or Scroll"), #selector(toggleScroll(_:))), item(tr("Next Theme"), #selector(nextTheme(_:))),
             .separator(),
-            item("Bigger Text", #selector(biggerText(_:)), "+"), item("Smaller Text", #selector(smallerText(_:)), "-"), item("Default Size", #selector(defaultText(_:)), "0"),
+            item(tr("Bigger Text"), #selector(biggerText(_:)), "+"), item(tr("Smaller Text"), #selector(smallerText(_:)), "-"), item(tr("Default Size"), #selector(defaultText(_:)), "0"),
             .separator(), fullScreen,
         ])
-        submenu("Go", [
-            item("Next Chapter", #selector(nextChapter(_:))), item("Previous Chapter", #selector(previousChapter(_:))),
-            item("Back", #selector(goBack(_:)), "["),
+        submenu(tr("Go"), [
+            item(tr("Next Chapter"), #selector(nextChapter(_:))), item(tr("Previous Chapter"), #selector(previousChapter(_:))),
+            item(tr("Back"), #selector(goBack(_:)), "["),
             .separator(),
-            item("Bookmark", #selector(toggleBookmark(_:)), "d"),
+            item(tr("Bookmark"), #selector(toggleBookmark(_:)), "d"),
         ])
         let window = NSMenuItem()
-        let windowMenu = NSMenu(title: "Window")
-        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        let windowMenu = NSMenu(title: tr("Window"))
+        windowMenu.addItem(withTitle: tr("Minimize"), action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         window.submenu = windowMenu
         main.addItem(window)
         NSApp.windowsMenu = windowMenu
-        submenu("Help", [item("Keys", #selector(showHelp(_:)), "?")])
+        submenu(tr("Help"), [item(tr("Keys"), #selector(showHelp(_:)), "?")])
         NSApp.mainMenu = main
     }
 }
 
+// The interface language: the user's preferred languages, first that Forzac has.
+forzac_set_language(Locale.preferredLanguages.joined(separator: ","))
 forzac_set_fallback(fallback)
 forzac_set_assets(assetsDir)
 let app = NSApplication.shared

@@ -16,7 +16,7 @@ enum Command {
 
 /// The pill after a jump, as on Android: it goes when the reader turns this many pages (or screens) away.
 private let pillPages: Int32 = 2
-private let pillLabel = "← Back · ⌃O"
+private let pillLabel = tr("← Back · ⌃O")
 
 /// The bookmark ribbon (Android's): width, length below the window's top edge, the part tucked above it, the
 /// swallowtail's depth; bordeaux on light and on dark themes.
@@ -1617,7 +1617,9 @@ extension PageView {
             return
         }
         let bounds = rects.reduce(first) { $0.union($1) }
-        let items: [(String, BarAction)] = bar == .selection ? [("Highlight", .highlight), ("Copy", .copy), ("Share", .share)] : [("Delete", .delete), ("Copy", .copy), ("Share", .share)]
+        let items: [(String, BarAction)] = bar == .selection
+            ? [(tr("Highlight"), .highlight), (tr("Copy"), .copy), (tr("Share"), .share)]
+            : [(tr("Delete"), .delete), (tr("Copy"), .copy), (tr("Share"), .share)]
         let font = interfaceFont(15, .medium)
         CATransaction.begin()
         CATransaction.setDisableActions(true)

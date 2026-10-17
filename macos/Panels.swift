@@ -207,7 +207,7 @@ final class SettingsSheet: SheetView {
         align = Segmented([Icons.alignJustify, Icons.alignLeft].map { FlatButton(IconView($0, size: 20)) }, width: 48)
         spacing = Segmented(Icons.spacing.map { FlatButton(IconView($0, size: 20)) })
         margins = Segmented(Icons.margins.map { FlatButton(IconView($0, size: 20)) })
-        pages = Segmented(["Slide", "Scroll"].map { FlatButton(label($0, interfaceFont(14), 0)) })
+        pages = Segmented([tr("Slide"), tr("Scroll")].map { FlatButton(label($0, interfaceFont(14), 0)) })
         super.init(spacing: 18, insets: NSEdgeInsets(top: 10, left: 20, bottom: 24, right: 20))
         addGrabber()
 
@@ -275,14 +275,14 @@ final class SettingsSheet: SheetView {
         stack.addArrangedSubview(fontsRow)
 
         // Line spacing and margins; pages.
-        let (spacingColumn, c1) = captioned("Line spacing", spacing)
-        let (marginsColumn, c2) = captioned("Margins", margins)
+        let (spacingColumn, c1) = captioned(tr("Line spacing"), spacing)
+        let (marginsColumn, c2) = captioned(tr("Margins"), margins)
         let pair = NSStackView(views: [spacingColumn, marginsColumn])
         pair.spacing = 16
         pair.distribution = .fillEqually
         stack.addArrangedSubview(pair)
         pair.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true
-        let (pagesColumn, c3) = captioned("Pages", pages)
+        let (pagesColumn, c3) = captioned(tr("Pages"), pages)
         stack.addArrangedSubview(pagesColumn)
         pagesColumn.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true
         captions = [c1, c2, c3]
@@ -399,7 +399,7 @@ final class SettingsSheet: SheetView {
 /// The tabs of the contents panel.
 enum ContentsTab: Int, CaseIterable {
     case contents, bookmarks, highlights
-    var title: String { ["Contents", "Bookmarks", "Highlights"][rawValue] }
+    var title: String { [tr("Contents"), tr("Bookmarks"), tr("Highlights")][rawValue] }
 }
 
 /// The contents: the tabs with a close button, a filter field, the book, then the entries with their position in the
@@ -419,8 +419,8 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
     /// Shares all highlights (the header, on the "Highlights" tab when there are any).
     private let share = FlatButton(IconView(Icons.share, size: 20))
     private let empty = NSStackView()
-    private let emptyTitle = label("No bookmarks yet", bookFont("PT Serif", 20), 0)
-    private let emptyBody = label("Press b on a page — a ribbon marks the place.", interfaceFont(14), 0)
+    private let emptyTitle = label("", bookFont("PT Serif", 20), 0)
+    private let emptyBody = label("", interfaceFont(14), 0)
     private var fieldHeight: NSLayoutConstraint!
     private var cardTop: NSLayoutConstraint!
     private let close = FlatButton(IconView(Icons.x, size: 22))
@@ -512,6 +512,8 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
 
         emptyBody.alignment = .center
         emptyBody.maximumNumberOfLines = 0
+        emptyBody.lineBreakMode = .byWordWrapping
+        emptyBody.cell?.wraps = true
         emptyBody.preferredMaxLayoutWidth = 240
         empty.orientation = .vertical
         empty.spacing = 8
@@ -582,7 +584,7 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
         field.layer!.borderColor = color(p.line)
         searchIcon.tint = nsColor(p.muted)
         filter.textColor = nsColor(p.ink)
-        filter.placeholderAttributedString = NSAttributedString(string: "Filter contents", attributes: [.foregroundColor: nsColor(p.muted), .font: interfaceFont(15)])
+        filter.placeholderAttributedString = NSAttributedString(string: tr("Filter contents"), attributes: [.foregroundColor: nsColor(p.muted), .font: interfaceFont(15)])
         bookTitle.textColor = nsColor(p.ink)
         meta.textColor = nsColor(p.muted)
         rule.layer!.backgroundColor = color(p.line)
@@ -598,7 +600,7 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
         currentEntry = entries.lastIndex { before($0.at) } ?? 0
         let read = Int((forzac_progress(view.doc, here) * 100).rounded())
         let author = String(cString: forzac_authors(view.doc)).components(separatedBy: ", ").first ?? ""
-        meta.stringValue = [author, "\(read)% read"].filter { !$0.isEmpty }.joined(separator: " · ")
+        meta.stringValue = [author, fill(tr("{n}% read"), ["n": "\(read)"])].filter { !$0.isEmpty }.joined(separator: " · ")
         filter.stringValue = ""
         refilter()
         isHidden = false
@@ -620,12 +622,12 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
             table.reloadData()
             select(shown.firstIndex(of: currentEntry) ?? 0)
         } else if tab == .bookmarks {
-            emptyTitle.stringValue = "No bookmarks yet"
-            emptyBody.stringValue = "Press b on a page — a ribbon marks the place."
+            emptyTitle.stringValue = tr("No bookmarks yet")
+            emptyBody.stringValue = tr("Press b on a page — a ribbon marks the place.")
             reloadBookmarks(selecting: 0)
         } else {
-            emptyTitle.stringValue = "No highlights yet"
-            emptyBody.stringValue = "Select text with the mouse, or press v on a page, then choose Highlight."
+            emptyTitle.stringValue = tr("No highlights yet")
+            emptyBody.stringValue = tr("Select text with the mouse, or press v on a page, then choose Highlight.")
             reloadHighlights(selecting: 0)
         }
         window?.makeFirstResponder(table)
@@ -961,7 +963,7 @@ final class NoteSheet: SheetView {
         addGrabber()
         if !preview {
             let title = forzac_note_title(view.doc, id).map { String(cString: $0) } ?? ""
-            let caption = label(["Note", title].filter { !$0.isEmpty }.joined(separator: " ").uppercased(), interfaceFont(12, .medium), p.muted)
+            let caption = label([tr("Note"), title].filter { !$0.isEmpty }.joined(separator: " ").uppercased(), interfaceFont(12, .medium), p.muted)
             caption.attributedStringValue = NSAttributedString(string: caption.stringValue, attributes: [.kern: 0.72, .font: interfaceFont(12, .medium), .foregroundColor: nsColor(p.muted)])
             stack.addArrangedSubview(caption)
         }
@@ -1098,7 +1100,7 @@ final class SearchPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate, 
         searchIcon.tint = nsColor(p.muted)
         clear.colour(p)
         input.textColor = nsColor(p.ink)
-        input.placeholderAttributedString = NSAttributedString(string: "Search in book", attributes: [.foregroundColor: nsColor(p.muted), .font: interfaceFont(15)])
+        input.placeholderAttributedString = NSAttributedString(string: tr("Search in book"), attributes: [.foregroundColor: nsColor(p.muted), .font: interfaceFont(15)])
         count.textColor = nsColor(p.muted)
         table.selectionColor = color(p.ink, alpha: 0.07)
         if !query.isEmpty { search(query) } // the snippets carry the theme's ink
@@ -1166,7 +1168,7 @@ final class SearchPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate, 
 
     private func show(_ found: [Hit], searched: Bool) {
         hits = found
-        count.stringValue = !searched ? "" : found.isEmpty ? "No matches" : found.count == 1 ? "1 match" : "\(found.count) matches"
+        count.stringValue = !searched ? "" : found.isEmpty ? tr("No matches") : trCount(found.count, "{n} match", "{n} matches")
         table.reloadData()
         if !hits.isEmpty { select(0) }
     }

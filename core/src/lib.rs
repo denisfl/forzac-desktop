@@ -9,6 +9,7 @@ pub mod fb3;
 pub mod ffi;
 pub mod fonts;
 pub mod hyphen;
+pub mod i18n;
 pub mod knuth_plass;
 mod language;
 pub mod layout;

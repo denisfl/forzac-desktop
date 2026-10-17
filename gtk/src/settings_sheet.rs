@@ -7,6 +7,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use forzac_core::fonts::Family;
+use forzac_core::i18n::tr;
 use forzac_core::settings::{self, Align, Margins, Setting, Settings, Spacing, Turning};
 use gtk::prelude::*;
 
@@ -109,7 +110,8 @@ impl SettingsSheet {
         // Themes: a circle in each theme's colours, the name below.
         let themes = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         themes.set_homogeneous(true);
-        let circles: Vec<gtk::Button> = settings::THEMES
+        let names = [tr("Light"), tr("Sepia"), tr("Dark"), tr("Dawn"), tr("Wave"), tr("Forest")];
+        let circles: Vec<gtk::Button> = names
             .iter()
             .enumerate()
             .map(|(i, name)| {
@@ -170,16 +172,16 @@ impl SettingsSheet {
         row.set_homogeneous(true);
         let spacings: Vec<gtk::Button> = icons::SPACING.iter().map(|p| button(&[], &Icon::new(p, 20))).collect();
         let spacing_frame = segmented(&spacings, None);
-        row.append(&captioned("Line spacing", &spacing_frame));
+        row.append(&captioned(tr("Line spacing"), &spacing_frame));
         let margins: Vec<gtk::Button> = icons::MARGINS.iter().map(|p| button(&[], &Icon::new(p, 20))).collect();
         let margin_frame = segmented(&margins, None);
-        row.append(&captioned("Margins", &margin_frame));
+        row.append(&captioned(tr("Margins"), &margin_frame));
         panel.append(&row);
 
         // Pages.
-        let pages: Vec<gtk::Button> = ["Slide", "Scroll"].iter().map(|t| button(&[], &gtk::Label::new(Some(t)))).collect();
+        let pages: Vec<gtk::Button> = [tr("Slide"), tr("Scroll")].iter().map(|t| button(&[], &gtk::Label::new(Some(t)))).collect();
         let pages_frame = segmented(&pages, None);
-        panel.append(&captioned("Pages", &pages_frame));
+        panel.append(&captioned(tr("Pages"), &pages_frame));
 
         panel.set_visible(false);
         overlay.add_overlay(&panel);
