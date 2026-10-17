@@ -988,6 +988,8 @@ final class PageView: NSView {
     /// Keys by physical key code, so they work in any layout (Russian included).
     override func keyDown(with e: NSEvent) {
         if selecting && selectionKey(e) { return }
+        // `?` by the character typed: its key and Shift differ between layouts, and as `/` with Shift it would search.
+        if e.characters == "?" { return onCommand?(.help) ?? () }
         let shift = e.modifierFlags.contains(.shift)
         let control = e.modifierFlags.contains(.control)
         let line = lineHeight, screen = bounds.height - lineHeight
