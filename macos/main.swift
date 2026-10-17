@@ -1,8 +1,9 @@
 // Forzac for macOS: an AppKit shell over forzac-core.
 //
-// One window per book; books open from Finder ("Open With", double-click, the Dock icon), `⌘O` or the command line.
-// Started without a book, a window lists the recent books. Positions, recent books and settings are remembered in
-// ~/Library/Application Support/Forzac/state.
+// One window per book; books open from Finder ("Open With", double-click, the Dock icon), `⌘O`, the library or the
+// command line. Started without a book, the library shows (`Library.swift`). Positions, the library's books and settings
+// are remembered in ~/Library/Application Support/Forzac/state (`--state PATH`: another file), cover thumbnails in
+// ~/Library/Caches/Forzac/covers.
 //
 // Spike flags: --measure (time to the first presented page), --png out.png (first page), --chapter N, --page N (the
 // page of the chapter --png saves), --panel settings|contents|bookmarks|highlights|help|note:ID|image:ID|table:CHAPTER.BLOCK and --theme N (with
@@ -10,7 +11,8 @@
 // first, 0.3 s apart: letters, digits, + - =, \t Tab, \r Return, \e Esc, an upper-case letter with Shift; --mouse
 // "down X Y; drag X Y; up X Y; click X Y N" then sends those mouse events to the page, 0.15 s apart, at points of the
 // page, y down), --scroll (in "Scroll"), --menus (prints the menus' titles and quits); with any of them the reading
-// state is neither read nor written.
+// state is neither read nor written. --library shows the library from the state (with --png: saves it once its covers
+// have arrived, after --keys, and quits).
 
 import AppKit
 
@@ -110,8 +112,9 @@ final class Reader: NSObject, NSWindowDelegate {
             self.viewer?.recolour()
         }
         window.appearance = NSAppearance(named: view.palette.paper < 0x808080 ? .darkAqua : .aqua)
-        savePosition() // an opened book is a recent book, even if it is closed without turning a page
+        savePosition() // an opened book is in the library, even if it is closed without turning a page
         NSDocumentController.shared.noteNewRecentDocumentURL(URL(fileURLWithPath: path))
+        if state != nil { cacheCover(doc) }
         if state != nil {
             inputMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .scrollWheel, .swipe]) { [weak self] e in
                 if let self, e.window === self.window { self.touch() }
@@ -298,116 +301,12 @@ final class Reader: NSObject, NSWindowDelegate {
     }
 }
 
-/// The recent books, shown when Forzac starts without a book: `Return` or a double-click opens one.
-final class RecentWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate {
-    let window: NSWindow
-    private let books: [(path: String, title: String, authors: String, progress: Float)]
-    private let table = NSTableView()
-    private let open: (String) -> Void
-    private let palette: Palette
-
-    init(state: OpaquePointer, open: @escaping (String) -> Void) {
-        var n: UInt32 = 0
-        let list = forzac_state_recent(state, 20, &n)!
-        books = (0..<Int(n)).map { (String(cString: list[$0].path), String(cString: list[$0].title), String(cString: list[$0].authors), list[$0].progress) }
-        self.open = open
-        // In the reader's theme, like the panels.
-        var settings = forzac_state_settings(state)
-        palette = themes[Int(forzac_settings_theme(&settings, systemIsDark()))]
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 640), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        super.init()
-        window.title = tr("Forzac")
-        window.isReleasedWhenClosed = false
-        window.backgroundColor = nsColor(palette.paper)
-        window.appearance = NSAppearance(named: palette.paper < 0x808080 ? .darkAqua : .aqua)
-        let hint = label(books.isEmpty ? tr("Open a book: ⌘O, or drop it on Forzac in the Dock.") : tr("Recent books — Return opens, ⌘O opens another."), interfaceFont(13), palette.muted)
-        hint.textColor = nsColor(palette.muted)
-        table.addTableColumn(NSTableColumn(identifier: .init("book")))
-        table.headerView = nil
-        table.rowHeight = 56
-        table.backgroundColor = nsColor(palette.paper)
-        table.dataSource = self
-        table.delegate = self
-        table.target = self
-        table.doubleAction = #selector(openSelected)
-        let scroll = NSScrollView()
-        scroll.documentView = table
-        scroll.drawsBackground = false
-        scroll.hasVerticalScroller = true
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        let content = NSView()
-        content.addSubview(hint)
-        content.addSubview(scroll)
-        NSLayoutConstraint.activate([
-            hint.topAnchor.constraint(equalTo: content.topAnchor, constant: 16), hint.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
-            scroll.topAnchor.constraint(equalTo: hint.bottomAnchor, constant: 12), scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor), scroll.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-        ])
-        window.contentView = content
-        if !books.isEmpty { table.selectRowIndexes([0], byExtendingSelection: false) }
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(table)
-        // As in the GTK shell: `j`/`k` move, Return opens, `q`/Esc close.
-        let keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
-            guard let self, e.window === self.window, e.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return e }
-            switch e.keyCode == 0x24 || e.keyCode == 0x4C ? 0x24 : e.shortcutKey {
-            case 0x24: self.openSelected()
-            case 0x26: self.select(self.table.selectedRow + 1)
-            case 0x28: self.select(self.table.selectedRow - 1)
-            case 0x35, 0x0C: self.window.close()
-            default: return e
-            }
-            return nil
-        }
-        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { _ in
-            if let keys { NSEvent.removeMonitor(keys) }
-        }
-    }
-
-    private func select(_ row: Int) {
-        guard !books.isEmpty else { return }
-        let r = min(max(row, 0), books.count - 1)
-        table.selectRowIndexes([r], byExtendingSelection: false)
-        table.scrollRowToVisible(r)
-    }
-
-    @objc func openSelected() {
-        guard table.selectedRow >= 0 else { return }
-        open(books[table.selectedRow].path)
-    }
-
-    func numberOfRows(in tableView: NSTableView) -> Int { books.count }
-
-    /// The selected row in the ink at 7 %, as the panels' lists.
-    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-        let r = ContentsRow()
-        r.selection = color(palette.ink, alpha: 0.07)
-        return r
-    }
-
-    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let b = books[row]
-        let title = label(b.title.isEmpty ? URL(fileURLWithPath: b.path).lastPathComponent : b.title, bookFont("PT Serif", 15, bold: true), palette.ink)
-        title.textColor = nsColor(palette.ink)
-        title.lineBreakMode = .byTruncatingTail
-        let detail = label([b.authors, fill(tr("{n}% read"), ["n": "\(Int((b.progress * 100).rounded()))"])].filter { !$0.isEmpty }.joined(separator: " · "), interfaceFont(12), palette.muted)
-        detail.textColor = nsColor(palette.muted)
-        let column = NSStackView(views: [title, detail])
-        column.orientation = .vertical
-        column.alignment = .leading
-        column.spacing = 2
-        column.edgeInsets = NSEdgeInsets(top: 8, left: 16, bottom: 8, right: 16)
-        return column
-    }
-}
-
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let args = CommandLine.arguments
     /// The reading state; nil for measurement runs, which neither read nor write it.
     var state: OpaquePointer?
     var readers: [Reader] = []
-    var recent: RecentWindow?
+    var library: LibraryWindow?
     private var appearance: NSKeyValueObservation?
 
     func value(after flag: String) -> String? {
@@ -418,9 +317,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var measuring: Bool { ["--measure", "--png", "--chapter", "--page", "--panel", "--scroll", "--menus"].contains { args.contains($0) } }
 
     func applicationWillFinishLaunching(_ note: Notification) {
-        if !measuring {
+        if !measuring || args.contains("--library") {
             let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            state = forzac_state_open(support.appendingPathComponent("Forzac/state").path)
+            state = forzac_state_open(value(after: "--state") ?? support.appendingPathComponent("Forzac/state").path)
         }
         buildMenu()
     }
@@ -434,7 +333,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             exit(0)
         }
         let png = value(after: "--png")
-        if let path = args.dropFirst().first(where: { !$0.hasPrefix("--") && $0 != png && UInt32($0) == nil && !$0.hasPrefix("-NS") }) {
+        // Values of the flags that take one are not books.
+        let values = Set(["--png", "--chapter", "--page", "--panel", "--theme", "--keys", "--mouse", "--state", "-AppleLanguages"].compactMap { value(after: $0) })
+        if let path = args.dropFirst().first(where: { !$0.hasPrefix("-") && !values.contains($0) && UInt32($0) == nil }) {
             guard let reader = open(path, chapter: value(after: "--chapter").flatMap { UInt32($0) }) else {
                 fputs("\(path): not a readable book\n", stderr)
                 exit(2)
@@ -445,10 +346,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let dark = systemIsDark()
             self?.readers.forEach { $0.view.setSystemDark(dark) }
         }
-        // Books from Finder arrive through `application(_:open:)`; without any, the recent books.
+        if args.contains("--library"), let state {
+            showLibrary(state)
+            if let png, let library { measureLibrary(library, png: png) }
+        }
+        // Books from Finder arrive through `application(_:open:)`; without any, the library.
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.readers.isEmpty, let state = self.state else { return }
-            self.showRecent(state)
+            guard let self, self.readers.isEmpty, self.library == nil, let state = self.state else { return }
+            self.showLibrary(state)
         }
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -475,27 +380,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     let alert = NSAlert()
                     alert.messageText = message
                     alert.runModal()
-                    if let self, self.readers.isEmpty, self.recent == nil, let state = self.state { self.showRecent(state) }
+                    if let self, self.readers.isEmpty, let state = self.state { self.showLibrary(state) }
                 }
             }
             return nil
         }
         reader.onClose = { [weak self] r in
             self?.readers.removeAll { $0 === r }
-            if self?.readers.isEmpty == true, let state = self?.state { DispatchQueue.main.async { self?.showRecent(state) } }
+            if self?.readers.isEmpty == true, let state = self?.state { DispatchQueue.main.async { self?.showLibrary(state) } }
         }
         readers.append(reader)
         reader.show()
-        recent?.window.close()
-        recent = nil
+        library?.window.close()
         return reader
     }
 
-    func showRecent(_ state: OpaquePointer) {
-        recent = RecentWindow(state: state) { [weak self] path in self?.open(path) }
-        // Closing the recent books with no book open quits (the app stays after its last book window: they follow).
-        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: recent?.window, queue: .main) { [weak self] _ in
+    /// The library, or the open one brought forward.
+    func showLibrary(_ state: OpaquePointer) {
+        if let library {
+            library.window.makeKeyAndOrderFront(nil)
+            return
+        }
+        let shown = LibraryWindow(state: state) { [weak self] path in self?.open(path) }
+        library = shown
+        // Closing the library with no book open quits (the app stays after its last book window: the library follows).
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: shown.window, queue: .main) { [weak self] _ in
+            if self?.library === shown { self?.library = nil }
             if self?.readers.isEmpty == true { NSApp.terminate(nil) }
+        }
+    }
+
+    /// `--library --png`: once the covers have arrived, the `--keys` 0.3 s apart, then the window saved, then quit.
+    func measureLibrary(_ library: LibraryWindow, png: String) {
+        library.onSettled = { [weak self] in
+            print(String(format: "library: %d books, covers loaded %.1f ms", library.bookCount, Date().timeIntervalSince(processStart) * 1000))
+            let keys = Array(self?.value(after: "--keys").map(unescape) ?? "")
+            for (i, key) in keys.enumerated() {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5 + 0.3 * Double(i)) { library.send(key) }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8 + 0.3 * Double(keys.count)) {
+                (self?.library ?? library).savePNG(png)
+                NSApp.terminate(nil)
+            }
         }
     }
 
@@ -548,7 +474,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// Not on its own: after the last book the recent books show, and closing them quits (`showRecent`).
+    /// Not on its own: after the last book the library shows, and closing it quits (`showLibrary`).
     func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { false }
 
     func applicationWillTerminate(_ notification: Notification) {

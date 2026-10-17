@@ -178,6 +178,7 @@ pub struct Document {
     /// Shared with searches running on other threads.
     book: Arc<Book>,
     path: PathBuf,
+    id: CString,
     title: CString,
     authors: CString,
     hyphenator: Option<Arc<Hyphenator>>,
@@ -344,12 +345,13 @@ pub unsafe extern "C" fn forzac_open(path: *const c_char, error: *mut u32) -> *m
         Ok(book) => book,
         Err(e) => return fail(e),
     };
-    let title = cstring(&book.title);
+    let (id, title) = (cstring(&book.id), cstring(&book.title));
     let authors = cstring(&book.authors.join(", "));
     let hyphenator = Hyphenator::for_language(book.language.as_deref()).map(Arc::new);
     Box::into_raw(Box::new(Document {
         book: Arc::new(book),
         path: PathBuf::from(path),
+        id,
         title,
         authors,
         hyphenator,
@@ -372,6 +374,15 @@ pub unsafe extern "C" fn forzac_open(path: *const c_char, error: *mut u32) -> *m
         quote_list: Vec::new(),
         quote_strings: Vec::new(),
     }))
+}
+
+/// The book's identity (`state::book_id`): the key of its cached cover.
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`] and not be closed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_book_id(doc: *const Document) -> *const c_char {
+    unsafe { &*doc }.id.as_ptr()
 }
 
 /// # Safety

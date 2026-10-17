@@ -107,6 +107,8 @@ typedef bool (*ForzacFallback)(uint32_t ch, char *path, size_t capacity, uint32_
 // 4 a damaged archive, 5 the file cannot be read.
 ForzacDocument *forzac_open(const char *path, uint32_t *error);
 const char *forzac_title(const ForzacDocument *doc);
+// The book's identity: the key of its cached cover.
+const char *forzac_book_id(const ForzacDocument *doc);
 const char *forzac_authors(const ForzacDocument *doc);
 uint32_t forzac_chapter_count(const ForzacDocument *doc);
 // Typesets `chapter` for the window with `settings`, makes it current; returns its page count.

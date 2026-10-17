@@ -570,13 +570,13 @@ impl Sample {
             l.set_spacing(((px * 1.6 - natural).max(0.0) * pango::SCALE as f32) as i32);
         };
         // The web's padding `9% 9% 7%`: percentages of the width, also above and below.
-        let mut y = w * 0.09;
-        let mut put = |l: &pango::Layout, colour: &gdk::RGBA, after: f32| {
+        let y = Cell::new(w * 0.09);
+        let put = |l: &pango::Layout, colour: &gdk::RGBA, after: f32| {
             s.save();
-            s.translate(&graphene::Point::new(left, y));
+            s.translate(&graphene::Point::new(left, y.get()));
             s.append_layout(l, colour);
             s.restore();
-            y += l.pixel_size().1 as f32 + after;
+            y.set(y.get() + l.pixel_size().1 as f32 + after);
         };
         let head = layout(sample.head, "Golos Text", size * 0.78);
         head.set_alignment(pango::Alignment::Center);
@@ -589,6 +589,12 @@ impl Sample {
             subtitle.set_alignment(pango::Alignment::Center);
             put(&subtitle, &ink, size * 1.4);
         }
+        let folio = layout(sample.folio, "Golos Text", size * 0.72);
+        folio.set_alignment(pango::Alignment::Center);
+        // The text stops above the folio, as the web's page hides what does not fit.
+        // At a line's edge: the paragraphs' lines are 1.6 of the size apart from the first one on.
+        let room = h - w * 0.07 - folio.pixel_size().1 as f32 - size - y.get();
+        s.push_clip(&graphene::Rect::new(0.0, 0.0, w, y.get() + (room / (size * 1.6)).floor() * size * 1.6));
         for text in sample.paragraphs {
             let p = layout(&library::soft_hyphens(text, sample.language), "Literata", size);
             p.set_justify(true);
@@ -599,8 +605,7 @@ impl Sample {
             line(&p, size);
             put(&p, &ink, 0.0);
         }
-        let folio = layout(sample.folio, "Golos Text", size * 0.72);
-        folio.set_alignment(pango::Alignment::Center);
+        s.pop();
         s.save();
         s.translate(&graphene::Point::new(left, h - w * 0.07 - folio.pixel_size().1 as f32));
         s.append_layout(&folio, &muted);
