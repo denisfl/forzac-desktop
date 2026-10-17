@@ -20,6 +20,14 @@ pub struct Page {
     pub(super) slices: Vec<Slice>,
 }
 
+/// A word drawn on a line (one piece of a hyphenated word): where it is, and the whole word's text `[start, end)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Word {
+    pub start: Locator,
+    pub end: Locator,
+    pub rect: Rect,
+}
+
 /// An image to draw: its id in `Book::images` and where.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageImage {
@@ -236,6 +244,40 @@ impl ChapterLayout {
         out
     }
 
+    /// The words drawn on page `i` of `book` (this layout's book), in reading order, in page coordinates.
+    pub fn words(&self, i: usize, style: &PageStyle, book: &Book) -> Vec<Word> {
+        let mut out = Vec::new();
+        let blocks = &book.chapters[self.chapter].blocks;
+        for s in &self.pages[i].slices {
+            if let (Some(b), Some(block)) = (self.blocks.get(s.layout), blocks.get(s.block)) {
+                word_block(
+                    &mut out,
+                    b,
+                    block,
+                    Locator { chapter: self.chapter, block: s.block, offset: 0 },
+                    s.line_start..s.line_end,
+                    style.margin_h + b.x,
+                    style.margin_top + s.top,
+                );
+            }
+        }
+        out
+    }
+
+    /// The same between column heights `y0` and `y1`, in the coordinates `render_flow` draws in.
+    pub fn flow_words(&self, y0: f32, y1: f32, style: &PageStyle, book: &Book) -> Vec<Word> {
+        let mut out = Vec::new();
+        let blocks = &book.chapters[self.chapter].blocks;
+        for (i, lines, top) in self.flow_lines(y0, y1) {
+            let b = &self.blocks[i];
+            if let Some(block) = blocks.get(self.block_index[i]) {
+                let at = Locator { chapter: self.chapter, block: self.block_index[i], offset: 0 };
+                word_block(&mut out, b, block, at, lines, style.margin_h + b.x, top);
+            }
+        }
+        out
+    }
+
     /// Where in the column the line holding `at` starts.
     pub fn flow_y(&self, at: Locator) -> f32 {
         let Some(i) = self.block_index.iter().rposition(|&b| b <= at.block) else { return 0.0 };
@@ -346,6 +388,69 @@ fn mark_block(
             }
         }
         _ => {}
+    }
+}
+
+/// The words in lines `lines` of block layout `b` (model block `block`, at `at` with offset 0), the first line's top at
+/// `top`, the column at `left`.
+fn word_block(out: &mut Vec<Word>, b: &BlockLayout, block: &Block, at: Locator, lines: std::ops::Range<usize>, left: f32, top: f32) {
+    match (&b.content, block) {
+        (Content::Text(t), _) => {
+            let Some(text) = block.text() else { return };
+            for line in lines.clone() {
+                let y = top + (line - lines.start) as f32 * t.line_height;
+                line_words(out, &t.lines[line], &text.text, 0, at, left, y, t.line_height);
+            }
+        }
+        // A table row's text is its cells joined by line breaks (`Table::cell_starts`); words stay in their cell.
+        (Content::Row { cells, .. }, Block::TableRow { table, row }) => {
+            for (cell, c) in cells.iter().zip(&table.rows[*row]) {
+                for (n, line) in cell.text.lines.iter().enumerate() {
+                    let y = top + cell.y + n as f32 * cell.text.line_height;
+                    line_words(out, line, &c.text.text, cell.offset, at, left + cell.x, y, cell.text.line_height);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The words of one line over `text` (which starts at `shift` in the block's text): runs of glyphs with no white space
+/// between them, each widened over the text to the white space around it.
+#[allow(clippy::too_many_arguments)]
+fn line_words(out: &mut Vec<Word>, line: &super::Line, text: &str, shift: usize, at: Locator, left: f32, y: f32, h: f32) {
+    let space = |range: std::ops::Range<usize>| text.get(range).is_some_and(|t| t.chars().any(char::is_whitespace));
+    let is_space = |offset: usize| text.get(offset..).and_then(|t| t.chars().next()).is_none_or(char::is_whitespace);
+    // (first offset, last offset, x0, x1) of each piece, offsets in `text`.
+    let mut pieces: Vec<(usize, usize, f32, f32)> = Vec::new();
+    for &(offset, x, w) in &line.glyphs {
+        // Offsets are in the cell's own text (`mark_block` adds the cell's start the same way).
+        let offset = offset as usize;
+        if offset > text.len() {
+            continue;
+        }
+        if is_space(offset) && offset < text.len() {
+            continue;
+        }
+        match pieces.last_mut() {
+            Some(p) if !space(p.1.min(offset)..p.1.max(offset)) => {
+                p.1 = p.1.max(offset);
+                p.0 = p.0.min(offset);
+                p.2 = p.2.min(x);
+                p.3 = p.3.max(x + w);
+            }
+            _ => pieces.push((offset, offset, x, x + w)),
+        }
+    }
+    for (first, last, x0, x1) in pieces {
+        let start =
+            text[..first.min(text.len())].char_indices().rev().find(|(_, c)| c.is_whitespace()).map_or(0, |(i, c)| i + c.len_utf8());
+        let end = text[last.min(text.len())..].char_indices().find(|(_, c)| c.is_whitespace()).map_or(text.len(), |(i, _)| last + i);
+        out.push(Word {
+            start: Locator { offset: shift + start, ..at },
+            end: Locator { offset: shift + end, ..at },
+            rect: Rect { x: left + x0, y, w: x1 - x0, h },
+        });
     }
 }
 

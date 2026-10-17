@@ -13,7 +13,9 @@ pub mod knuth_plass;
 mod language;
 pub mod layout;
 pub mod model;
+pub mod quotes;
 pub mod search;
+pub mod selection;
 pub mod settings;
 pub mod state;
 mod typography;
@@ -21,8 +23,8 @@ mod xml;
 
 pub use fonts::Face;
 pub use layout::{
-    Area, ChapterLayout, GlyphRun, Ink, PageContent, PageImage, PageStyle, Rect, Rule, Stroke, TableView, Target, Typesetter, end_page,
-    layout_note, layout_preview, layout_table, paginate,
+    Area, ChapterLayout, GlyphRun, Ink, PageContent, PageImage, PageStyle, Rect, Rule, Stroke, TableView, Target, Typesetter, Word,
+    end_page, layout_note, layout_preview, layout_table, paginate,
 };
 pub use model::{Block, Book, Chapter, Locator};
 

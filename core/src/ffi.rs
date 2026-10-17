@@ -199,6 +199,13 @@ pub struct Document {
     bookmark_places: Vec<ForzacLocator>,
     bookmark_list: Vec<ForzacBookmark>,
     bookmark_strings: Vec<CString>,
+    /// The words last returned by [`forzac_page_words`] or [`forzac_flow_words`].
+    words: Vec<ForzacWord>,
+    /// The book's highlights in reading order, and what [`forzac_quote_places`] and [`forzac_quotes`] last returned.
+    quotes: Vec<(Locator, Locator)>,
+    quote_places: Vec<ForzacRange>,
+    quote_list: Vec<ForzacQuote>,
+    quote_strings: Vec<CString>,
 }
 
 /// A page's contents as the C arrays a [`ForzacPage`] points to.
@@ -245,6 +252,7 @@ impl Published {
                 Target::Link(key) => ((1, none), cstring(key)),
                 Target::Image(id) => ((2, none), cstring(id)),
                 Target::Table(at) => ((3, (*at).into()), CString::default()),
+                Target::Highlight(at) => ((4, (*at).into()), CString::default()),
             })
             .unzip();
         self.targets = targets;
@@ -358,6 +366,11 @@ pub unsafe extern "C" fn forzac_open(path: *const c_char, error: *mut u32) -> *m
         bookmark_places: Vec::new(),
         bookmark_list: Vec::new(),
         bookmark_strings: Vec::new(),
+        words: Vec::new(),
+        quotes: Vec::new(),
+        quote_places: Vec::new(),
+        quote_list: Vec::new(),
+        quote_strings: Vec::new(),
     }))
 }
 
@@ -851,6 +864,235 @@ pub unsafe extern "C" fn forzac_bookmarks(doc: *mut Document, count: *mut u32) -
     doc.bookmark_list.as_ptr()
 }
 
+/// A word drawn on a line (`ChapterLayout::words`): the whole word's text `[start, end)` and the piece's rectangle.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ForzacWord {
+    pub start: ForzacLocator,
+    pub end: ForzacLocator,
+    pub rect: ForzacRect,
+}
+
+impl From<crate::Word> for ForzacWord {
+    fn from(w: crate::Word) -> Self {
+        ForzacWord { start: w.start.into(), end: w.end.into(), rect: w.rect.into() }
+    }
+}
+
+impl From<ForzacWord> for crate::Word {
+    fn from(w: ForzacWord) -> Self {
+        let r = w.rect;
+        crate::Word { start: w.start.into(), end: w.end.into(), rect: Rect { x: r.x, y: r.y, w: r.w, h: r.h } }
+    }
+}
+
+/// A text range `[start, end)`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ForzacRange {
+    pub start: ForzacLocator,
+    pub end: ForzacLocator,
+}
+
+/// The words drawn on `page` of the current chapter, in reading order; valid until the next words from `doc`.
+///
+/// # Safety
+/// `doc` from [`forzac_open`] after [`forzac_paginate`]; `count` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_page_words(doc: *mut Document, page: u32, count: *mut u32) -> *const ForzacWord {
+    let doc = unsafe { &mut *doc };
+    let (style, current, book) = (doc.style, doc.current, doc.book.clone());
+    let words = match (style, doc.layout(current)) {
+        (Some(style), Some(l)) => l.words((page as usize).min(l.pages.len() - 1), &style, &book),
+        _ => Vec::new(),
+    };
+    doc.words = words.into_iter().map(Into::into).collect();
+    unsafe { *count = doc.words.len() as u32 };
+    doc.words.as_ptr()
+}
+
+/// The words between heights `y0` and `y1` of `chapter`'s column, in the coordinates [`forzac_flow`] draws in.
+///
+/// # Safety
+/// `doc` from [`forzac_open`] after [`forzac_paginate`]; `count` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_flow_words(doc: *mut Document, chapter: u32, y0: f32, y1: f32, count: *mut u32) -> *const ForzacWord {
+    let doc = unsafe { &mut *doc };
+    let (style, book) = (doc.style, doc.book.clone());
+    let words = match (style, doc.layout(chapter as usize)) {
+        (Some(style), Some(l)) => l.flow_words(y0, y1, &style, &book),
+        _ => Vec::new(),
+    };
+    doc.words = words.into_iter().map(Into::into).collect();
+    unsafe { *count = doc.words.len() as u32 };
+    doc.words.as_ptr()
+}
+
+/// # Safety
+/// `words` must point to `count` words.
+unsafe fn words(words: *const ForzacWord, count: u32) -> Vec<crate::Word> {
+    if words.is_null() {
+        return Vec::new();
+    }
+    unsafe { std::slice::from_raw_parts(words, count as usize) }.iter().map(|&w| w.into()).collect()
+}
+
+fn word_index(i: Option<usize>) -> i32 {
+    i.map_or(-1, |i| i as i32)
+}
+
+/// The word under `(x, y)` (else the nearest on the nearest line): its index, or −1 when there are no words.
+///
+/// # Safety
+/// `list` must point to `count` words.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_word_at(list: *const ForzacWord, count: u32, x: f32, y: f32) -> i32 {
+    word_index(crate::selection::word_at(&unsafe { words(list, count) }, x, y))
+}
+
+/// The next (`delta` 1) or previous (−1) word after word `i` (the other pieces of a hyphenated word skipped); −1 past
+/// the ends.
+///
+/// # Safety
+/// `list` must point to `count` words.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_word_step(list: *const ForzacWord, count: u32, i: u32, delta: i32) -> i32 {
+    word_index(crate::selection::step(&unsafe { words(list, count) }, i as usize, delta))
+}
+
+/// The word on the next (`delta` 1) or previous (−1) line nearest word `i`'s middle; −1 past the ends.
+///
+/// # Safety
+/// `list` must point to `count` words.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_word_line(list: *const ForzacWord, count: u32, i: u32, delta: i32) -> i32 {
+    word_index(crate::selection::line_step(&unsafe { words(list, count) }, i as usize, delta))
+}
+
+/// The first piece of the word starting at `at`, else of the first word after it; −1 when there is none.
+///
+/// # Safety
+/// `list` must point to `count` words.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_word_find(list: *const ForzacWord, count: u32, at: ForzacLocator) -> i32 {
+    word_index(crate::selection::find(&unsafe { words(list, count) }, at.into()))
+}
+
+/// The block holding `at` (a paragraph, a heading, a table row) as a range.
+///
+/// # Safety
+/// `doc` from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_block_range(doc: *const Document, at: ForzacLocator) -> ForzacRange {
+    let (start, end) = unsafe { &*doc }.book.block_range(at.into());
+    ForzacRange { start: start.into(), end: end.into() }
+}
+
+/// The text of `[from, to)` as it is copied: blocks on lines of their own, without soft hyphens and note markers. Valid
+/// until the next string from `doc`.
+///
+/// # Safety
+/// `doc` from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_text(doc: *mut Document, from: ForzacLocator, to: ForzacLocator) -> *const c_char {
+    let doc = unsafe { &mut *doc };
+    let text = doc.book.text(from.into(), to.into(), usize::MAX);
+    doc.text(Some(&text))
+}
+
+/// The text of `[from, to)` signed to share: «text», a blank line, "— Author, «Title»". Valid until the next string.
+///
+/// # Safety
+/// `doc` from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_share_text(doc: *mut Document, from: ForzacLocator, to: ForzacLocator) -> *const c_char {
+    let doc = unsafe { &mut *doc };
+    let text = crate::quotes::share_text(&doc.book, &doc.book.text(from.into(), to.into(), usize::MAX));
+    doc.text(Some(&text))
+}
+
+/// Keeps `[from, to)` as a highlight. Save with [`forzac_state_save_quotes`].
+///
+/// # Safety
+/// `doc` from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_quote_add(doc: *mut Document, from: ForzacLocator, to: ForzacLocator) {
+    let quotes = &mut unsafe { &mut *doc }.quotes;
+    let q = (Locator::from(from), Locator::from(to));
+    if q.0 < q.1 && !quotes.contains(&q) {
+        let i = quotes.partition_point(|x| *x < q);
+        quotes.insert(i, q);
+    }
+}
+
+/// Deletes the highlight `[from, to)`.
+///
+/// # Safety
+/// `doc` from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_quote_remove(doc: *mut Document, from: ForzacLocator, to: ForzacLocator) {
+    let q = (Locator::from(from), Locator::from(to));
+    unsafe { &mut *doc }.quotes.retain(|x| *x != q);
+}
+
+/// The highlights' ranges in reading order, valid until the next call of this function on `doc`.
+///
+/// # Safety
+/// `doc` from [`forzac_open`]; `count` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_quote_places(doc: *mut Document, count: *mut u32) -> *const ForzacRange {
+    let doc = unsafe { &mut *doc };
+    doc.quote_places = doc.quotes.iter().map(|&(a, b)| ForzacRange { start: a.into(), end: b.into() }).collect();
+    unsafe { *count = doc.quote_places.len() as u32 };
+    doc.quote_places.as_ptr()
+}
+
+/// A highlight as the list shows it: its range, its text, the section it starts in (null when none) and the share of
+/// the book before it.
+#[repr(C)]
+pub struct ForzacQuote {
+    pub start: ForzacLocator,
+    pub end: ForzacLocator,
+    pub text: *const c_char,
+    pub section: *const c_char,
+    pub position: f32,
+}
+
+/// The highlights as the list shows them, in reading order; valid until the next call of this function on `doc`.
+///
+/// # Safety
+/// `doc` from [`forzac_open`]; `count` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_quotes(doc: *mut Document, count: *mut u32) -> *const ForzacQuote {
+    let doc = unsafe { &mut *doc };
+    let entries = crate::quotes::entries(&doc.book, &doc.quotes);
+    doc.quote_strings = entries.iter().flat_map(|e| [cstring(&e.text), cstring(e.section.as_deref().unwrap_or(""))]).collect();
+    doc.quote_list = entries
+        .iter()
+        .zip(doc.quote_strings.chunks(2))
+        .map(|(e, s)| ForzacQuote {
+            start: e.start.into(),
+            end: e.end.into(),
+            text: s[0].as_ptr(),
+            section: if e.section.is_some() { s[1].as_ptr() } else { std::ptr::null() },
+            position: e.position,
+        })
+        .collect();
+    unsafe { *count = doc.quote_list.len() as u32 };
+    doc.quote_list.as_ptr()
+}
+
+/// All highlights as one text (Android's export); valid until the next string from `doc`.
+///
+/// # Safety
+/// `doc` from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_quotes_export(doc: *mut Document) -> *const c_char {
+    let doc = unsafe { &mut *doc };
+    let text = crate::quotes::export(&doc.book, &crate::quotes::entries(&doc.book, &doc.quotes));
+    doc.text(Some(&text))
+}
+
 /// The document's book, for searching on another thread; release it with [`forzac_book_release`].
 pub struct BookRef(Arc<Book>);
 
@@ -1162,6 +1404,26 @@ pub unsafe extern "C" fn forzac_state_load_bookmarks(state: *const State, doc: *
 pub unsafe extern "C" fn forzac_state_save_bookmarks(state: *mut State, doc: *const Document) -> bool {
     let (state, doc) = unsafe { (&mut *state, &*doc) };
     state.store.set_bookmarks(&doc.book, &doc.bookmarks).is_ok()
+}
+
+/// Takes the document's highlights from `state`.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`], `doc` from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_state_load_quotes(state: *const State, doc: *mut Document) {
+    let (state, doc) = unsafe { (&*state, &mut *doc) };
+    doc.quotes = state.store.quotes(&doc.book);
+}
+
+/// Remembers the document's highlights in `state`; false when the file cannot be written.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`], `doc` from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_state_save_quotes(state: *mut State, doc: *const Document) -> bool {
+    let (state, doc) = unsafe { (&mut *state, &*doc) };
+    state.store.set_quotes(&doc.book, &doc.quotes).is_ok()
 }
 
 /// The settings remembered in `state` (defaults for anything missing or unknown); the defaults for a null `state`.

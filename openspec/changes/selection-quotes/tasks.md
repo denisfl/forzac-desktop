@@ -1,10 +1,10 @@
 ## 1. Core
 
-- [ ] 1.1 `state`: `quote` lines; `Store::quotes`, `Store::set_quotes`; tests
-- [ ] 1.2 Words: `ChapterLayout::words`, `flow_words`; `word_at`, `step`, `line_step`, `find`, `span`;
+- [x] 1.1 `state`: `quote` lines; `Store::quotes`, `Store::set_quotes`; tests
+- [x] 1.2 Words: `ChapterLayout::words`, `flow_words`; `word_at`, `step`, `line_step`, `find`, `span`;
       `Book::block_range`; tests (a hyphenated word, a table cell, punctuation, hit-testing between lines)
-- [ ] 1.3 `quotes`: entries, `share_text`, `export` (Android's cases); `Target::Highlight`; tests
-- [ ] 1.4 C ABI and `macos/forzac.h`; tests
+- [x] 1.3 `quotes`: entries, `share_text`, `export` (Android's cases); `Target::Highlight`; tests
+- [x] 1.4 C ABI and `macos/forzac.h`; tests
 
 ## 2. GTK shell
 

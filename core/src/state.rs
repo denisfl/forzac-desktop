@@ -1,11 +1,12 @@
-//! What Forzac remembers between launches: the reading position of every book, the recent books, the bookmarks and
-//! the reader settings, in one text file at a path the shell chooses.
+//! What Forzac remembers between launches: the reading position of every book, the recent books, the bookmarks, the
+//! highlights (quotes) and the reader settings, in one text file at a path the shell chooses.
 //!
 //! ```text
 //! forzac-state 1
 //! setting<TAB>theme<TAB>Dark
 //! book<TAB>id<TAB>chapter<TAB>block<TAB>offset<TAB>progress<TAB>opened<TAB>path<TAB>title<TAB>authors
 //! bookmark<TAB>id<TAB>chapter<TAB>block<TAB>offset
+//! quote<TAB>id<TAB>chapter<TAB>block<TAB>offset<TAB>chapter<TAB>block<TAB>offset
 //! ```
 //!
 //! Tabs, line breaks and backslashes inside fields are escaped. Unreadable lines are skipped. Every write re-reads
@@ -49,6 +50,8 @@ struct Saved {
     settings: BTreeMap<String, String>,
     /// Bookmarks by book id, in reading order.
     bookmarks: BTreeMap<String, Vec<Locator>>,
+    /// Highlights by book id: their `[start, end)`, in reading order.
+    quotes: BTreeMap<String, Vec<(Locator, Locator)>>,
 }
 
 impl Store {
@@ -119,6 +122,25 @@ impl Store {
         })
     }
 
+    /// The highlights of `book`, in reading order.
+    pub fn quotes(&self, book: &Book) -> Vec<(Locator, Locator)> {
+        self.saved.quotes.get(&book.id).cloned().unwrap_or_default()
+    }
+
+    /// Replaces the highlights of `book` with `quotes`.
+    pub fn set_quotes(&mut self, book: &Book, quotes: &[(Locator, Locator)]) -> io::Result<()> {
+        let mut quotes = quotes.to_vec();
+        quotes.sort();
+        quotes.dedup();
+        self.write(|saved| {
+            if quotes.is_empty() {
+                saved.quotes.remove(&book.id);
+            } else {
+                saved.quotes.insert(book.id.clone(), quotes.clone());
+            }
+        })
+    }
+
     /// Up to `n` books whose files still exist, the last opened first.
     pub fn recent(&self, n: usize) -> Vec<&Entry> {
         let mut books: Vec<&Entry> = self.saved.books.iter().filter(|e| e.path.is_file()).collect();
@@ -145,6 +167,21 @@ impl Store {
         for (id, marks) in &saved.bookmarks {
             for Locator { chapter, block, offset } in marks {
                 let _ = writeln!(text, "bookmark\t{}\t{chapter}\t{block}\t{offset}", escape(id));
+            }
+        }
+        for (id, quotes) in &saved.quotes {
+            for (a, b) in quotes {
+                let _ = writeln!(
+                    text,
+                    "quote\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                    escape(id),
+                    a.chapter,
+                    a.block,
+                    a.offset,
+                    b.chapter,
+                    b.block,
+                    b.offset
+                );
             }
         }
         if let Some(dir) = self.path.parent() {
@@ -178,6 +215,17 @@ fn read(path: &Path) -> Saved {
                     marks.push(Locator { chapter, block, offset });
                     marks.sort();
                     marks.dedup();
+                }
+            }
+            Some("quote") if f.len() == 8 => {
+                let place = |i: usize| Some(Locator { chapter: num(i)?, block: num(i + 1)?, offset: num(i + 2)? });
+                if let (Some(start), Some(end)) = (place(2), place(5))
+                    && start < end
+                {
+                    let quotes = saved.quotes.entry(f[1].clone()).or_default();
+                    quotes.push((start, end));
+                    quotes.sort();
+                    quotes.dedup();
                 }
             }
             Some("book") if f.len() == 10 => {

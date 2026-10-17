@@ -118,6 +118,23 @@ fn damaged_bookmarks_are_skipped() {
 }
 
 #[test]
+fn quotes_survive_a_restart_and_keep_other_books() {
+    let file = dir().join("state");
+    let (a, b) = (book("aaaa", &[4, 4]), book("bbbb", &[2]));
+    let mut store = Store::open(&file);
+    store.set_quotes(&a, &[(at(1, 2, 5), at(1, 3, 0)), (at(0, 0, 0), at(0, 0, 4))]).unwrap();
+    store.set_quotes(&b, &[(at(0, 1, 0), at(0, 1, 3))]).unwrap();
+    store.set_bookmarks(&a, &[at(0, 1, 0)]).unwrap();
+    let store = Store::open(&file);
+    assert_eq!(store.quotes(&a), [(at(0, 0, 0), at(0, 0, 4)), (at(1, 2, 5), at(1, 3, 0))], "in reading order");
+    assert_eq!(store.quotes(&b), [(at(0, 1, 0), at(0, 1, 3))]);
+    assert_eq!(store.bookmarks(&a), [at(0, 1, 0)], "bookmarks kept beside them");
+    std::fs::write(&file, format!("{HEADER}\nquote\tid1\t0\t1\t2\t0\t1\nquote\tid1\t0\t1\t5\t0\t1\t2\nquote\tid1\t0\t1\t2\t0\t1\t9\n"))
+        .unwrap();
+    assert_eq!(Store::open(&file).quotes(&book("id1", &[1])), [(at(0, 1, 2), at(0, 1, 9))], "short and empty ranges are skipped");
+}
+
+#[test]
 fn recent_books_are_the_existing_files_last_opened_first() {
     let d = dir();
     std::fs::create_dir_all(&d).unwrap();

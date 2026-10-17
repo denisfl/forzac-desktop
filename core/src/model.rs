@@ -135,6 +135,14 @@ impl Book {
     }
 }
 
+impl Book {
+    /// The block holding `at`, as a range of the text (a paragraph, a heading, a table row).
+    pub fn block_range(&self, at: Locator) -> (Locator, Locator) {
+        let len = self.chapters.get(at.chapter).and_then(|c| c.blocks.get(at.block)).map_or(0, Block::text_len);
+        (Locator { offset: 0, ..at }, Locator { offset: len, ..at })
+    }
+}
+
 /// The byte ranges of `t`'s note markers.
 fn note_ranges(t: &StyledText) -> impl Iterator<Item = (usize, usize)> + '_ {
     t.styles.iter().filter(|s| s.style == Style::NoteRef).map(|s| (s.start, s.end))

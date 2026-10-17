@@ -11,7 +11,7 @@ mod table;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-pub use page::{ChapterLayout, Page, PageContent, PageImage, Rule, end_page, layout_note, layout_preview, paginate};
+pub use page::{ChapterLayout, Page, PageContent, PageImage, Rule, Word, end_page, layout_note, layout_preview, paginate};
 pub use table::{TableView, layout_table};
 
 use crate::fonts::{self, Face, Family, FontId, Glyph, Shaper};
@@ -93,6 +93,8 @@ pub enum Target {
     Image(String),
     /// A table, by its first row: it opens in the view (`layout_table`).
     Table(Locator),
+    /// A highlight, by its start. The core never sets it: the shells add their highlights' lines to a page's areas.
+    Highlight(Locator),
 }
 
 impl Target {

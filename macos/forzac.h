@@ -44,7 +44,8 @@ typedef struct {
 
 typedef struct {
     ForzacRect rect;
-    uint8_t kind;           // 0 note marker, 1 link, 2 image (opens in the view), 3 table (opens in the view)
+    uint8_t kind;           // 0 note marker, 1 link, 2 image (opens in the view), 3 table (opens in the view), 4 a
+                            // highlight (the shell's own; the core never sets it)
     const char *target;     // note id, link key or image id; empty for a table
     ForzacLocator at;       // a table's first row
 } ForzacArea;
@@ -158,6 +159,46 @@ bool forzac_bookmarked(const ForzacDocument *doc, ForzacLocator from, ForzacLoca
 const ForzacLocator *forzac_bookmark_places(ForzacDocument *doc, uint32_t *count);
 const ForzacBookmark *forzac_bookmarks(ForzacDocument *doc, uint32_t *count);
 
+// Words and highlights.
+typedef struct {
+    ForzacLocator start;    // the whole word's text [start, end): a hyphenated word's pieces share it
+    ForzacLocator end;
+    ForzacRect rect;        // this piece on its line
+} ForzacWord;
+typedef struct {
+    ForzacLocator start;
+    ForzacLocator end;
+} ForzacRange;
+typedef struct {
+    ForzacLocator start;
+    ForzacLocator end;
+    const char *text;
+    const char *section;    // NULL when there is none
+    float position;         // share of the book before it, 0-1
+} ForzacQuote;
+// The words drawn on a page of the current chapter, or between heights of a chapter's column (forzac_flow's
+// coordinates); in reading order, valid until the next words from the document.
+const ForzacWord *forzac_page_words(ForzacDocument *doc, uint32_t page, uint32_t *count);
+const ForzacWord *forzac_flow_words(ForzacDocument *doc, uint32_t chapter, float y0, float y1, uint32_t *count);
+// Over a word array: the word under a point (else the nearest), the next/previous word, the word on the next/previous
+// line, the word starting at (or after) a place; -1 for none.
+int32_t forzac_word_at(const ForzacWord *words, uint32_t count, float x, float y);
+int32_t forzac_word_step(const ForzacWord *words, uint32_t count, uint32_t i, int32_t delta);
+int32_t forzac_word_line(const ForzacWord *words, uint32_t count, uint32_t i, int32_t delta);
+int32_t forzac_word_find(const ForzacWord *words, uint32_t count, ForzacLocator at);
+ForzacRange forzac_block_range(const ForzacDocument *doc, ForzacLocator at);
+// A range's text as copied, and signed for sharing; valid until the next string from the document.
+const char *forzac_text(ForzacDocument *doc, ForzacLocator from, ForzacLocator to);
+const char *forzac_share_text(ForzacDocument *doc, ForzacLocator from, ForzacLocator to);
+// Highlights, held by the document (load and save them with the state).
+void forzac_quote_add(ForzacDocument *doc, ForzacLocator from, ForzacLocator to);
+void forzac_quote_remove(ForzacDocument *doc, ForzacLocator from, ForzacLocator to);
+// In reading order; each valid until the next call of the same function.
+const ForzacRange *forzac_quote_places(ForzacDocument *doc, uint32_t *count);
+const ForzacQuote *forzac_quotes(ForzacDocument *doc, uint32_t *count);
+// All highlights in Android's export format; valid until the next string from the document.
+const char *forzac_quotes_export(ForzacDocument *doc);
+
 // Search: a handle to the book for another thread, then the matches (owned until freed).
 typedef struct ForzacBook ForzacBook;
 typedef struct ForzacSearch ForzacSearch;
@@ -202,6 +243,8 @@ bool forzac_state_save_position(ForzacState *state, const ForzacDocument *doc, F
 const ForzacRecent *forzac_state_recent(ForzacState *state, uint32_t n, uint32_t *count);
 void forzac_state_load_bookmarks(const ForzacState *state, ForzacDocument *doc);
 bool forzac_state_save_bookmarks(ForzacState *state, const ForzacDocument *doc);
+void forzac_state_load_quotes(const ForzacState *state, ForzacDocument *doc);
+bool forzac_state_save_quotes(ForzacState *state, const ForzacDocument *doc);
 ForzacSettings forzac_state_settings(const ForzacState *state);
 bool forzac_state_save_settings(ForzacState *state, const ForzacSettings *settings);
 void forzac_state_close(ForzacState *state);

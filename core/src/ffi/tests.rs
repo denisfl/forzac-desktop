@@ -296,3 +296,48 @@ fn bookmarks_through_the_c_functions() {
         forzac_state_close(state);
     }
 }
+
+#[test]
+fn words_and_highlights_through_the_c_functions() {
+    let path = book_file();
+    let state_path = path.with_file_name("quotes-state");
+    unsafe {
+        let state = forzac_state_open(c(state_path.to_str().unwrap()).as_ptr());
+        let doc = forzac_open(c(path.to_str().unwrap()).as_ptr(), std::ptr::null_mut());
+        let settings = forzac_settings_default();
+        forzac_paginate(doc, 1, 600.0, 800.0, &settings);
+        let mut n = 0;
+        let list = std::slice::from_raw_parts(forzac_page_words(doc, 0, &mut n), n as usize).to_vec();
+        assert!(list.len() > 20);
+        let w = list[3].rect;
+        assert_eq!(forzac_word_at(list.as_ptr(), n, w.x + 1.0, w.y + 1.0), 3);
+        assert_eq!(forzac_word_step(list.as_ptr(), n, 3, 1), 4);
+        assert_eq!(forzac_word_step(list.as_ptr(), n, 0, -1), -1);
+        assert!(forzac_word_line(list.as_ptr(), n, 0, 1) > 0);
+        assert_eq!(forzac_word_find(list.as_ptr(), n, list[7].start), 7);
+        let (from, to) = (list[2].start, list[6].end);
+        let text = string(forzac_text(doc, from, to)).unwrap();
+        assert_eq!(text.split_whitespace().count(), 5, "{text}");
+        assert!(string(forzac_share_text(doc, from, to)).unwrap().starts_with('«'));
+        let block = forzac_block_range(doc, list[2].start);
+        assert_eq!((block.start.offset, block.start.block), (0, list[2].start.block));
+        forzac_quote_add(doc, from, to);
+        forzac_quote_add(doc, from, to);
+        assert!(forzac_state_save_quotes(state, doc));
+        forzac_close(doc);
+
+        let doc = forzac_open(c(path.to_str().unwrap()).as_ptr(), std::ptr::null_mut());
+        forzac_state_load_quotes(state, doc);
+        let places = std::slice::from_raw_parts(forzac_quote_places(doc, &mut n), n as usize);
+        assert_eq!(places.len(), 1, "once");
+        let quotes = std::slice::from_raw_parts(forzac_quotes(doc, &mut n), n as usize);
+        assert_eq!(string(quotes[0].text).unwrap(), text);
+        assert!(string(forzac_quotes_export(doc)).unwrap().contains(&format!("> {text}")));
+        forzac_quote_remove(doc, from, to);
+        forzac_quote_places(doc, &mut n);
+        assert_eq!(n, 0);
+        assert!(forzac_state_save_quotes(state, doc));
+        forzac_close(doc);
+        forzac_state_close(state);
+    }
+}
