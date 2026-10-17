@@ -89,11 +89,3 @@ each no larger than 85% of the monitor's width and height, so that a window fits
 #### Scenario: A small screen
 - **WHEN** a book opens on the Pi 5's 1280 × 673 Raspberry Pi Connect desktop
 - **THEN** the whole window, title bar included, is on the screen
-
-### Requirement: Help and the support line
-`?` SHALL show the keys over the page and hide them again; the help SHALL end with the single line "Forzac is free.
-Support it: forzac.truenrth.app". The support link SHALL appear nowhere else in the Linux shell and never on its own.
-
-#### Scenario: Asking for help
-- **WHEN** the reader presses `?` in a book window
-- **THEN** the keys are listed over the page with the support line last, and `?` or `Esc` hides them
