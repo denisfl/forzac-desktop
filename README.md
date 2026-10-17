@@ -53,10 +53,11 @@ Tests: `cargo test -p forzac-core`. Measurements on a Linux desktop: `scripts/me
 
 | Keys | Action |
 |---|---|
-| `j` `l` `→` `↓` `Space` `PgDn` `Enter` | next page (Scroll mode: `j` `↓` a line, the others a screen) |
+| `j` `l` `→` `↓` `Space` `PgDn` | next page (Scroll mode: `j` `↓` a line, the others a screen) |
 | `k` `h` `←` `↑` `Shift+Space` `PgUp` `Backspace` | previous page (Scroll mode: `k` `↑` a line, the others a screen) |
 | `Ctrl+D` `Ctrl+U` | Scroll mode: half a screen down / up |
 | `m` | Slide (pages) or Scroll (a continuous column), keeping the top line |
+| `Enter` (or a click in the middle of the page) | the menu: back to the books, the section, the contents, a slider over the whole book (`←` `→` `h` `l` move it, `Enter` goes there), "Page N of M", the minutes left in the chapter, "Aa" for the settings; `Esc` closes |
 | `]` `[` | next / previous chapter |
 | `g` `G` `Home` `End` | chapter start / end |
 | `o` | contents (`/` filters, `Enter` jumps, `←` `→` switch to the bookmarks and the highlights; in the highlights `d` deletes, `c` copies one, `Ctrl+C`/`⌘C` all) |

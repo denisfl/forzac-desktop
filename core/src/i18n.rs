@@ -109,9 +109,10 @@ pub fn help(platform: Platform) -> &'static str {
 const ASKED_BY_HELP: [&str; 2] = [HELP_LINUX, HELP_MAC];
 
 const HELP_LINUX: &str = "\
-j  l  →  ↓  Space  PgDn  Enter    next page (Scroll: j ↓ a line, Ctrl+D half a screen)
+j  l  →  ↓  Space  PgDn    next page (Scroll: j ↓ a line, Ctrl+D half a screen)
 k  h  ←  ↑  Shift+Space  PgUp    previous page (Scroll: k ↑ a line, Ctrl+U half a screen)
 m    page or scroll
+Enter    menu: ← → h l through the book, Enter goes there, Esc closes
 ]  [    next / previous chapter
 g  G  Home  End    chapter start / end
 o    contents  (/ filters, ← → tabs)
@@ -128,7 +129,7 @@ t  T    theme
 f  F11    full screen
 ?    this help
 q  Ctrl+W    close
-click    the left or right third of the page turns it; a picture or a table opens;
+click    the left or right third of the page turns it, the middle opens the menu; a picture or a table opens;
          a drag selects (a double click in the middle: a word, a triple: the paragraph)
 
 Picture or table:  + − 0  zoom, fit    arrows  h j k l  Space  move    Esc  q  close
@@ -136,9 +137,10 @@ Picture or table:  + − 0  zoom, fit    arrows  h j k l  Space  move    Esc  q 
 Forzac is free. Support it: forzac.truenrth.app";
 
 const HELP_LINUX_RU: &str = "\
-j  l  →  ↓  Space  PgDn  Enter    следующая страница (Лента: j ↓ на строку, Ctrl+D на полэкрана)
+j  l  →  ↓  Space  PgDn    следующая страница (Лента: j ↓ на строку, Ctrl+D на полэкрана)
 k  h  ←  ↑  Shift+Space  PgUp    предыдущая страница (Лента: k ↑ на строку, Ctrl+U на полэкрана)
 m    страницы или лента
+Enter    меню: ← → h l по книге, Enter — перейти, Esc — закрыть
 ]  [    следующая / предыдущая глава
 g  G  Home  End    начало / конец главы
 o    содержание  (/ фильтр, ← → вкладки)
@@ -155,7 +157,7 @@ t  T    тема
 f  F11    во весь экран
 ?    эта справка
 q  Ctrl+W    закрыть
-щелчок    в левой или правой трети страницы листает; картинка или таблица открывается;
+щелчок    в левой или правой трети страницы листает, в середине открывает меню; картинка или таблица открывается;
           протягивание выделяет (двойной щелчок в середине — слово, тройной — абзац)
 
 Картинка или таблица:  + − 0  масштаб, целиком    стрелки  h j k l  Space  сдвиг    Esc  q  закрыть
@@ -163,9 +165,10 @@ q  Ctrl+W    закрыть
 Форзац бесплатный. Поддержать: forzac.truenrth.app";
 
 const HELP_MAC: &str = "\
-j  l  →  ↓  Space  PgDn  Return    next page (Scroll: j ↓ a line, ⌃D half a screen)
+j  l  →  ↓  Space  PgDn    next page (Scroll: j ↓ a line, ⌃D half a screen)
 k  h  ←  ↑  Shift+Space  PgUp    previous page (Scroll: k ↑ a line, ⌃U half a screen)
 m    pages or scroll
+Return    menu: ← → h l through the book, Return goes there, Esc closes
 ]  [    next / previous chapter
 g  G  Home  End    chapter start / end
 o    contents  (/ filters, ← → tabs)
@@ -182,7 +185,7 @@ t  T    theme
 f  ⌃⌘F    full screen
 ?    this help
 q  ⌘W    close
-click    the left or right third of the page turns it; a picture or a table opens;
+click    the left or right third of the page turns it, the middle opens the menu; a picture or a table opens;
          a drag selects (a double click in the middle: a word, a triple: the paragraph)
 
 Picture or table:  + − 0  zoom, fit    arrows  h j k l  Space  move    Esc  q  close
@@ -190,9 +193,10 @@ Picture or table:  + − 0  zoom, fit    arrows  h j k l  Space  move    Esc  q 
 Forzac is free. Support it: forzac.truenrth.app";
 
 const HELP_MAC_RU: &str = "\
-j  l  →  ↓  Space  PgDn  Return    следующая страница (Лента: j ↓ на строку, ⌃D на полэкрана)
+j  l  →  ↓  Space  PgDn    следующая страница (Лента: j ↓ на строку, ⌃D на полэкрана)
 k  h  ←  ↑  Shift+Space  PgUp    предыдущая страница (Лента: k ↑ на строку, ⌃U на полэкрана)
 m    страницы или лента
+Return    меню: ← → h l по книге, Return — перейти, Esc — закрыть
 ]  [    следующая / предыдущая глава
 g  G  Home  End    начало / конец главы
 o    содержание  (/ фильтр, ← → вкладки)
@@ -209,7 +213,7 @@ t  T    тема
 f  ⌃⌘F    во весь экран
 ?    эта справка
 q  ⌘W    закрыть
-щелчок    в левой или правой трети страницы листает; картинка или таблица открывается;
+щелчок    в левой или правой трети страницы листает, в середине открывает меню; картинка или таблица открывается;
           протягивание выделяет (двойной щелчок в середине — слово, тройной — абзац)
 
 Картинка или таблица:  + − 0  масштаб, целиком    стрелки  h j k l  Space  сдвиг    Esc  q  закрыть
@@ -261,6 +265,7 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Chapter {n}", "Глава {n}"),
     ("← Back · Ctrl+O", "← Вернуться · Ctrl+O"),
     ("← Back · ⌃O", "← Вернуться · ⌃O"),
+    ("{n} of {m}", "{n} из {m}"),
     ("Highlight", "Цитата"),
     ("Copy", "Копировать"),
     ("Share", "Поделиться"),
@@ -280,6 +285,13 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Search in book", "Поиск по книге"),
     ("No matches", "Ничего не найдено"),
     ("Note", "Примечание"),
+    // The menu.
+    ("Back to library", "К библиотеке"),
+    ("Page {n} of {m}", "Страница {n} из {m}"),
+    ("{n} min left in chapter", "{n} мин до конца главы"),
+    ("Less than a minute left in chapter", "Меньше минуты до конца главы"),
+    ("Text settings", "Настройки текста"),
+    ("p. {n}", "стр. {n}"),
     // Settings.
     ("Line spacing", "Интервал"),
     ("Margins", "Поля"),

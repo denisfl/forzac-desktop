@@ -53,7 +53,7 @@ modules (`core/typesetting/src/main/kotlin/app/truenrth/forzac/typesetting/…` 
 | # | Android | Desktop | Status |
 |---|---|---|---|
 | M1 | "Slide", "Cover", "Curl" (Android 13+), "Scroll" (`PageTurn.kt`) | "Slide" and "Scroll" (`core/src/settings.rs` `Turning`) | intended (no Curl and Cover) |
-| M2 | The page follows the finger, a fling turns, taps in the left/right third turn, the middle opens the menu (`ReaderScreen.kt` `readerGestures`) | Keys (`j l → ↓ Space PgDn Enter` / `k h ← ↑ Shift+Space PgUp Backspace`), a 200 ms ease-out slide; a wheel step turns a page, a touchpad swipe at most one (`page_view.rs` `turn`, `macos/PageView.swift` `keyDown`, `scrollWheel`). A click on the page turns nothing | unclear (click to turn) |
+| M2 | The page follows the finger, a fling turns, taps in the left/right third turn, the middle opens the menu (`ReaderScreen.kt` `readerGestures`) | Keys (`j l → ↓ Space PgDn Enter` / `k h ← ↑ Shift+Space PgUp Backspace`), a 200 ms ease-out slide; a wheel step turns a page, a touchpad swipe at most one (`page_view.rs` `turn`, `macos/PageView.swift` `keyDown`, `scrollWheel`). A click on the page turns nothing | unclear (click to turn); since `reader-menu`: a click in a side third turns, the middle opens the menu, `Enter` opens the menu instead of turning — same |
 | M3 | "Scroll": one column of the same typesetting, chapters apart, everything works in it (`ReaderScreen.kt` `FlowView`) | One column of tiles, a gap between chapters; line, screen and half-screen keys, wheel by three lines, kinetic touchpad (`gtk/src/scroll.rs`, `macos/PageView.swift`) | same |
 | M4 | Switching modes keeps the line (A spec page-turning) | `m` keeps the top line (spec page-turning) | same |
 | M5 | Asks for the highest refresh rate while moving, nothing drawn at rest (`HighRefreshRate`) | Frame clock / `CADisplayLink`, nothing drawn at rest | same |
@@ -64,7 +64,7 @@ modules (`core/typesetting/src/main/kotlin/app/truenrth/forzac/typesetting/…` 
 
 | # | Android | Desktop | Status |
 |---|---|---|---|
-| N1 | Contents full screen: tabs Contents / Bookmarks / Highlights, a "Search in book" row, the book (cover, title, author · N% read), entries with nesting, the current one bold with a dot, page numbers (`TocScreen.kt`) | A side panel (`o`): "Contents", a filter field, the book card, entries with nesting, current bold with a dot, positions in percent; `j`/`k`, `Enter`, `/` (`gtk/src/panels.rs` `Contents`, `macos/Panels.swift` `ContentsPanel`) | intended (keyboard); tabs follow Q1, Q2; numbers follow R1 |
+| N1 | Contents full screen: tabs Contents / Bookmarks / Highlights, a "Search in book" row, the book (cover, title, author · N% read), entries with nesting, the current one bold with a dot, page numbers (`TocScreen.kt`) | A side panel (`o`): "Contents", a filter field, the book card, entries with nesting, current bold with a dot, positions in percent; `j`/`k`, `Enter`, `/` (`gtk/src/panels.rs` `Contents`, `macos/Panels.swift` `ContentsPanel`) | intended (keyboard); tabs follow Q1, Q2; numbers follow R1: page numbers once the book is counted (`reader-menu`) |
 | N2 | A book without contents lists every chapter, an untitled one as "Chapter N" (`ReaderScreen.kt`, `entries`) | Only titled chapters are listed; untitled ones cannot be reached from the contents (`core/src/model.rs` `Book::contents`) | gap |
 | N3 | A book without a cover gets a generated one (marble or cloth) in the contents (`Covers.kt` `GeneratedCover`) | A plain dark box with the title (`panels.rs` `cover`, `Panels.swift` `cover(of:)`) | unclear |
 | N4 | A note in a bottom sheet: grabber, "NOTE n", text with images and tables, scrolls, closes; the page stays (`NoteSheet.kt`) | The same sheet, the note typeset by the core like the book (`panels.rs` `note`, `Panels.swift` `NoteSheet`, `core/src/layout/page.rs` `layout_note`) | same |
@@ -72,7 +72,7 @@ modules (`core/typesetting/src/main/kotlin/app/truenrth/forzac/typesetting/…` 
 | N6 | A link to a short target (≤ 3 blocks and 600 characters: a figure, a table, a paragraph) opens in the note sheet, the page stays (`ReaderScreen.kt` `openRef`, `model/LinkPreview.kt`) | Every link to a place jumps there (`page_view.rs` `open`) | gap |
 | N7 | External links open in the default browser or mail app (`openExternal`) | The same (`gtk::UriLauncher`, `NSWorkspace.open`) | same |
 | N8 | After a big jump (link, contents, bookmark, highlight, search, slider beyond the next page) a pill "← Back · p. N"; it returns to where the first jump of a series started, vanishes after the reader turns two pages on; Back returns (`ReaderViewModel.kt` `leave`/`returnPoint`, `ReaderScreen.kt` `ReturnPill`) | `Ctrl+O` pops a stack of up to 50 places pushed by links, contents and search; nothing on screen says it exists; `[ ] g G` do not push (`page_view.rs` `go_to`, `back`) | unclear |
-| N9 | — (the menu slider) | Chapter keys `]` `[`, chapter start/end `g` `G` `Home` `End` | intended (keyboard) |
+| N9 | — (the menu slider) | Chapter keys `]` `[`, chapter start/end `g` `G` `Home` `End`; since `reader-menu` also the menu's slider (`←` `→` `h` `l`, a drag) | same |
 
 ## 5. Search
 
@@ -80,15 +80,15 @@ modules (`core/typesetting/src/main/kotlin/app/truenrth/forzac/typesetting/…` 
 |---|---|---|---|
 | S1 | Case and ё/е ignored, no-break space = space, soft hyphen does not interrupt, ≥ 2 characters, notes not searched (`model/Search.kt`) | The same, and a space matches any white space (`core/src/search.rs`) | same |
 | S2 | Table cells are searched and the match is highlighted in the cell (`Search.kt`, A spec tables) | Table rows are not searched (`core/src/search.rs`) | gap |
-| S3 | Full screen over the contents: count, snippets (40/80, match bold), chapter · page; a tap jumps, highlights and shows the Back pill; the highlight goes on the next tap; the query is kept (`SearchScreen.kt`) | A side panel (`/`, `⌘F`): the same count and snippets, section · percent; `Enter` jumps and highlights; `n`/`N` next and previous; `Esc` clears the highlight; the query is kept (`panels.rs` `SearchPanel`, `Panels.swift` `SearchPanel`) | intended (keyboard); numbers follow R1 |
+| S3 | Full screen over the contents: count, snippets (40/80, match bold), chapter · page; a tap jumps, highlights and shows the Back pill; the highlight goes on the next tap; the query is kept (`SearchScreen.kt`) | A side panel (`/`, `⌘F`): the same count and snippets, section · percent; `Enter` jumps and highlights; `n`/`N` next and previous; `Esc` clears the highlight; the query is kept (`panels.rs` `SearchPanel`, `Panels.swift` `SearchPanel`) | intended (keyboard); numbers follow R1: "section · p. N" once the book is counted (`reader-menu`) |
 
 ## 6. Where the reader is
 
 | # | Android | Desktop | Status |
 |---|---|---|---|
-| R1 | The whole book is typeset in the background; then the foot shows "N of M" for the whole book, and the menu, contents, search and bookmarks show page numbers (`ReaderViewModel.kt` `layout`, `ReaderScreen.kt` `PagedView`) | Only the current and next chapters are typeset; the foot shows "4 / 22 · 37%" — page in chapter / chapter's pages · share of the book; lists show percent (`core/src/layout/page.rs` `render`) | unclear |
+| R1 | The whole book is typeset in the background; then the foot shows "N of M" for the whole book, and the menu, contents, search and bookmarks show page numbers (`ReaderViewModel.kt` `layout`, `ReaderScreen.kt` `PagedView`) | Only the current and next chapters are typeset; the foot shows "4 / 22 · 37%" — page in chapter / chapter's pages · share of the book; lists show percent (`core/src/layout/page.rs` `render`). Since `reader-menu`: the whole book is counted in the background (`core/src/layout/pages.rs` `BookPages`), then the foot shows "37 of 212" and the menu and lists page numbers | unclear, then same |
 | R2 | No running head: the page has the text and the page number only (A spec reader-ui "Экран чтения без интерфейса") | The chapter title as a running head on every page but the chapter's first (`page.rs` `render`, spec reader-navigation) | unclear |
-| R3 | The menu (middle tap): back, chapter title, author · book, contents; slider with chapter ticks; "Page N of M"; "N min left in chapter" (`ReaderMenu.kt`) | No menu; the window title is the book's title; chapter keys and the contents instead; no time estimate | unclear |
+| R3 | The menu (middle tap): back, chapter title, author · book, contents; slider with chapter ticks; "Page N of M"; "N min left in chapter" (`ReaderMenu.kt`) | No menu; the window title is the book's title; chapter keys and the contents instead; no time estimate. Since `reader-menu`: the web reader's menu, one to one (`gtk/src/menu.rs`, `macos/Menu.swift`) | unclear, then same |
 | R4 | "N% read" in the contents and the library | "N% read" in the contents, the foot and the recent books | same |
 
 ## 7. Settings and themes
@@ -198,9 +198,9 @@ Every gap, unclear and "Not planned" row with its proposal. The maintainer accep
 | N6 | Short link targets in the note sheet, by the Android rule, in the core | android-parity |
 | N8 | Keep the `Ctrl+O` stack and show Android's "← Back · Ctrl+O" pill after a jump, gone after two pages on | android-parity |
 | S2 | Search table rows and highlight the match in the cell | android-parity |
-| R1 | Keep chapter pagination and "4 / 22 · 37%": no whole-book layout on every resize | — |
+| R1 | Keep chapter pagination and "4 / 22 · 37%": no whole-book layout on every resize. **Reversed by the maintainer on 2026-10-17:** the whole book is typeset in the background as on Android and the web; the foot, the menu and the lists show book pages once it is counted, and percent until then | `reader-menu` (1.0) |
 | R2 | Keep the running head: without a menu it is the only place the chapter title shows | — |
-| R3 | No menu and no time estimate on desktop | — |
+| R3 | No menu and no time estimate on desktop. **Reversed by the maintainer on 2026-10-17:** the web reader's menu one to one, the desktop keys kept (`Enter` opens it) | `reader-menu` (1.0) |
 | C3 | Keep following the system's light or dark | — |
 | C4 | A 200 ms cross-fade on theme change | android-parity |
 | C5 | Keep the four bundled fonts with PT Serif first (Noto Serif is Android's system font, not a choice made for the book) | — |
@@ -411,3 +411,38 @@ unsupported format — FB2, FB3 or EPUB needed" and the library follows (GTK).
   mouse (hover lift, "×", clicks) in both shells (no pointer injection here), the Mac's "after the last book" and `⌘O`
   from the library, a Russian keyboard layout in the library (by key code on the Mac, by GTK's Latin fallback, as the
   reader's keys).
+
+### The reading menu and the book's pages (`reader-menu`, R1, R3)
+
+Checked on 2026-10-17 with the build of the change. The Mac build was driven with `--keys`, `--mouse` (real mouse
+events through `NSWindow.sendEvent`) and `-AppleLanguages (ru)`, and saved with `--png`; the GTK build ran in the Debian
+trixie container (GTK 4.18, the Pi's userland) under a headless sway (pixman), driven with `wtype` in one call (one
+keymap: separate calls lost the first key after each keymap change) and watched with `grim`, in `en_US` and `ru_RU`.
+The book: the corpus's slowest to typeset, "Тень богов" (EPUB, 50 chapters).
+
+- Mac, both languages: `Return` opens the bars over the page (the top: the chevron, "Глава 3. Орка" over "Тень богов",
+  the list icon; the bottom: the slider with 49 chapter ticks, "Страница 42 из 834", the minutes left in the chapter
+  — "14 min left in chapter" in English —, "Aa");
+  `l` three times shows "Страница 45 из 834" and "Глава 3. Орка" under it, `Return` goes there with the "← Вернуться ·
+  ⌃O" pill. A click in the middle third opens the menu; pressing the slider at a quarter and dragging to the middle
+  shows "Page 418 of 834" and "Глава 26. Варг", releasing shows that page with the pill; the list icon opens the
+  contents (page numbers 42, 55, 76… instead of percent), "Aa" the settings sheet. The foot reads "42 из 834".
+- GTK, both languages: `Enter` opens the bars with their fade and slide (a screenshot 0.2 s in catches them half
+  way; "Страница 1 из 1006", "1 мин до конца главы"), `Escape` closes, `Enter` and `→ → l` show "Страница 4 из 1006", `Enter` jumps with "← Back · Ctrl+O",
+  `Ctrl+O` returns to "1 из 1006"; `o` shows the contents with page numbers (7, 26, 49…); `Enter` then `Space` closes
+  the menu and turns the page ("2 из 1006"). `--mouse "click 640 300"` (the page's click handler) opens the menu.
+- Found and fixed: GTK panicked on the second opening of the menu (the bars' hide timer was removed after it had fired);
+  GTK's contents built in the first pause kept rows bound before the count (percent) and without the current entry's
+  bold and dot — the list view keeps the rows of items it already has, so `open` now replaces the items.
+- Cost on the Raspberry Pi 5 (`scripts/pi-headless.sh`, 1920×1200 at 123 Hz, the build before the count waited for
+  pauses): the book's 692 pages counted in 1.0 s (1.2 s after the start, its first page at 0.19 s, unchanged); page
+  turns 1, 1, 3 and 0 missed frames with the default, `ngl`, `vulkan` and `gl` renderers; idle 0 CPU ticks in 10 s. A
+  test book of 4675 pages (25 copies of a novel) counted in 6.5 s; with the count running beside 20 turns six paired
+  runs against the build before this change gave 18 and 13 late frames at normal priority (5 of them in the middle of a
+  turn, which the old build has once), 13 and 6 at the lowest priority (all at a turn's first frames). Hence the count
+  now waits between chapters until the reader has been still for 0.5 s, as the web reader's does; that build was not
+  measured on the Pi (below). On the Mac the corpus's slowest count is 1.2 s (`whole_book_page_counts`).
+- Not checked: anything on the Pi with the final build — the Pi's SSH host keys changed during the pass and the
+  maintainer asked not to touch it (2026-10-17); a real pointer on GTK (the slider's drag, the bars' buttons; no pointer
+  injection under headless sway); the back button on both (it needs the reading state, which measurement runs do not
+  open).

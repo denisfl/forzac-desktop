@@ -441,3 +441,57 @@ fn a_table_for_the_view_has_columns_by_content() {
     assert_eq!(view.content.areas.len(), 1);
     assert_eq!(view.content.areas[0].target, Target::Note("n1".into()));
 }
+
+#[test]
+fn book_pages_are_the_chapters_pages() {
+    let style = PageStyle::for_window(600.0, 500.0, 20.0);
+    let mut b = book((0..12).map(|_| paragraph(TEXT)).collect());
+    b.chapters.push(Chapter { title: Some("Вторая".into()), blocks: (0..30).map(|_| paragraph(TEXT)).collect() });
+    b.chapters.push(Chapter { title: None, blocks: vec![paragraph("Конец.")] });
+    let mut t = typesetter(style);
+    let chapters: Vec<ChapterLayout> = (0..3).map(|c| paginate(&b, c, &style, &mut t)).collect();
+    let pages = BookPages::count(&b, style, t.hyphenator(), &CountControl::default()).unwrap();
+    assert_eq!(pages.total(), chapters.iter().map(|c| c.pages.len()).sum::<usize>());
+    assert_eq!(pages.chapter_starts(), [0, chapters[0].pages.len(), chapters[0].pages.len() + chapters[1].pages.len()]);
+    let mut n = 0;
+    for ch in &chapters {
+        for i in 0..ch.pages.len() {
+            assert_eq!(pages.start(n), ch.page_start(i));
+            assert_eq!(pages.page_of(ch.page_start(i)), n);
+            assert_eq!(pages.of_chapter_page(ch.chapter, i), n);
+            n += 1;
+        }
+    }
+    // A place in the middle of a page belongs to it; past the end, the last page.
+    let mid = Locator { offset: 5, ..chapters[1].page_start(2) };
+    assert_eq!(pages.page_of(mid), chapters[0].pages.len() + 2);
+    assert_eq!(pages.page_of(Locator { chapter: 9, ..Locator::default() }), pages.total() - 1);
+    assert_eq!(pages.start(10_000), chapters[2].page_start(0));
+    // A stopped count gives nothing; a count waits while the reader moves.
+    let control = CountControl::default();
+    control.stop();
+    assert!(BookPages::count(&b, style, None, &control).is_none());
+    let control = CountControl::default();
+    control.moved();
+    let t = std::time::Instant::now();
+    assert!(BookPages::count(&b, style, None, &control).is_some());
+    assert!(t.elapsed() >= std::time::Duration::from_millis(450), "{:?}", t.elapsed());
+}
+
+#[test]
+fn foot_with_book_pages() {
+    let style = PageStyle::for_window(600.0, 500.0, 20.0);
+    let mut b = book((0..12).map(|_| paragraph(TEXT)).collect());
+    b.chapters.push(Chapter { title: None, blocks: (0..12).map(|_| paragraph(TEXT)).collect() });
+    let mut t = typesetter(style);
+    let pages = BookPages::count(&b, style, t.hyphenator(), &CountControl::default()).unwrap();
+    let ch = paginate(&b, 1, &style, &mut t);
+    let foot = |page: &PageContent| page.runs.last().unwrap().glyphs.len();
+    let font = t.font_of(Face::Regular);
+    let expected = format!("{} of {}", pages.chapter_starts()[1] + 2, pages.total());
+    assert_eq!(foot(&ch.render_numbered(1, &style, &mut t, Some(&pages))), t.shaper.shape(font, &expected).len());
+    // Counted for another window: the chapter's pages as before.
+    let other = BookPages::count(&b, PageStyle::for_window(500.0, 500.0, 20.0), None, &CountControl::default()).unwrap();
+    let old = format!("2 / {} · {}%", ch.pages.len(), (ch.progress(1) * 100.0).round() as u32);
+    assert_eq!(foot(&ch.render_numbered(1, &style, &mut t, Some(&other))), t.shaper.shape(font, &old).len());
+}

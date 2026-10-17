@@ -7,7 +7,7 @@ import QuartzCore
 
 /// What the view asks its window for.
 enum Command {
-    case contents, bookmarks, highlights, settings, search, help, closePanels, note(String)
+    case contents, bookmarks, highlights, settings, search, help, closePanels, menu, note(String)
     /// A link's short target in the note sheet.
     case preview(String)
     /// An image (by id) or a table (by its first row) in the view (`Viewer`).
@@ -103,6 +103,18 @@ final class PageView: NSView {
     private var link: CADisplayLink?
     private var marginTop: CGFloat = 0
     private(set) var lineHeight: CGFloat = 30
+
+    /// The count of the book's pages running (`reader-menu`) and the size and settings it is for; the pause before it
+    /// starts (a resize restarts it).
+    private var count: OpaquePointer?
+    private var countFor: [Float]?
+    private var countStart: DispatchWorkItem?
+    /// The book's pages were counted (the menu, the lists).
+    var onPages: (() -> Void)?
+    /// Asked first for every key while it returns true (the menu while it is open).
+    var menuKey: ((NSEvent) -> Bool)?
+    /// Whether the menu is open: a click on the page closes it.
+    var menuOpen: (() -> Bool)?
 
     var onFirstFrame: ((PageView) -> Void)?
     /// The reading position changed.
@@ -206,11 +218,55 @@ final class PageView: NSView {
         pageAreas = [:]
         focus = nil
         if styleChanged {
+            scheduleCount(Array(key.dropLast()))
             pictures = [:]
             clearTiles()
             if scrolling { offset = CGFloat(forzac_flow_y(doc, locator)) - marginTop }
         }
     }
+
+    // MARK: The book's pages
+
+    /// Counts the book's pages for `key` (size and settings) on a background queue, 0.3 s after it last changed; a count
+    /// for another key is stopped.
+    private func scheduleCount(_ key: [Float]) {
+        guard countFor != key else { return }
+        if let c = count { forzac_count_stop(c) }
+        count = nil
+        countFor = key
+        countStart?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.startCount(key) }
+        countStart = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    private func startCount(_ key: [Float]) {
+        guard countFor == key, let c = withUnsafePointer(to: settings, { forzac_count_new(doc, Float(bounds.width), Float(bounds.height), $0) }) else { return }
+        count = c
+        let address = UInt(bitPattern: c)
+        DispatchQueue.global(qos: .utility).async {
+            forzac_count_run(OpaquePointer(bitPattern: address))
+            DispatchQueue.main.async { [weak self] in
+                let c = OpaquePointer(bitPattern: address)!
+                defer { forzac_count_free(c) }
+                guard let self, self.count == c else { return }
+                self.count = nil
+                // The pages' feet change: drawn again (Core Animation goes on moving the layers meanwhile).
+                guard forzac_count_install(self.doc, c) else { return }
+                self.images = [:]
+                if !self.scrolling { self.show(animated: 0) }
+                self.onPages?()
+            }
+        }
+    }
+
+    /// The reader moved: a running count waits for a pause before its next chapter.
+    private func countMoved() {
+        if let c = count { forzac_count_moved(c) }
+    }
+
+    /// The book page (from 0) the reader is on, once the pages are counted.
+    var bookPage: UInt32? { forzac_book_pages(doc) > 0 ? forzac_book_page_of(doc, locator) : nil }
 
     // MARK: Slide
 
@@ -274,6 +330,7 @@ final class PageView: NSView {
         CATransaction.commit()
         updateRibbon()
         if dir != 0 {
+            countMoved()
             let timing = CAMediaTimingFunction(controlPoints: 0.215, 0.61, 0.355, 1) // ease-out cubic
             for (l, from, to) in [(current, frame.midX + dir * frame.width, frame.midX), (previous, frame.midX, frame.midX - dir * frame.width)] {
                 let a = CABasicAnimation(keyPath: "position.x")
@@ -585,6 +642,7 @@ final class PageView: NSView {
     /// Puts the tiles on screen where the offset says; drops tiles far from it.
     private func placeTiles() {
         guard bounds.height > 0 else { return }
+        countMoved()
         normalize()
         let h = bounds.height
         var shown = Set<TileKey>()
@@ -936,6 +994,11 @@ final class PageView: NSView {
 
     override func mouseUp(with e: NSEvent) {
         if dragEnd() { return } // a drag that selected
+        // A click closes the menu; the second click of a double click that opened it still selects a word.
+        if menuOpen?() == true {
+            onCommand?(.closePanels)
+            if e.clickCount < 2 { return }
+        }
         if panelOpen?() == true { return onCommand?(.closePanels) ?? () }
         let p = convert(e.locationInWindow, from: nil)
         if let down = mouseDownAt, hypot(p.x - down.x, p.y - down.y) > 4 { return } // a drag, not a click
@@ -950,9 +1013,11 @@ final class PageView: NSView {
             open(a)
         } else if y < marginTop && p.x >= CGFloat(corner) {
             toggleBookmark()
+        } else if p.x >= bounds.width / 3 && p.x <= bounds.width * 2 / 3 {
+            if e.clickCount == 1 { onCommand?(.menu) } // the middle opens the menu (`reader-menu`), in both modes
         } else if !scrolling {
-            // The side thirds turn the page, as taps do on Android; the middle does nothing.
-            if p.x < bounds.width / 3 { turn(-1) } else if p.x > bounds.width * 2 / 3 { turn(1) }
+            // The side thirds turn the page, as taps do on Android.
+            turn(p.x < bounds.width / 3 ? -1 : 1)
         }
     }
 
@@ -987,6 +1052,7 @@ final class PageView: NSView {
 
     /// Keys by physical key code, so they work in any layout (Russian included).
     override func keyDown(with e: NSEvent) {
+        if menuKey?(e) == true { return }
         if selecting && selectionKey(e) { return }
         // `?` by the character typed: its key and Shift differ between layouts, and as `/` with Shift it would search.
         if e.characters == "?" { return onCommand?(.help) ?? () }
@@ -999,7 +1065,7 @@ final class PageView: NSView {
         case 0x1F where control: goBack()                                                    // ⌃O
         case 0x31 where shift: scrolling ? scroll(by: -screen) : turn(-1)                    // Shift+Space
         case 0x30: focusNext(shift ? -1 : 1)                                                  // Tab
-        case 0x24, 0x4C: if !openFocused() { turn(1) }                                         // Return
+        case 0x24, 0x4C: if !openFocused() { onCommand?(.menu) }                               // Return
         case 0x26, 0x7D: scrolling ? scroll(by: line) : turn(1)                               // j ↓
         case 0x28, 0x7E: scrolling ? scroll(by: -line) : turn(-1)                             // k ↑
         case 0x25, 0x7C, 0x31, 0x79: turn(1)                                                  // l → Space PgDn

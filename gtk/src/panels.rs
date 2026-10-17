@@ -3,6 +3,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use forzac_core::Locator;
 use forzac_core::i18n::{fill, tr, tr_count};
@@ -75,6 +76,10 @@ impl Theme {
              .forzac-panel button.viewer-close {{ background-color: {sheet}; box-shadow: 0 1px 4px alpha(black, 0.12); }}
              .forzac-panel button.viewer-close:hover {{ background-color: mix({sheet}, {ink}, 0.06); }}
              .forzac-panel row:selected {{ background-color: alpha({ink}, 0.07); color: {ink}; }}
+             .reader-bar {{ background-color: {paper}; }}
+             .bar-top {{ box-shadow: inset 0 -1px {line}; }}
+             .bar-bottom {{ box-shadow: inset 0 1px {line}; }}
+             .forzac-panel button.bar-aa {{ border: 1px solid {line}; }}
              {circles}"
         ));
     }
@@ -128,7 +133,33 @@ const STATIC_CSS: &str = "
     .forzac-panel listview, .forzac-panel row, .forzac-panel scrolledwindow { background: none; color: inherit; padding: 0; }
     .forzac-panel row:focus-visible { outline: none; }
     .forzac-panel, .forzac-sheet, .forzac-side { transition: color 200ms, background-color 200ms, box-shadow 200ms; }
+    .reader-bar { opacity: 0; transition: opacity 150ms ease-in, transform 150ms ease-in; }
+    .reader-bar.open { opacity: 1; transform: none; transition: opacity 200ms ease-out, transform 200ms ease-out; }
+    .bar-top { min-height: 56px; padding: 0 4px; transform: translateY(-28px); }
+    .bar-bottom { padding: 16px 0 18px 0; transform: translateY(56px); }
+    .forzac-panel button.bar-icon { min-width: 48px; min-height: 48px; border-radius: 24px; }
+    .forzac-panel .bar-section { font-size: 15px; font-weight: 500; }
+    .forzac-panel .bar-book, .forzac-panel .bar-hint { font-size: 12px; }
+    .forzac-panel .bar-page { font-size: 14px; font-weight: 500; font-feature-settings: 'tnum'; }
+    .forzac-panel button.bar-aa { min-width: 52px; min-height: 44px; border-radius: 22px; font-family: 'PT Serif'; font-size: 18px; }
 ";
+
+/// Where `at` is in the book for a list: its page once the book's pages are counted, else its share in percent.
+fn page_or_percent(view: &PageView, at: Locator, position: f32) -> String {
+    match view.book_pages() {
+        Some(pages) => (pages.page_of(at) + 1).to_string(),
+        None => format!("{}%", (position * 100.0).round() as u32),
+    }
+}
+
+/// "section · p. N" (or "section · N%" before the count) for the highlights and the matches.
+fn section_place(view: &PageView, section: Option<&str>, at: Locator, position: f32) -> String {
+    let place = match view.book_pages() {
+        Some(pages) => fill(tr("p. {n}"), &[("n", &(pages.page_of(at) + 1).to_string())]),
+        None => format!("{}%", (position * 100.0).round() as u32),
+    };
+    section.map_or(place.clone(), |s| format!("{s} · {place}"))
+}
 
 /// Lower case and "ё" as "е", for filtering the contents.
 fn fold(s: &str) -> String {
@@ -192,6 +223,8 @@ pub struct Contents {
     places: Rc<Vec<Locator>>,
     /// The entry of the current place: bold and marked.
     current: Rc<Cell<usize>>,
+    /// The book's pages the rows were bound with (their address; 0 before the count).
+    counted: Cell<usize>,
     /// "author · N% read".
     meta: gtk::Label,
     /// The bookmarks tab: the list (or the hint when there are none) and the entries it shows.
@@ -262,10 +295,11 @@ impl Contents {
             item.downcast_ref::<gtk::ListItem>().unwrap().set_child(Some(&row));
         });
         let c = current.clone();
+        let v = view.downgrade();
         factory.connect_bind(move |_, item| {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
             let (Some(i), Some(row)) = (item.item().as_ref().and_then(index_of), item.child().and_downcast::<gtk::Box>()) else { return };
-            let (title, level, _) = &entries[i];
+            let (title, level, at) = &entries[i];
             row.set_margin_start(20 + 16 * (*level as i32 - 1).clamp(0, 4));
             let t = row.first_child().and_downcast::<gtk::Label>().unwrap();
             t.set_text(title);
@@ -278,7 +312,9 @@ impl Contents {
             }
             dot.set_visible(is_current);
             let p = dot.next_sibling().and_downcast::<gtk::Label>().unwrap();
-            p.set_text(&format!("{}%", (positions[i] * 100.0).round() as u32));
+            if let Some(v) = v.upgrade() {
+                p.set_text(&page_or_percent(&v, *at, positions[i]));
+            }
         });
         let list = gtk::ListView::new(Some(selection.clone()), Some(factory));
 
@@ -397,6 +433,7 @@ impl Contents {
             model,
             places,
             current,
+            counted: Cell::new(0),
             meta,
             marks: marks.clone(),
             marks_selection,
@@ -432,14 +469,14 @@ impl Contents {
                 let (Some(i), Some(row)) = (item.item().as_ref().and_then(index_of), item.child().and_downcast::<gtk::Box>()) else {
                     return;
                 };
-                w(&|c, _| {
+                w(&|c, v| {
                     let entries = c.entries.borrow();
                     let Some(e) = entries.get(i) else { return };
                     let top = row.first_child().and_downcast::<gtk::Box>().unwrap();
                     let section = top.first_child().and_downcast::<gtk::Label>().unwrap();
                     section.set_text(e.section.as_deref().unwrap_or(""));
                     let position = section.next_sibling().and_downcast::<gtk::Label>().unwrap();
-                    position.set_text(&format!("{}%", (e.position * 100.0).round() as u32));
+                    position.set_text(&page_or_percent(v, e.at, e.position));
                     let snippet = top.next_sibling().and_downcast::<gtk::Label>().unwrap();
                     snippet.set_text(&e.snippet);
                 })
@@ -454,15 +491,14 @@ impl Contents {
                 let (Some(i), Some(row)) = (item.item().as_ref().and_then(index_of), item.child().and_downcast::<gtk::Box>()) else {
                     return;
                 };
-                w(&|c, _| {
+                w(&|c, v| {
                     let highlights = c.highlights.borrow();
                     let Some(e) = highlights.get(i) else { return };
                     let column = row.first_child().and_then(|r| r.next_sibling()).and_downcast::<gtk::Box>().unwrap();
                     let text = column.first_child().and_downcast::<gtk::Label>().unwrap();
                     text.set_text(&e.text);
                     let place = text.next_sibling().and_downcast::<gtk::Label>().unwrap();
-                    let percent = format!("{}%", (e.position * 100.0).round() as u32);
-                    place.set_text(&e.section.as_ref().map_or(percent.clone(), |s| format!("{s} · {percent}")));
+                    place.set_text(&section_place(v, e.section.as_deref(), e.start, e.position));
                 })
             });
         }
@@ -567,10 +603,13 @@ impl Contents {
         self.meta.set_text(&meta.join(" · "));
         self.search.set_text("");
         let current = self.places.iter().rposition(|p| *p <= here).unwrap_or(0);
-        if current != self.current.replace(current) {
-            // Rows bound for the old current entry are bound again.
-            let n = self.model.n_items();
-            self.model.items_changed(0, n, n);
+        let counted = view.book_pages().map_or(0, |p| Arc::as_ptr(&p) as usize);
+        let current_changed = current != self.current.replace(current);
+        if counted != self.counted.replace(counted) || current_changed {
+            // Rows bound for the old current entry or before the count are bound again: new items, as the list view
+            // keeps the rows of items it already has.
+            let indices: Vec<String> = (0..self.model.n_items()).map(|i| i.to_string()).collect();
+            self.model.splice(0, self.model.n_items(), &indices.iter().map(String::as_str).collect::<Vec<_>>());
         }
         self.panel.set_width_request(panel_width(view.parent().map_or(0, |p| p.width())));
         self.panel.set_opacity(1.0);
@@ -1000,8 +1039,7 @@ impl SearchPanel {
                 let snippet = row.first_child().and_downcast::<gtk::Label>().unwrap();
                 snippet.set_markup(&markup);
                 let place = snippet.next_sibling().and_downcast::<gtk::Label>().unwrap();
-                let percent = format!("{}%", (hit.position * 100.0).round() as u32);
-                place.set_text(&hit.section.as_ref().map_or(percent.clone(), |s| format!("{s} · {percent}")));
+                place.set_text(&section_place(v, hit.section.as_deref(), hit.start, hit.position));
             })
         });
 

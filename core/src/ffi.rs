@@ -11,8 +11,8 @@ use std::sync::Arc;
 use crate::fonts::{self, Family, FontId, FontSource};
 use crate::hyphen::Hyphenator;
 use crate::layout::{
-    ChapterLayout, PageContent, PageStyle, Rect, TableView, Target, Typesetter, end_page, layout_note, layout_preview, layout_table,
-    paginate,
+    BookPages, ChapterLayout, CountControl, PageContent, PageStyle, Rect, TableView, Target, Typesetter, end_page, layout_note,
+    layout_preview, layout_table, paginate,
 };
 use crate::model::{Book, LinkTarget, Locator};
 use crate::settings::{Align, Margins, Setting, Settings, Spacing, TEXT_SIZES, THEMES, Turning};
@@ -207,6 +207,9 @@ pub struct Document {
     quote_places: Vec<ForzacRange>,
     quote_list: Vec<ForzacQuote>,
     quote_strings: Vec<CString>,
+    /// The book's pages counted for a style ([`forzac_count_install`]), and what [`forzac_chapter_starts`] returned.
+    pages: Option<BookPages>,
+    chapter_starts: Vec<u32>,
 }
 
 /// A page's contents as the C arrays a [`ForzacPage`] points to.
@@ -297,6 +300,11 @@ impl Document {
         self.layouts.iter().find(|l| l.chapter == chapter)
     }
 
+    /// The book's pages, when they were counted for the current style.
+    fn book_pages(&self) -> Option<&BookPages> {
+        self.pages.as_ref().filter(|p| Some(*p.style()) == self.style)
+    }
+
     /// `self.page` as pointers for the caller.
     fn publish(&mut self) -> ForzacPage {
         self.published.publish(&self.page, &self.book)
@@ -373,6 +381,8 @@ pub unsafe extern "C" fn forzac_open(path: *const c_char, error: *mut u32) -> *m
         quote_places: Vec::new(),
         quote_list: Vec::new(),
         quote_strings: Vec::new(),
+        pages: None,
+        chapter_starts: Vec::new(),
     }))
 }
 
@@ -427,6 +437,7 @@ pub unsafe extern "C" fn forzac_paginate(
         doc.typesetter = Some(Typesetter::new(style, doc.hyphenator.clone()));
         doc.style = Some(style);
         doc.layouts.clear();
+        doc.pages = None;
     }
     doc.current = (chapter as usize).min(doc.book.chapters.len().saturating_sub(1));
     doc.layout(doc.current).map_or(0, |l| l.pages.len() as u32)
@@ -443,7 +454,8 @@ pub unsafe extern "C" fn forzac_page(doc: *mut Document, page: u32) -> ForzacPag
     if let (Some(style), Some(t)) = (doc.style, doc.typesetter.as_mut())
         && let Some(layout) = doc.layouts.iter().find(|l| l.chapter == current)
     {
-        doc.page = layout.render((page as usize).min(layout.pages.len() - 1), &style, t);
+        let pages = doc.pages.as_ref();
+        doc.page = layout.render_numbered((page as usize).min(layout.pages.len() - 1), &style, t, pages);
     }
     doc.publish()
 }
@@ -1188,6 +1200,149 @@ pub unsafe extern "C" fn forzac_search_free(search: *mut Search) {
     if !search.is_null() {
         drop(unsafe { Box::from_raw(search) });
     }
+}
+
+/// A count of the book's pages for one style, made on the main thread and run on another ([`forzac_count_run`]).
+pub struct Count {
+    book: Arc<Book>,
+    style: PageStyle,
+    hyphenator: Option<Arc<Hyphenator>>,
+    control: CountControl,
+    pages: std::sync::Mutex<Option<BookPages>>,
+}
+
+/// A count of the book's pages for a window of `width` × `height` with `settings` (the style [`forzac_paginate`] would
+/// use). Free it with [`forzac_count_free`].
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`]; `settings` must point to valid settings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_count_new(doc: *const Document, width: f32, height: f32, settings: *const ForzacSettings) -> *mut Count {
+    let doc = unsafe { &*doc };
+    let style = Settings::from(unsafe { *settings }).page_style(width, height);
+    Box::into_raw(Box::new(Count {
+        book: doc.book.clone(),
+        style,
+        hyphenator: doc.hyphenator.clone(),
+        control: CountControl::default(),
+        pages: std::sync::Mutex::new(None),
+    }))
+}
+
+/// Counts the pages: typesets the whole book, so call it on a background thread. Returns early after
+/// [`forzac_count_stop`].
+///
+/// # Safety
+/// `count` from [`forzac_count_new`], not freed while this runs.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_count_run(count: *const Count) {
+    let count = unsafe { &*count };
+    let pages = BookPages::count(&count.book, count.style, count.hyphenator.clone(), &count.control);
+    *count.pages.lock().unwrap_or_else(|e| e.into_inner()) = pages;
+}
+
+/// Asks a running count to stop (between chapters); any thread.
+///
+/// # Safety
+/// `count` from [`forzac_count_new`], not freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_count_stop(count: *const Count) {
+    unsafe { &*count }.control.stop();
+}
+
+/// The reader moved (a turn, a scroll): the count waits before its next chapter until the reader has not moved for half
+/// a second; any thread.
+///
+/// # Safety
+/// `count` from [`forzac_count_new`], not freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_count_moved(count: *const Count) {
+    unsafe { &*count }.control.moved();
+}
+
+/// Moves a finished count's pages into `doc` when they were counted for its current style; true when it did (the
+/// pages' feet change: draw them again).
+///
+/// # Safety
+/// `doc` from [`forzac_open`]; `count` from [`forzac_count_new`] for it, after [`forzac_count_run`] returned.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_count_install(doc: *mut Document, count: *const Count) -> bool {
+    let (doc, count) = unsafe { (&mut *doc, &*count) };
+    let Some(pages) = count.pages.lock().unwrap_or_else(|e| e.into_inner()).take() else { return false };
+    if doc.style != Some(*pages.style()) {
+        return false;
+    }
+    doc.pages = Some(pages);
+    true
+}
+
+/// # Safety
+/// `count` from [`forzac_count_new`], not running; it is invalid afterwards.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_count_free(count: *mut Count) {
+    if !count.is_null() {
+        drop(unsafe { Box::from_raw(count) });
+    }
+}
+
+/// The book's pages for the current style; 0 while they are not counted.
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_book_pages(doc: *const Document) -> u32 {
+    unsafe { &*doc }.book_pages().map_or(0, |p| p.total() as u32)
+}
+
+/// The book page (from 0) holding `at`; 0 while the pages are not counted.
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_book_page_of(doc: *const Document, at: ForzacLocator) -> u32 {
+    unsafe { &*doc }.book_pages().map_or(0, |p| p.page_of(at.into()) as u32)
+}
+
+/// Where book page `page` (from 0) starts.
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_book_page_start(doc: *const Document, page: u32) -> ForzacLocator {
+    unsafe { &*doc }.book_pages().map_or(Locator::default(), |p| p.start(page as usize)).into()
+}
+
+/// The book page (from 0) of each chapter's first page, valid until the next call; none while the pages are not
+/// counted.
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`]; `count` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_chapter_starts(doc: *mut Document, count: *mut u32) -> *const u32 {
+    let doc = unsafe { &mut *doc };
+    doc.chapter_starts = doc.book_pages().map_or(Vec::new(), |p| p.chapter_starts().iter().map(|&s| s as u32).collect());
+    unsafe { *count = doc.chapter_starts.len() as u32 };
+    doc.chapter_starts.as_ptr()
+}
+
+/// The title of the section `at` is in, else the book's title; valid until the next string.
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_section(doc: *mut Document, at: ForzacLocator) -> *const c_char {
+    let doc = unsafe { &mut *doc };
+    let section = doc.book.section_at(at.into());
+    doc.text(Some(&section))
+}
+
+/// Minutes of reading from `at` to the end of its chapter (1000 characters a minute, rounded).
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_minutes_left(doc: *const Document, at: ForzacLocator) -> u32 {
+    unsafe { &*doc }.book.minutes_left(at.into()) as u32
 }
 
 /// Sets the interface language from the preferred languages, comma separated, preferred first (`ru-RU,en`).

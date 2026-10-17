@@ -246,3 +246,29 @@ fn bookmarks_and_highlights_list_and_save_quickly() {
     assert!(list.0 <= 50_000 && save.0 <= 10_000, "over 50 ms to list or 10 ms to save");
     assert!(quote_list.0 <= 50_000 && quote_save.0 <= 10_000, "over 50 ms to list or 10 ms to save highlights");
 }
+
+/// Every book's pages counted for the reader's default window, as the shells count them in the background: the count
+/// agrees with typesetting chapter by chapter, and the slowest count is printed (recorded for the Pi 5 in
+/// docs/android-parity.md).
+#[test]
+fn whole_book_page_counts() {
+    let Some(books) = corpus() else { return };
+    let style = forzac_core::settings::Settings::default().page_style(760.0, 980.0);
+    let control = forzac_core::CountControl::default();
+    let mut slowest = (0.0, 0, String::new());
+    for path in &books {
+        let Ok(book) = forzac_core::open(path) else { continue };
+        let hyphenator = forzac_core::hyphen::Hyphenator::for_language(book.language.as_deref()).map(std::sync::Arc::new);
+        let t = std::time::Instant::now();
+        let pages = forzac_core::BookPages::count(&book, style, hyphenator, &control).unwrap();
+        let ms = t.elapsed().as_secs_f64() * 1000.0;
+        let last = book.chapters.len() - 1;
+        assert_eq!(pages.chapter_starts().len(), book.chapters.len());
+        assert_eq!(pages.page_of(pages.start(pages.total() - 1)), pages.total() - 1);
+        assert!(pages.chapter_starts()[last] < pages.total());
+        if ms >= slowest.0 {
+            slowest = (ms, pages.total(), path.file_name().unwrap().to_string_lossy().into_owned());
+        }
+    }
+    println!("slowest page count: {:.0} ms, {} pages, {}", slowest.0, slowest.1, slowest.2);
+}

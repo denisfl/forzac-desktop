@@ -148,6 +148,29 @@ impl Book {
     }
 }
 
+/// Characters of text read in a minute, for the time left in a chapter (Android's and the web reader's estimate).
+const CHARS_PER_MINUTE: usize = 1000;
+
+impl Book {
+    /// The title of the section `at` is in: the contents entry at or before it, else the book's title (the menu's
+    /// title, the web reader's `chapterTitle`).
+    pub fn section_at(&self, at: Locator) -> String {
+        self.contents().into_iter().rev().find(|e| e.target <= at).map_or_else(|| self.title.clone(), |e| e.title)
+    }
+
+    /// Minutes of reading from `at` to the end of its chapter: its characters at 1000 a minute, rounded.
+    pub fn minutes_left(&self, at: Locator) -> usize {
+        let Some(chapter) = self.chapters.get(at.chapter) else { return 0 };
+        let chars = |b: &Block| b.texts().iter().map(|t| t.text.chars().count()).sum::<usize>();
+        let here = chapter.blocks.get(at.block).map_or(0, |b| match b.text() {
+            Some(t) => t.text.get(at.offset.min(t.text.len())..).map_or(0, |rest| rest.chars().count()),
+            None => chars(b),
+        });
+        let after: usize = chapter.blocks.iter().skip(at.block + 1).map(chars).sum();
+        (here + after + CHARS_PER_MINUTE / 2) / CHARS_PER_MINUTE
+    }
+}
+
 /// The byte ranges of `t`'s note markers.
 fn note_ranges(t: &StyledText) -> impl Iterator<Item = (usize, usize)> + '_ {
     t.styles.iter().filter(|s| s.style == Style::NoteRef).map(|s| (s.start, s.end))
@@ -353,6 +376,23 @@ mod tests {
         let titles: Vec<String> = book.contents().into_iter().map(|e| e.title).collect();
         assert_eq!(titles, ["Chapter 1", "Вторая", "Chapter 3"]);
         assert_eq!(book.contents()[2].target, Locator { chapter: 2, ..Locator::default() });
+    }
+
+    #[test]
+    fn time_left_and_section() {
+        let para = |text: String| Block::Paragraph { text: StyledText { text, styles: Vec::new() }, kind: Kind::Body };
+        let book = Book {
+            title: "Книга".into(),
+            chapters: vec![Chapter { title: None, blocks: vec![para("ж".repeat(1200)), para("ж".repeat(2300))] }],
+            toc: vec![TocEntry { title: "Вторая часть".into(), level: 1, target: Locator { chapter: 0, block: 1, offset: 0 } }],
+            ..Book::default()
+        };
+        let at = |block: usize, chars: usize| Locator { chapter: 0, block, offset: chars * 2 }; // "ж" is two bytes
+        assert_eq!(book.minutes_left(at(0, 0)), 4, "3500 characters");
+        assert_eq!(book.minutes_left(at(0, 1000)), 3, "2500 characters, by characters, not bytes");
+        assert_eq!(book.minutes_left(at(1, 1900)), 0, "400 characters");
+        assert_eq!(book.section_at(at(0, 5)), "Книга", "before the first entry: the book");
+        assert_eq!(book.section_at(at(1, 5)), "Вторая часть");
     }
 
     #[test]

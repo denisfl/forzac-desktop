@@ -26,7 +26,7 @@ for renderer in default ngl vulkan gl; do
   echo "== GSK_RENDERER=$renderer"
   env_r=(); [ "$renderer" != default ] && env_r=(GSK_RENDERER=$renderer)
   for i in 1 2 3; do env "${env_r[@]}" "$bin" "$book" --measure 2>&1 | grep -E '^startup|rror' || true; done
-  env "${env_r[@]}" "$bin" "$book" --chapter "${CHAPTER:-5}" --turns 20 2>&1 | grep -E '^turns|rror' || true
+  env "${env_r[@]}" "$bin" "$book" --chapter "${CHAPTER:-5}" --turns 20 2>&1 | grep -E '^(turns|pages)|rror' || true
 done
 
 echo "== idle (default renderer)"

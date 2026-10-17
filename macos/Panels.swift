@@ -639,8 +639,7 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
         let list = forzac_quotes(view.doc, &n)
         quotes = (0..<Int(n)).map { i in
             let q = list![i]
-            let percent = "\(Int((q.position * 100).rounded()))%"
-            return (LocRange(start: q.start, end: q.end), String(cString: q.text), q.section.map { "\(String(cString: $0)) · \(percent)" } ?? percent)
+            return (LocRange(start: q.start, end: q.end), String(cString: q.text), sectionPlace(view, q.section.map { String(cString: $0) }, q.start, q.position))
         }
         empty.isHidden = !quotes.isEmpty
         share.isHidden = quotes.isEmpty
@@ -790,7 +789,7 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
         let section = label(m.section, bookFont("PT Serif", 16), palette.ink)
         section.lineBreakMode = .byTruncatingTail
         section.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let p = label("\(Int((m.position * 100).rounded()))%", interfaceFont(13), palette.muted)
+        let p = label(view.map { pageOrPercent($0, m.at, m.position) } ?? "", interfaceFont(13), palette.muted)
         p.alignment = .right
         fixed(p, width: 44)
         let top = NSStackView(views: [section, p])
@@ -844,7 +843,7 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
         t.lineBreakMode = .byWordWrapping
         t.cell?.truncatesLastVisibleLine = true
         t.preferredMaxLayoutWidth = titleWidth(level: e.level)
-        let p = label("\(Int((e.position * 100).rounded()))%", interfaceFont(13), palette.muted)
+        let p = label(view.map { pageOrPercent($0, e.at, e.position) } ?? "", interfaceFont(13), palette.muted)
         p.alignment = .right
         cell.addSubview(t)
         cell.addSubview(p)
@@ -1011,7 +1010,8 @@ final class SearchPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate, 
     struct Hit {
         let start, end: ForzacLocator
         let snippet: NSAttributedString
-        let place: String
+        let section: String?
+        let position: Float
     }
 
     private weak var view: PageView?
@@ -1161,9 +1161,7 @@ final class SearchPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate, 
         let text = NSMutableAttributedString(string: part(0..<a), attributes: plain)
         text.append(NSAttributedString(string: part(a..<b), attributes: bold))
         text.append(NSAttributedString(string: part(b..<bytes.count), attributes: plain))
-        let percent = "\(Int((h.position * 100).rounded()))%"
-        let place = h.section.map { "\(String(cString: $0)) · \(percent)" } ?? percent
-        return Hit(start: h.start, end: h.end, snippet: text, place: place)
+        return Hit(start: h.start, end: h.end, snippet: text, section: h.section.map { String(cString: $0) }, position: h.position)
     }
 
     private func show(_ found: [Hit], searched: Bool) {
@@ -1207,7 +1205,7 @@ final class SearchPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate, 
         snippet.maximumNumberOfLines = 0
         snippet.cell?.wraps = true
         snippet.preferredMaxLayoutWidth = textWidth
-        let place = label(hit.place, interfaceFont(13), palette.muted)
+        let place = label(view.map { sectionPlace($0, hit.section, hit.start, hit.position) } ?? "", interfaceFont(13), palette.muted)
         place.lineBreakMode = .byTruncatingTail
         let column = NSStackView(views: [snippet, place])
         column.orientation = .vertical
@@ -1257,4 +1255,15 @@ final class SearchTable: NSTableView {
         default: super.keyDown(with: e)
         }
     }
+}
+
+/// Where `at` is in the book for a list: its page once the book's pages are counted, else its share in percent.
+func pageOrPercent(_ view: PageView, _ at: ForzacLocator, _ position: Float) -> String {
+    forzac_book_pages(view.doc) > 0 ? "\(forzac_book_page_of(view.doc, at) + 1)" : "\(Int((position * 100).rounded()))%"
+}
+
+/// "section · p. N" (or "section · N%" before the count) for the highlights and the matches.
+func sectionPlace(_ view: PageView, _ section: String?, _ at: ForzacLocator, _ position: Float) -> String {
+    let place = forzac_book_pages(view.doc) > 0 ? fill(tr("p. {n}"), ["n": "\(forzac_book_page_of(view.doc, at) + 1)"]) : "\(Int((position * 100).rounded()))%"
+    return section.map { "\($0) · \(place)" } ?? place
 }

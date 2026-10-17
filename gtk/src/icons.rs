@@ -8,6 +8,8 @@ use gtk::{glib, gsk, prelude::*};
 
 pub type Paths = &'static [&'static str];
 
+pub const CHEVRON_LEFT: Paths = &["m15 18-6-6 6-6"];
+pub const LIST: Paths = &["M3 12h.01", "M3 18h.01", "M3 6h.01", "M8 12h13", "M8 18h13", "M8 6h13"];
 pub const X: Paths = &["M18 6 6 18", "m6 6 12 12"];
 pub const SEARCH: Paths = &["M19 11a8 8 0 1 1-16 0a8 8 0 1 1 16 0", "m21 21-4.3-4.3"];
 pub const ALIGN_JUSTIFY: Paths = &["M3 6h18", "M3 12h18", "M3 18h18"];

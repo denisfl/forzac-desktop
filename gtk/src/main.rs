@@ -22,6 +22,7 @@ mod appearance;
 mod fonts;
 mod icons;
 mod library;
+mod menu;
 mod page_view;
 mod panels;
 mod settings_sheet;
@@ -316,12 +317,13 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
     let contents: Rc<RefCell<Option<Rc<panels::Contents>>>> = Rc::default();
     let search: Rc<RefCell<Option<Rc<panels::SearchPanel>>>> = Rc::default();
     let note: Rc<RefCell<Option<gtk::Box>>> = Rc::default();
-    // Closes whatever panel is over the page; false when none was.
+    let menu = menu::Menu::new(&overlay, &view);
+    // Closes whatever panel (or the menu) is over the page; false when none was.
     let close_panels: Rc<dyn Fn() -> bool> = {
-        let (settings_panel, contents, search, note, overlay, view) =
-            (settings_panel.clone(), contents.clone(), search.clone(), note.clone(), overlay.clone(), view.clone());
+        let (settings_panel, contents, search, note, overlay, view, menu) =
+            (settings_panel.clone(), contents.clone(), search.clone(), note.clone(), overlay.clone(), view.clone(), menu.clone());
         Rc::new(move || {
-            let mut closed = false;
+            let mut closed = menu.close();
             if let Some(p) = settings_panel.borrow().as_ref().filter(|p| p.is_open()) {
                 p.close(&view);
                 closed = true;
@@ -385,16 +387,54 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             }
         })
     };
-    // A click on the page while a panel is over it closes the panel, and only that.
+    // A click on the page while a panel or the menu is over it closes it, and only that; the second click of a double
+    // click that opened the menu still selects a word.
     let click = gtk::GestureClick::new();
     click.set_propagation_phase(gtk::PropagationPhase::Capture);
-    let c = close_panels.clone();
-    click.connect_pressed(move |g, _, _, _| {
-        if c() {
+    let (c, m) = (close_panels.clone(), menu.clone());
+    click.connect_pressed(move |g, n, _, _| {
+        let menu_closed = m.close();
+        if c() || (menu_closed && n == 1) {
             g.set_state(gtk::EventSequenceState::Claimed);
         }
     });
     view.add_controller(click);
+    // The menu's keys come before the page's while it is open.
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let m = menu.clone();
+    keys.connect_key_pressed(
+        move |_, key, code, _| if m.key(page_view::latin(key, code)) { glib::Propagation::Stop } else { glib::Propagation::Proceed },
+    );
+    view.add_controller(keys);
+    let m = menu.clone();
+    view.connect_middle(move || m.open());
+    {
+        let (window, app, options, store, contents, settings) =
+            (window.downgrade(), app.downgrade(), options.clone(), store.clone(), open_contents.clone(), open_settings.clone());
+        menu.set_actions(menu::Actions {
+            // The window closes (saving the position), and the library shows or comes forward.
+            back: Box::new(move || {
+                if let Some(w) = window.upgrade() {
+                    w.close();
+                }
+                if let Some(app) = app.upgrade().filter(|_| !stateless) {
+                    library_window(&app, &options, &store);
+                }
+            }),
+            contents: Box::new(move || contents(panels::Tab::Contents)),
+            settings: Box::new(move || settings()),
+        });
+    }
+    if stateless {
+        // Measurements: when the book's pages were counted.
+        let v = view.downgrade();
+        let start = options.start;
+        view.connect_pages(move || {
+            let pages = v.upgrade().and_then(|v| v.book_pages()).map_or(0, |p| p.total());
+            println!("pages: {pages} counted {:?} after start", start.elapsed());
+        });
+    }
     glib::timeout_add_local(
         Duration::from_millis(500),
         glib::clone!(
@@ -419,7 +459,7 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
     view.add_controller(shortcuts(
         &view,
         &help,
-        PanelKeys { contents: open_contents, settings: open_settings, search: open_search, close: close_panels },
+        PanelKeys { contents: open_contents, settings: open_settings, search: open_search, close: close_panels, menu: menu.clone() },
         &window,
         save_style,
     ));
@@ -471,11 +511,20 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
     }
 
     if let Some(events) = options.mouse.clone() {
+        let menu = menu.clone();
         view.connect_first_frame(move |view| {
             for (i, e) in events.split(';').map(|e| e.split_whitespace().collect::<Vec<_>>()).filter(|e| e.len() >= 3).enumerate() {
                 let (view, kind, n) = (view.clone(), e[0].to_owned(), e.get(3).and_then(|n| n.parse().ok()).unwrap_or(1));
                 let (x, y) = (e[1].parse().unwrap_or(0.0), e[2].parse().unwrap_or(0.0));
-                glib::timeout_add_local_once(Duration::from_millis(500 + 150 * i as u64), move || view.test_mouse(&kind, x, y, n));
+                let menu = menu.clone();
+                glib::timeout_add_local_once(Duration::from_millis(500 + 150 * i as u64), move || {
+                    // A press with the menu open closes it, as the window's click does.
+                    if menu.is_open() && kind != "drag" && kind != "up" && n == 1 {
+                        menu.close();
+                    } else {
+                        view.test_mouse(&kind, x, y, n)
+                    }
+                });
             }
         });
     }
@@ -706,6 +755,7 @@ struct PanelKeys {
     settings: Rc<dyn Fn()>,
     search: Rc<dyn Fn()>,
     close: Rc<dyn Fn() -> bool>,
+    menu: Rc<menu::Menu>,
 }
 
 fn shortcuts(
@@ -715,7 +765,7 @@ fn shortcuts(
     window: &gtk::ApplicationWindow,
     save_style: Rc<dyn Fn()>,
 ) -> gtk::ShortcutController {
-    let PanelKeys { contents: open_contents, settings: open_settings, search: open_search, close: close_panels } = panels;
+    let PanelKeys { contents: open_contents, settings: open_settings, search: open_search, close: close_panels, menu } = panels;
     let controller = gtk::ShortcutController::new();
     let add = |trigger: &str, f: Box<dyn Fn()>| {
         let action = gtk::CallbackAction::new(move |_, _| {
@@ -745,7 +795,7 @@ fn shortcuts(
         "Return|KP_Enter",
         Box::new(move || {
             if !v.open_focused() {
-                v.turn(1);
+                menu.open();
             }
         }),
     );
