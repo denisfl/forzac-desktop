@@ -260,3 +260,39 @@ fn images_and_tables_for_the_view_through_the_c_functions() {
         forzac_close(doc);
     }
 }
+
+#[test]
+fn bookmarks_through_the_c_functions() {
+    let path = book_file();
+    let state_path = path.with_file_name("bookmarks-state");
+    let at = |chapter, block| ForzacLocator { chapter, block, offset: 0 };
+    unsafe {
+        let state = forzac_state_open(c(state_path.to_str().unwrap()).as_ptr());
+        let doc = forzac_open(c(path.to_str().unwrap()).as_ptr(), std::ptr::null_mut());
+        let settings = forzac_settings_default();
+        let pages = forzac_paginate(doc, 1, 600.0, 800.0, &settings);
+        let (start, end) = (forzac_page_start(doc, 0), forzac_page_end(doc, 0));
+        assert_eq!(Locator::from(forzac_page_end(doc, pages - 1)), Locator::from(at(2, 0)), "the last page ends at the next chapter");
+        assert!(forzac_bookmark_toggle(doc, start, end));
+        assert!(forzac_bookmarked(doc, start, end));
+        assert!(forzac_bookmark_toggle(doc, at(2, 1), at(2, 2)));
+        assert!(forzac_state_save_bookmarks(state, doc));
+        forzac_close(doc);
+
+        let doc = forzac_open(c(path.to_str().unwrap()).as_ptr(), std::ptr::null_mut());
+        forzac_state_load_bookmarks(state, doc);
+        let mut n = 0;
+        let places = std::slice::from_raw_parts(forzac_bookmark_places(doc, &mut n), n as usize);
+        assert_eq!(places.iter().map(|&p| Locator::from(p)).collect::<Vec<_>>(), [Locator::from(start), Locator::from(at(2, 1))]);
+        let list = std::slice::from_raw_parts(forzac_bookmarks(doc, &mut n), n as usize);
+        assert_eq!(string(list[1].section).as_deref(), Some("Глава 2"));
+        assert!(!string(list[1].snippet).unwrap().is_empty());
+        assert!(list[0].position < list[1].position);
+        forzac_bookmark_remove(doc, at(2, 1));
+        assert!(!forzac_bookmarked(doc, at(2, 0), at(3, 0)));
+        assert!(!forzac_bookmark_toggle(doc, start, end), "a marked page is cleared");
+        assert!(forzac_state_save_bookmarks(state, doc));
+        forzac_close(doc);
+        forzac_state_close(state);
+    }
+}

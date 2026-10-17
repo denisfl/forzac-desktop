@@ -1,10 +1,11 @@
-//! What Forzac remembers between launches: the reading position of every book, the recent books and the reader
-//! settings, in one text file at a path the shell chooses.
+//! What Forzac remembers between launches: the reading position of every book, the recent books, the bookmarks and
+//! the reader settings, in one text file at a path the shell chooses.
 //!
 //! ```text
 //! forzac-state 1
 //! setting<TAB>theme<TAB>Dark
 //! book<TAB>id<TAB>chapter<TAB>block<TAB>offset<TAB>progress<TAB>opened<TAB>path<TAB>title<TAB>authors
+//! bookmark<TAB>id<TAB>chapter<TAB>block<TAB>offset
 //! ```
 //!
 //! Tabs, line breaks and backslashes inside fields are escaped. Unreadable lines are skipped. Every write re-reads
@@ -38,21 +39,30 @@ pub struct Entry {
 #[derive(Debug, Default)]
 pub struct Store {
     path: PathBuf,
+    saved: Saved,
+}
+
+/// What the file holds.
+#[derive(Debug, Default)]
+struct Saved {
     books: Vec<Entry>,
     settings: BTreeMap<String, String>,
+    /// Bookmarks by book id, in reading order.
+    bookmarks: BTreeMap<String, Vec<Locator>>,
 }
 
 impl Store {
     /// The state at `path`; empty when the file is missing or unreadable.
     pub fn open(path: impl Into<PathBuf>) -> Store {
         let path = path.into();
-        let (books, settings) = read(&path);
-        Store { path, books, settings }
+        let saved = read(&path);
+        Store { path, saved }
     }
 
     /// Where `book` (opened from `path`) was left: by its content, else by its path; clamped to the book.
     pub fn position(&self, book: &Book, path: &Path) -> Option<Locator> {
-        let entry = self.books.iter().find(|e| e.id == book.id).or_else(|| self.books.iter().find(|e| e.path == path))?;
+        let books = &self.saved.books;
+        let entry = books.iter().find(|e| e.id == book.id).or_else(|| books.iter().find(|e| e.path == path))?;
         Some(clamp(book, entry.position))
     }
 
@@ -67,14 +77,14 @@ impl Store {
             progress: if finished { 1.0 } else { progress(book, at) },
             opened: now(),
         };
-        self.write(|books, _| {
-            books.retain(|e| e.id != entry.id && e.path != entry.path);
-            books.push(entry.clone());
+        self.write(|saved| {
+            saved.books.retain(|e| e.id != entry.id && e.path != entry.path);
+            saved.books.push(entry.clone());
         })
     }
 
     pub fn setting(&self, key: &str) -> Option<&str> {
-        self.settings.get(key).map(String::as_str)
+        self.saved.settings.get(key).map(String::as_str)
     }
 
     pub fn set_setting(&mut self, key: &str, value: &str) -> io::Result<()> {
@@ -83,35 +93,59 @@ impl Store {
 
     /// Several settings in one write.
     pub fn set_settings(&mut self, values: &[(&str, String)]) -> io::Result<()> {
-        self.write(|_, settings| {
+        self.write(|saved| {
             for (key, value) in values {
-                settings.insert((*key).to_owned(), value.clone());
+                saved.settings.insert((*key).to_owned(), value.clone());
+            }
+        })
+    }
+
+    /// The bookmarks of `book`, in reading order.
+    pub fn bookmarks(&self, book: &Book) -> Vec<Locator> {
+        self.saved.bookmarks.get(&book.id).cloned().unwrap_or_default()
+    }
+
+    /// Replaces the bookmarks of `book` with `marks`.
+    pub fn set_bookmarks(&mut self, book: &Book, marks: &[Locator]) -> io::Result<()> {
+        let mut marks = marks.to_vec();
+        marks.sort();
+        marks.dedup();
+        self.write(|saved| {
+            if marks.is_empty() {
+                saved.bookmarks.remove(&book.id);
+            } else {
+                saved.bookmarks.insert(book.id.clone(), marks.clone());
             }
         })
     }
 
     /// Up to `n` books whose files still exist, the last opened first.
     pub fn recent(&self, n: usize) -> Vec<&Entry> {
-        let mut books: Vec<&Entry> = self.books.iter().filter(|e| e.path.is_file()).collect();
+        let mut books: Vec<&Entry> = self.saved.books.iter().filter(|e| e.path.is_file()).collect();
         books.sort_by_key(|e| std::cmp::Reverse(e.opened));
         books.truncate(n);
         books
     }
 
     /// Re-reads the file, applies `change`, and replaces the file with the result.
-    fn write(&mut self, change: impl FnOnce(&mut Vec<Entry>, &mut BTreeMap<String, String>)) -> io::Result<()> {
-        let (mut books, mut settings) = read(&self.path);
-        change(&mut books, &mut settings);
-        let mut text = String::with_capacity(64 + books.len() * 160);
+    fn write(&mut self, change: impl FnOnce(&mut Saved)) -> io::Result<()> {
+        let mut saved = read(&self.path);
+        change(&mut saved);
+        let mut text = String::with_capacity(64 + saved.books.len() * 160);
         let _ = writeln!(text, "{HEADER}");
-        for (key, value) in &settings {
+        for (key, value) in &saved.settings {
             let _ = writeln!(text, "setting\t{}\t{}", escape(key), escape(value));
         }
-        for e in &books {
+        for e in &saved.books {
             let Locator { chapter, block, offset } = e.position;
             let path = e.path.to_string_lossy();
             let (id, path, title, authors) = (escape(&e.id), escape(&path), escape(&e.title), escape(&e.authors));
             let _ = writeln!(text, "book\t{id}\t{chapter}\t{block}\t{offset}\t{:.4}\t{}\t{path}\t{title}\t{authors}", e.progress, e.opened);
+        }
+        for (id, marks) in &saved.bookmarks {
+            for Locator { chapter, block, offset } in marks {
+                let _ = writeln!(text, "bookmark\t{}\t{chapter}\t{block}\t{offset}", escape(id));
+            }
         }
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir)?;
@@ -119,34 +153,40 @@ impl Store {
         let tmp = self.path.with_extension("tmp");
         std::fs::write(&tmp, text)?;
         std::fs::rename(&tmp, &self.path)?;
-        self.books = books;
-        self.settings = settings;
+        self.saved = saved;
         Ok(())
     }
 }
 
-fn read(path: &Path) -> (Vec<Entry>, BTreeMap<String, String>) {
-    let mut books = Vec::new();
-    let mut settings = BTreeMap::new();
-    let Ok(text) = std::fs::read_to_string(path) else { return (books, settings) };
+fn read(path: &Path) -> Saved {
+    let mut saved = Saved::default();
+    let Ok(text) = std::fs::read_to_string(path) else { return saved };
     let mut lines = text.lines();
     if lines.next() != Some(HEADER) {
-        return (books, settings);
+        return saved;
     }
     for line in lines {
         let f: Vec<String> = line.split('\t').map(unescape).collect();
+        let num = |i: usize| f[i].parse::<usize>().ok();
         match f.first().map(String::as_str) {
             Some("setting") if f.len() == 3 => {
-                settings.insert(f[1].clone(), f[2].clone());
+                saved.settings.insert(f[1].clone(), f[2].clone());
+            }
+            Some("bookmark") if f.len() == 5 => {
+                if let (Some(chapter), Some(block), Some(offset)) = (num(2), num(3), num(4)) {
+                    let marks = saved.bookmarks.entry(f[1].clone()).or_default();
+                    marks.push(Locator { chapter, block, offset });
+                    marks.sort();
+                    marks.dedup();
+                }
             }
             Some("book") if f.len() == 10 => {
-                let num = |i: usize| f[i].parse::<usize>().ok();
                 let (Some(chapter), Some(block), Some(offset), Ok(progress), Ok(opened)) =
                     (num(2), num(3), num(4), f[5].parse::<f32>(), f[6].parse::<u64>())
                 else {
                     continue;
                 };
-                books.push(Entry {
+                saved.books.push(Entry {
                     id: f[1].clone(),
                     path: PathBuf::from(&f[7]),
                     title: f[8].clone(),
@@ -159,7 +199,7 @@ fn read(path: &Path) -> (Vec<Entry>, BTreeMap<String, String>) {
             _ => {} // unknown or damaged: dropped at the next write
         }
     }
-    (books, settings)
+    saved
 }
 
 fn escape(s: &str) -> Cow<'_, str> {

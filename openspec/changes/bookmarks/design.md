@@ -56,9 +56,9 @@ remembers whether the page it slides away was marked). macOS gives each of the t
 path and a shadow, so the ribbon slides with its page in the window server; in "Scroll" the current layer's ribbon hangs
 at the top of the window.
 
-**Animation.** The drop is Android's spring (damping ratio 0.5, stiffness 280 s⁻², from 56 px above): on macOS a
+**Animation.** The drop is Android's spring (damping ratio 0.5, stiffness 280 s⁻², from 44 px above: just out of the window, so every frame of the movement changes what is shown): on macOS a
 `CASpringAnimation` with mass 1, stiffness 280, damping 16.7; in GTK the same closed-form damped oscillation on the
-frame clock until it is within half a pixel (about 0.55 s). The rise is a 200 ms ease-in to 56 px above. A turn, a jump
+frame clock until it is within half a pixel (about 0.55 s). The rise is a 200 ms ease-in to 44 px above. A turn, a jump
 or a re-layout ends a running animation. In "Scroll" the ribbon appears and goes with the marked screen without
 animation, as on Android.
 

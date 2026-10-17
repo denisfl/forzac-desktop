@@ -2,6 +2,7 @@
 //! (GTK 4 on Linux, AppKit on macOS). Shells get pages as positioned glyph runs and only draw them.
 
 mod archive;
+pub mod bookmarks;
 pub mod epub;
 pub mod fb2;
 pub mod fb3;

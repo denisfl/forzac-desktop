@@ -396,15 +396,29 @@ final class SettingsSheet: SheetView {
 
 // MARK: - Contents
 
-/// The contents: a title with a close button, a filter field, the book, then the entries with their position in the
-/// book; the current one bold and marked. `j`/`k` move, `Enter` jumps (remembered for `⌃O`), `/` filters, `Esc` or
-/// `o` closes.
+/// The tabs of the contents panel.
+enum ContentsTab: Int, CaseIterable {
+    case contents, bookmarks
+    var title: String { ["Contents", "Bookmarks"][rawValue] }
+}
+
+/// The contents: the tabs with a close button, a filter field, the book, then the entries with their position in the
+/// book (the current one bold and marked), or the bookmarks. `j`/`k` move, `Enter` jumps (remembered for `⌃O`), `/`
+/// filters, `←`/`→` switch tabs, `d` removes a bookmark, `Esc` or `o` closes.
 final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
     private weak var view: PageView?
     private let entries: [(title: String, level: UInt32, at: ForzacLocator, position: Float)]
     private var shown: [Int] = []
     private var currentEntry = 0
-    private let title = label("Contents", interfaceFont(17, .semibold), 0)
+    private(set) var tab = ContentsTab.contents
+    private let tabs = ContentsTab.allCases.map { FlatButton(label($0.title, interfaceFont(17, .medium), 0)) }
+    /// The bookmarks as listed, and the hint shown when there are none.
+    private var marks: [(at: ForzacLocator, section: String, position: Float, snippet: String)] = []
+    private let empty = NSStackView()
+    private let emptyTitle = label("No bookmarks yet", bookFont("PT Serif", 20), 0)
+    private let emptyBody = label("Press b on a page — a ribbon marks the place.", interfaceFont(14), 0)
+    private var fieldHeight: NSLayoutConstraint!
+    private var cardTop: NSLayoutConstraint!
     private let close = FlatButton(IconView(Icons.x, size: 22))
     private let field = LayerView()
     private let searchIcon = IconView(Icons.search, size: 18)
@@ -428,12 +442,21 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
 
         fixed(close, width: 44, height: 44)
         close.onClick = { [weak self] in self?.dismiss() }
-        title.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let header = NSStackView(views: [title, close])
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        for (t, button) in zip(ContentsTab.allCases, tabs) {
+            button.layer!.cornerRadius = 8
+            button.widthAnchor.constraint(equalTo: button.content.widthAnchor, constant: 24).isActive = true
+            button.heightAnchor.constraint(equalToConstant: 44).isActive = true
+            button.onClick = { [weak self] in self?.show(t) }
+        }
+        let header = NSStackView(views: tabs + [spacer, close])
+        header.spacing = 0
         header.distribution = .fill
-        header.edgeInsets = NSEdgeInsets(top: 12, left: 20, bottom: 0, right: 8)
+        header.edgeInsets = NSEdgeInsets(top: 4, left: 8, bottom: 0, right: 8)
 
-        fixed(field, height: 44)
+        fieldHeight = field.heightAnchor.constraint(equalToConstant: 44)
+        fieldHeight.isActive = true
         field.layer!.cornerRadius = 22
         field.layer!.borderWidth = 1
         filter.isBordered = false
@@ -480,19 +503,29 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
         scroll.hasVerticalScroller = true
         scroll.translatesAutoresizingMaskIntoConstraints = false
 
-        for v in [header, field, card, rule, scroll] as [NSView] {
+        emptyBody.alignment = .center
+        emptyBody.maximumNumberOfLines = 0
+        emptyBody.preferredMaxLayoutWidth = 240
+        empty.orientation = .vertical
+        empty.spacing = 8
+        empty.addArrangedSubview(emptyTitle)
+        empty.addArrangedSubview(emptyBody)
+        empty.isHidden = true
+        for v in [header, field, card, rule, scroll, empty] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
+        cardTop = card.topAnchor.constraint(equalTo: field.bottomAnchor, constant: 12)
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: topAnchor), header.leadingAnchor.constraint(equalTo: leadingAnchor), header.trailingAnchor.constraint(equalTo: trailingAnchor),
             field.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 8), field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
             field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
-            card.topAnchor.constraint(equalTo: field.bottomAnchor, constant: 12), card.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
+            cardTop, card.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
             card.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -20),
             rule.topAnchor.constraint(equalTo: card.bottomAnchor, constant: 22), rule.leadingAnchor.constraint(equalTo: leadingAnchor), rule.trailingAnchor.constraint(equalTo: trailingAnchor),
             scroll.topAnchor.constraint(equalTo: rule.bottomAnchor, constant: 6), scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor), scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+            empty.centerXAnchor.constraint(equalTo: scroll.centerXAnchor), empty.centerYAnchor.constraint(equalTo: scroll.centerYAnchor, constant: -40),
         ])
         refilter()
     }
@@ -528,7 +561,14 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
         layer!.backgroundColor = color(p.paper)
         layer!.shadowColor = color(0x000000, alpha: 0.08)
         layer!.borderWidth = 0
-        title.textColor = nsColor(p.ink)
+        for (t, button) in zip(ContentsTab.allCases, tabs) {
+            let selected = t == tab
+            (button.content as? NSTextField)?.font = interfaceFont(17, selected ? .semibold : .medium)
+            button.colour(p)
+            (button.content as? NSTextField)?.textColor = nsColor(selected ? p.ink : p.muted)
+        }
+        emptyTitle.textColor = nsColor(p.ink)
+        emptyBody.textColor = nsColor(p.muted)
         close.colour(p)
         field.layer!.backgroundColor = color(p.sheet)
         field.layer!.borderColor = color(p.line)
@@ -542,8 +582,8 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
         table.reloadData()
     }
 
-    /// Shows the panel with the entry of the current place selected.
-    func open() {
+    /// Shows the panel on `tab`: the contents with the entry of the current place selected, or the bookmarks.
+    func open(_ tab: ContentsTab) {
         guard let view else { return }
         let here = view.locator
         let before: (ForzacLocator) -> Bool = { ($0.chapter, $0.block, $0.offset) <= (here.chapter, here.block, here.offset) }
@@ -553,10 +593,54 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
         meta.stringValue = [author, "\(read)% read"].filter { !$0.isEmpty }.joined(separator: " · ")
         filter.stringValue = ""
         refilter()
-        colour(view.palette)
         isHidden = false
-        select(shown.firstIndex(of: currentEntry) ?? 0)
+        show(tab)
+    }
+
+    /// Shows `tab` (the bookmarks read afresh) and gives it the keys.
+    func show(_ tab: ContentsTab) {
+        guard let view else { return }
+        self.tab = tab
+        let contents = tab == .contents
+        field.isHidden = !contents
+        fieldHeight.constant = contents ? 44 : 0
+        cardTop.constant = contents ? 12 : 0
+        colour(view.palette)
+        if contents {
+            empty.isHidden = true
+            table.reloadData()
+            select(shown.firstIndex(of: currentEntry) ?? 0)
+        } else {
+            reloadBookmarks(selecting: 0)
+        }
         window?.makeFirstResponder(table)
+    }
+
+    /// The next (`delta` 1) or previous (−1) tab.
+    func switchTab(_ delta: Int) {
+        let n = ContentsTab.allCases.count
+        show(ContentsTab(rawValue: ((tab.rawValue + delta) % n + n) % n)!)
+    }
+
+    private func reloadBookmarks(selecting row: Int) {
+        guard let view else { return }
+        var n: UInt32 = 0
+        let list = forzac_bookmarks(view.doc, &n)
+        marks = (0..<Int(n)).map { i in
+            let b = list![i]
+            return (b.at, b.section.map { String(cString: $0) } ?? "", b.position, String(cString: b.snippet))
+        }
+        empty.isHidden = !marks.isEmpty
+        table.reloadData()
+        select(row)
+    }
+
+    /// `d`: removes the selected bookmark; the one after it is selected.
+    func removeBookmark() {
+        guard let view, tab == .bookmarks, marks.indices.contains(table.selectedRow) else { return }
+        let row = table.selectedRow
+        view.removeBookmark(marks[row].at)
+        reloadBookmarks(selecting: row)
     }
 
     func dismiss() {
@@ -571,22 +655,59 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
     }
 
     func select(_ row: Int) {
-        guard !shown.isEmpty else { return }
-        let row = min(max(0, row), shown.count - 1)
+        let count = numberOfRows(in: table)
+        guard count > 0 else { return }
+        let row = min(max(0, row), count - 1)
         table.selectRowIndexes([row], byExtendingSelection: false)
         table.scrollRowToVisible(row)
     }
 
     @objc func jump() {
-        guard let view, table.selectedRow >= 0, table.selectedRow < shown.count else { return }
-        let at = entries[shown[table.selectedRow]].at
+        guard let view, table.selectedRow >= 0, table.selectedRow < numberOfRows(in: table) else { return }
+        let at = tab == .contents ? entries[shown[table.selectedRow]].at : marks[table.selectedRow].at
         dismiss()
         view.go(to: at)
     }
 
     func focusFilter() { window?.makeFirstResponder(filter) }
 
-    func numberOfRows(in tableView: NSTableView) -> Int { shown.count }
+    func numberOfRows(in tableView: NSTableView) -> Int { tab == .contents ? shown.count : marks.count }
+
+    /// The room for a bookmark's text: the panel less the margins.
+    private var markWidth: CGFloat { max(100, (table.bounds.width > 0 ? table.bounds.width : 400) - 40) }
+
+    private func snippet(_ text: String) -> NSAttributedString {
+        let style = NSMutableParagraphStyle()
+        style.minimumLineHeight = 18
+        style.maximumLineHeight = 18
+        style.lineBreakMode = .byWordWrapping
+        return NSAttributedString(string: text, attributes: [.font: interfaceFont(13), .foregroundColor: nsColor(palette.muted), .paragraphStyle: style])
+    }
+
+    /// A bookmark as Android lists it: the section with the position on the right, two lines of text below.
+    private func bookmarkCell(_ row: Int) -> NSView {
+        let m = marks[row]
+        let section = label(m.section, bookFont("PT Serif", 16), palette.ink)
+        section.lineBreakMode = .byTruncatingTail
+        section.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let p = label("\(Int((m.position * 100).rounded()))%", interfaceFont(13), palette.muted)
+        p.alignment = .right
+        fixed(p, width: 44)
+        let top = NSStackView(views: [section, p])
+        top.distribution = .fill
+        let text = NSTextField(labelWithAttributedString: snippet(m.snippet))
+        text.maximumNumberOfLines = 2
+        text.cell?.wraps = true
+        text.cell?.truncatesLastVisibleLine = true
+        text.preferredMaxLayoutWidth = markWidth
+        let column = NSStackView(views: [top, text])
+        column.orientation = .vertical
+        column.alignment = .leading
+        column.spacing = 4
+        column.edgeInsets = NSEdgeInsets(top: 12, left: 20, bottom: 12, right: 20)
+        for v in [top, text] { v.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -40).isActive = true }
+        return column
+    }
 
     /// The room for an entry's title: the panel less the margins, the indent, the dot and the position.
     private func titleWidth(level: UInt32) -> CGFloat {
@@ -595,6 +716,10 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
     }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        if tab == .bookmarks {
+            let h = snippet(marks[row].snippet).boundingRect(with: NSSize(width: markWidth, height: 1000), options: [.usesLineFragmentOrigin]).height
+            return 12 + 21 + 4 + min(ceil(h), 36) + 12
+        }
         let e = entries[shown[row]]
         let font = bookFont("PT Serif", 16, bold: shown[row] == currentEntry)
         let h = (e.title as NSString).boundingRect(with: NSSize(width: titleWidth(level: e.level), height: 1000), options: [.usesLineFragmentOrigin], attributes: [.font: font]).height
@@ -603,6 +728,7 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        if tab == .bookmarks { return bookmarkCell(row) }
         let i = shown[row]
         let e = entries[i]
         let isCurrent = i == currentEntry
@@ -662,17 +788,25 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
     }
 }
 
-/// The contents list: `j`/`k` move, `Enter` jumps, `/` filters, `Esc` and `o` close.
+/// The contents list: `j`/`k` move, `Enter` jumps, `/` filters, `←`/`→` switch tabs, `d` removes a bookmark, `Esc`
+/// and `o` close.
 final class ContentsTable: NSTableView {
     weak var panel: ContentsPanel?
     var selectionColor = color(0x000000, alpha: 0.07)
 
     override func keyDown(with e: NSEvent) {
+        let shift = e.modifierFlags.contains(.shift)
+        let bookmarks = panel?.tab == .bookmarks
         switch e.shortcutKey {
         case 0x26: panel?.select(selectedRow + 1)        // j
         case 0x28: panel?.select(selectedRow - 1)        // k
         case 0x24, 0x4C: panel?.jump()                    // Return
-        case 0x2C where !e.modifierFlags.contains(.shift): panel?.focusFilter() // /
+        case 0x2C where !shift && !bookmarks: panel?.focusFilter() // /
+        case 0x30: panel?.switchTab(shift ? -1 : 1)      // Tab
+        case 0x7C, 0x25: panel?.switchTab(1)             // → l
+        case 0x7B, 0x04: panel?.switchTab(-1)            // ← h
+        case 0x02, 0x33, 0x75: panel?.removeBookmark()   // d Delete
+        case 0x0B where shift: if bookmarks { panel?.dismiss() } else { panel?.show(.bookmarks) } // B
         case 0x35, 0x1F, 0x0C: panel?.dismiss()           // Esc o q
         default: super.keyDown(with: e)
         }

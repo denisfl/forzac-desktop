@@ -7,7 +7,9 @@
 //! page as rendered by the window's renderer and quits; `--turns N` turns N pages with the animation and prints
 //! frame-interval statistics; `--scrolls N` the same in the "Scroll" mode, a screen at a time; `--chapter N` opens
 //! chapter N; `--page N` goes to page N of it
-//! (for `--png` and `--turns`). With any of them the reading state is neither read nor written.
+//! (for `--png` and `--turns`); `--marked` puts a bookmark at every paragraph, so nearly every page shows the ribbon;
+//! `--toggles N` sets and removes a bookmark N times (the ribbon drops and rises) and prints the same statistics.
+//! With any of them the reading state is neither read nor written.
 //!
 //! Without a file, the recent books are listed. Reading positions and the settings are remembered in
 //! `$XDG_DATA_HOME/forzac/state`.
@@ -40,6 +42,7 @@ struct Options {
     png: Option<PathBuf>,
     turns: usize,
     scrolls: usize,
+    toggles: usize,
     chapter: Option<usize>,
     page: usize,
 }
@@ -47,7 +50,13 @@ struct Options {
 impl Options {
     /// Measurement runs neither read nor write the reading state.
     fn stateless(&self) -> bool {
-        self.measure || self.png.is_some() || self.turns > 0 || self.scrolls > 0 || self.chapter.is_some() || self.page > 0
+        self.measure
+            || self.png.is_some()
+            || self.turns > 0
+            || self.scrolls > 0
+            || self.toggles > 0
+            || self.chapter.is_some()
+            || self.page > 0
     }
 }
 
@@ -94,7 +103,8 @@ fn main() -> glib::ExitCode {
     let chapter = args.iter().position(|a| a == "--chapter").and_then(|i| args.get(i + 1)).and_then(|n| n.parse().ok());
     let scrolls = args.iter().position(|a| a == "--scrolls").and_then(|i| args.get(i + 1)).and_then(|n| n.parse().ok()).unwrap_or(0);
     let page = args.iter().position(|a| a == "--page").and_then(|i| args.get(i + 1)).and_then(|n| n.parse().ok()).unwrap_or(0);
-    let options = Options { start, measure: args.iter().any(|a| a == "--measure"), png, turns, scrolls, chapter, page };
+    let toggles = args.iter().position(|a| a == "--toggles").and_then(|i| args.get(i + 1)).and_then(|n| n.parse().ok()).unwrap_or(0);
+    let options = Options { start, measure: args.iter().any(|a| a == "--measure"), png, turns, scrolls, toggles, chapter, page };
     let files: Vec<&String> = args
         .iter()
         .skip(1)
@@ -102,7 +112,7 @@ fn main() -> glib::ExitCode {
         .collect();
 
     let mut flags = gio::ApplicationFlags::HANDLES_OPEN;
-    if options.measure || options.png.is_some() || options.turns > 0 || options.scrolls > 0 {
+    if options.measure || options.png.is_some() || options.turns > 0 || options.scrolls > 0 || options.toggles > 0 {
         flags |= gio::ApplicationFlags::NON_UNIQUE;
     }
     let app = gtk::Application::builder().application_id(APP_ID).flags(flags).build();
@@ -311,14 +321,19 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             }
         })
     };
-    let open_contents: Rc<dyn Fn()> = {
+    // `o` and `B` open the contents panel on their tab, switch to it, or close the panel when it shows it.
+    let open_contents: Rc<dyn Fn(panels::Tab)> = {
         let (contents, overlay, view, close) = (contents.clone(), overlay.clone(), view.clone(), close_panels.clone());
-        Rc::new(move || {
+        Rc::new(move |tab| {
             let c = contents.borrow_mut().get_or_insert_with(|| panels::Contents::new(&overlay, &view)).clone();
             let was_open = c.is_open();
+            if was_open && c.tab() != tab {
+                c.show(&view, tab);
+                return;
+            }
             close();
             if !was_open {
-                c.open(&view);
+                c.open(&view, tab);
             }
         })
     };
@@ -375,13 +390,29 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             Open::Table(at) => *viewer.borrow_mut() = viewer::open(&overlay, &view, viewer::Subject::Table(at)).map(|v| v.downgrade()),
         }
     ));
+    if stateless && std::env::args().any(|a| a == "--marked") {
+        let book = view.book();
+        let starts = book
+            .chapters
+            .iter()
+            .enumerate()
+            .flat_map(|(c, ch)| (0..ch.blocks.len()).map(move |b| Locator { chapter: c, block: b, offset: 0 }));
+        view.set_bookmarks(starts.collect());
+    }
     if !stateless {
+        view.set_bookmarks(store.borrow().bookmarks(&view.book()));
+        let (st, book) = (store.clone(), view.book());
+        view.connect_bookmarks(move |marks| {
+            if let Err(e) = st.borrow_mut().set_bookmarks(&book, marks) {
+                eprintln!("cannot save the reading state: {e}");
+            }
+        });
         remember_position(&view, &window, path, store);
         keep_awake(app, &window);
         WINDOWS.with(|w| w.borrow_mut().push((canonical, window.downgrade())));
     }
 
-    if options.measure || options.png.is_some() || options.turns > 0 || options.scrolls > 0 {
+    if options.measure || options.png.is_some() || options.turns > 0 || options.scrolls > 0 || options.toggles > 0 {
         let options = options.clone();
         let window = window.clone();
         view.connect_first_frame(move |view| {
@@ -398,16 +429,18 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             if let Some(png) = &options.png {
                 save_png(view, png);
             }
-            if options.turns == 0 && options.scrolls == 0 {
+            if options.turns == 0 && options.scrolls == 0 && options.toggles == 0 {
                 window.close();
                 return;
             }
             // One turn (or scroll by a screen) every 400 ms (the animation takes 200 or 150), then the statistics; the
             // first 1.2 s after the first frame, as a reader would, when the neighbouring chapters are laid out.
-            let left = std::cell::Cell::new(options.turns.max(options.scrolls));
+            let left = std::cell::Cell::new(options.turns.max(options.scrolls).max(options.toggles));
+            let toggles = options.toggles > 0;
             let (view, window) = (view.clone(), window.clone());
             let wait = std::cell::Cell::new(2); // ticks before the first turn
-            glib::timeout_add_local(std::time::Duration::from_millis(400), move || {
+            // A drop takes 0.6 s: toggles every 0.8 s.
+            glib::timeout_add_local(std::time::Duration::from_millis(if toggles { 800 } else { 400 }), move || {
                 if wait.get() > 0 {
                     wait.set(wait.get() - 1);
                     return glib::ControlFlow::Continue;
@@ -418,7 +451,11 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
                     return glib::ControlFlow::Break;
                 }
                 left.set(left.get() - 1);
-                view.turn(1);
+                if toggles {
+                    view.toggle_bookmark();
+                } else {
+                    view.turn(1);
+                }
                 glib::ControlFlow::Continue
             });
         });
@@ -544,7 +581,9 @@ k  h  ←  ↑  Shift+Space  PgUp    previous page (Scroll: k ↑ a line, Ctrl+U
 m    page or scroll
 ]  [    next / previous chapter
 g  G  Home  End    chapter start / end
-o    contents  (/ filters)
+o    contents  (/ filters, ← → tabs)
+b    bookmark the page, again to remove it
+B    bookmarks  (Enter goes, d removes)
 Tab  Shift+Tab    notes, links, pictures and tables on the page, Enter opens
 Ctrl+O    back after a jump
 s    settings
@@ -687,7 +726,7 @@ fn recent_window(app: &gtk::Application, options: &Options, store: &SharedStore)
 /// They act while the page has the focus: an open panel has keys of its own.
 /// What the reader's keys open and close: `o`, `s`, `/` and closing whatever panel is open.
 struct PanelKeys {
-    contents: Rc<dyn Fn()>,
+    contents: Rc<dyn Fn(panels::Tab)>,
     settings: Rc<dyn Fn()>,
     search: Rc<dyn Fn()>,
     close: Rc<dyn Fn() -> bool>,
@@ -745,7 +784,11 @@ fn shortcuts(
             v.back();
         }),
     );
-    add("o", Box::new(move || open_contents()));
+    let v = view.clone();
+    add("b", Box::new(move || v.toggle_bookmark()));
+    let c = open_contents.clone();
+    add("<Shift>b", Box::new(move || c(panels::Tab::Bookmarks)));
+    add("o", Box::new(move || open_contents(panels::Tab::Contents)));
     add("s", Box::new(move || open_settings()));
     add("slash", Box::new(move || open_search()));
     let v = view.clone();

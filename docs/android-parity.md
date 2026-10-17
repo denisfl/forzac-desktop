@@ -135,7 +135,7 @@ modules (`core/typesetting/src/main/kotlin/app/truenrth/forzac/typesetting/…` 
 
 | # | Android | Desktop | Status |
 |---|---|---|---|
-| Q1 | Bookmarks: a tap in the top right corner, a ribbon with cloth physics, a list tab in the contents (A spec bookmarks) | None; planned in [`bookmarks`](../openspec/changes/bookmarks/proposal.md) (1.0): `b`, a mark, a list | gap (planned) |
+| Q1 | Bookmarks: a tap in the top right corner, a ribbon with cloth physics, a list tab in the contents (A spec bookmarks) | `b` (or a click in the top right corner) sets or removes; the same ribbon drops in and slides with its page, without the swing; a "Bookmarks" tab in the contents (`B`), `d` removes (change `bookmarks`) | same (keys; no swing) |
 | Q2 | Selection by long press, highlights, Copy, Share, export, a Highlights tab (`TextSelection.kt`, A spec quotes) | None — not even copying text | intended (Not planned for 1.0, confirmed) |
 
 ## 12. Screen, window and the rest
@@ -290,3 +290,31 @@ was not available), so its keys went through `NSWindow.sendEvent` to the real ha
   Mac.
 - Not checked by hand: the mouse, the wheel, the touchpad and the pinch in the view on both machines (no pointer
   injection on the Pi, no computer control of the Mac), and a theme change while the view is open.
+
+### Bookmarks (`bookmarks`, Q1)
+
+Checked on 2026-10-17 with the build of the change. The Pi was driven with `wtype` in a second, headless labwc (the
+desktop session's file-search field keeps the keyboard focus there) and watched with `grim`; the Mac build was driven
+with `--panel … --keys …` and `--png` (computer control of the Mac was not used), so its keys went through
+`NSWindow.sendEvent` to the real handlers.
+
+- On both: `b` drops the ribbon onto the page (bordeaux in the light themes, lighter in Dark and Wave), `b` again takes
+  it up; turning to a marked page brings the ribbon in with the page, turning away takes it out with it; in "Scroll" the
+  ribbon hangs while the marked line is on screen and goes when it leaves (the Mac: `G` to the chapter's end and `g`
+  back). The contents panel's tabs: `→`/`l` and `Tab` switch, the filter field shows on "Contents" only; the list shows
+  the section, the percent and two lines of text; `Enter` goes to the page with the "← Back" pill; `d` removes, and the
+  last removal shows "No bookmarks yet" with the hint. The Mac: `B` opens the tab and closes the panel from it.
+- The Pi: a bookmark set in "Scroll" marks the page that holds its line after switching to "Slide" and after two
+  larger text sizes; bookmarks are in the state file and in the list after a restart.
+- Found and fixed: the drop started 12 px above the window (the ribbon's tuck), so its first frames showed nothing new
+  and each drop was a frame late on the Pi; it now starts just out of the window. On the Mac a ribbon dropping when the
+  reader moved away stayed on screen until the drop ended.
+- Cost on the Pi 5 (`scripts/pi-headless.sh`, 1920×1200 at 123 Hz): page turns 0 missed frames with the default and
+  `ngl` renderers, 1 with `vulkan` and `gl`; idle 0 CPU ticks in 10 s, also with a ribbon on the page. Six paired runs
+  with a bookmark at every paragraph (`--marked`) and without: 2 and 1 late frames in 120 page turns, 1 and 4 in 120
+  scrolls by a screen. 20 drops and rises (`--toggles 20`), three runs per mode: 0–1 late frames in "Slide", 1–2 in
+  "Scroll", each the first frame after a pause, as page turns have. 200 bookmarks listed in at most 1.1 ms and saved in
+  at most 0.8 ms (the corpus test on the Pi's books).
+- Not checked by hand: `B` on the Pi (`wtype` cannot send a shifted key there; `T` does not arrive either), the corner
+  click on both (no pointer injection), Go → Bookmark `⌘D` and View → Bookmarks on the Mac (menus are not reachable
+  through `--keys`).

@@ -7,7 +7,7 @@ import QuartzCore
 
 /// What the view asks its window for.
 enum Command {
-    case contents, settings, search, help, closePanels, note(String)
+    case contents, bookmarks, settings, search, help, closePanels, note(String)
     /// A link's short target in the note sheet.
     case preview(String)
     /// An image (by id) or a table (by its first row) in the view (`Viewer`).
@@ -17,6 +17,13 @@ enum Command {
 /// The pill after a jump, as on Android: it goes when the reader turns this many pages (or screens) away.
 private let pillPages: Int32 = 2
 private let pillLabel = "← Back · ⌃O"
+
+/// The bookmark ribbon (Android's): width, length below the window's top edge, the part tucked above it, the
+/// swallowtail's depth; bordeaux on light and on dark themes.
+private let ribbonWidth: CGFloat = 16
+private let ribbonLength: CGFloat = 44
+private let ribbonTuck: CGFloat = 12
+private let ribbonTail: CGFloat = ribbonWidth * 0.5625
 
 final class PageView: NSView {
     let doc: OpaquePointer
@@ -64,6 +71,12 @@ final class PageView: NSView {
     private let endLayer = CALayer()
     /// The end page (or end screen) is shown: the position is saved as finished.
     var finished: Bool { scrolling ? columnEnd : atEnd }
+    /// The bookmarks' places (the document holds them) and the ribbons of the two page layers.
+    private var bookmarks: [ForzacLocator] = []
+    private let ribbon = CAShapeLayer()
+    private let previousRibbon = CAShapeLayer()
+    /// The bookmarks changed (to save them).
+    var onBookmarks: (() -> Void)?
 
     // "Scroll".
     private var offset: CGFloat = 0
@@ -96,6 +109,15 @@ final class PageView: NSView {
             l.contentsGravity = .resize
             l.actions = ["contents": NSNull(), "position": NSNull(), "bounds": NSNull()]
             layer!.addSublayer(l)
+        }
+        // Each page layer has its ribbon, which slides with it.
+        for (page, r) in [(current, ribbon), (previous, previousRibbon)] {
+            r.actions = ["position": NSNull(), "bounds": NSNull(), "hidden": NSNull(), "fillColor": NSNull(), "path": NSNull()]
+            r.isHidden = true
+            r.shadowOpacity = 0.3
+            r.shadowRadius = 1.5
+            r.shadowOffset = CGSize(width: 0, height: -1.5)
+            page.addSublayer(r)
         }
         focusLayer.actions = ["sublayers": NSNull(), "contents": NSNull(), "position": NSNull(), "bounds": NSNull()]
         layer!.addSublayer(focusLayer)
@@ -198,6 +220,11 @@ final class PageView: NSView {
         if scrolling {
             current.contents = nil
             previous.contents = nil
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            current.frame = bounds
+            previousRibbon.isHidden = true
+            CATransaction.commit()
             placeTiles()
             return
         }
@@ -210,11 +237,14 @@ final class PageView: NSView {
             previous.contents = current.contents
             previous.contentsScale = scale
             previous.frame = frame
+            previousRibbon.isHidden = ribbon.isHidden
+            placeRibbon(previousRibbon)
         }
         current.contents = img
         current.contentsScale = scale
         current.frame = frame
         CATransaction.commit()
+        updateRibbon()
         if dir != 0 {
             let timing = CAMediaTimingFunction(controlPoints: 0.215, 0.61, 0.355, 1) // ease-out cubic
             for (l, from, to) in [(current, frame.midX + dir * frame.width, frame.midX), (previous, frame.midX, frame.midX - dir * frame.width)] {
@@ -547,6 +577,7 @@ final class PageView: NSView {
             }
         }
         drawFocus()
+        updateRibbon()
         if let f = onFirstFrame {
             onFirstFrame = nil
             DispatchQueue.main.async { f(self) }
@@ -608,6 +639,117 @@ final class PageView: NSView {
             out += (tileAreas[key] ?? []).map { $0.offsetBy(dy: top) }
         }
         return out.filter { $0.rect.maxY > 0 && $0.rect.minY < bounds.height }
+    }
+
+    // MARK: Bookmarks
+
+    /// Takes the bookmarks from the document (after they were loaded or changed).
+    func reloadBookmarks() {
+        var n: UInt32 = 0
+        let p = forzac_bookmark_places(doc, &n)
+        bookmarks = (0..<Int(n)).map { p![$0] }
+        updateRibbon()
+    }
+
+    /// The range of text shown: the page in "Slide" (none on the end page), the screen in "Scroll" — from the line at the
+    /// top margin to the first line at or below the window's bottom, in a following chapter when the window reaches it.
+    private func shownRange() -> (ForzacLocator, ForzacLocator)? {
+        if scrolling {
+            return (lineAt(Float(offset + marginTop)), lineAt(Float(offset + bounds.height)))
+        }
+        if atEnd { return nil }
+        return (forzac_page_start(doc, page), forzac_page_end(doc, page))
+    }
+
+    /// The first line at or below height `y` of the current chapter's column, or of the chapters after it.
+    private func lineAt(_ y: Float) -> ForzacLocator {
+        var (c, y) = (chapter, y)
+        while c < forzac_chapter_count(doc) {
+            let at = forzac_flow_locator(doc, c, y)
+            if forzac_flow_y(doc, at) >= y - 0.5 { return at }
+            y = max(0, y - forzac_flow_height(doc, c) - Float(gap))
+            c += 1
+        }
+        return ForzacLocator(chapter: c, block: 0, offset: 0)
+    }
+
+    private var shownMarked: Bool {
+        guard !bookmarks.isEmpty, let (from, to) = shownRange() else { return false }
+        return forzac_bookmarked(doc, from, to)
+    }
+
+    /// `b`: sets a bookmark on the page (or screen) shown, or removes its bookmarks; the ribbon drops in or goes up.
+    func toggleBookmark() {
+        guard let (from, to) = shownRange() else { return }
+        let set = forzac_bookmark_toggle(doc, from, to)
+        reloadBookmarks()
+        onBookmarks?()
+        let rest = ribbon.position.y
+        let hidden = rest + ribbonLength // just out of the window
+        if set {
+            // Android's spring: damping ratio 0.5, stiffness 280.
+            let drop = CASpringAnimation(keyPath: "position.y")
+            drop.mass = 1
+            drop.stiffness = 280
+            drop.damping = 2 * 0.5 * sqrt(280)
+            drop.fromValue = hidden
+            drop.toValue = rest
+            drop.duration = drop.settlingDuration
+            ribbon.add(drop, forKey: "drop")
+        } else {
+            ribbon.isHidden = false
+            let rise = CABasicAnimation(keyPath: "position.y")
+            rise.fromValue = rest
+            rise.toValue = hidden
+            rise.duration = 0.2
+            rise.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            rise.fillMode = .forwards
+            rise.isRemovedOnCompletion = false
+            CATransaction.begin()
+            CATransaction.setCompletionBlock { [weak self] in
+                self?.ribbon.removeAnimation(forKey: "rise")
+                self?.updateRibbon()
+            }
+            ribbon.add(rise, forKey: "rise")
+            CATransaction.commit()
+        }
+    }
+
+    /// Removes the bookmark at `at` (from the list), without animation.
+    func removeBookmark(_ at: ForzacLocator) {
+        forzac_bookmark_remove(doc, at)
+        reloadBookmarks()
+        onBookmarks?()
+    }
+
+    /// Shows the current page's ribbon when it is marked, in the theme's colour, beside the text.
+    private func updateRibbon() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        placeRibbon(ribbon)
+        // A ribbon going up stays until it is gone; one dropping goes with its page.
+        if ribbon.animation(forKey: "rise") == nil { ribbon.isHidden = !shownMarked }
+        if ribbon.isHidden { ribbon.removeAnimation(forKey: "drop") }
+        CATransaction.commit()
+    }
+
+    /// Puts `r` at the top of its page layer, beside the text column.
+    private func placeRibbon(_ r: CAShapeLayer) {
+        var centre: Float = 0, corner: Float = 0
+        forzac_ribbon(doc, &centre, &corner)
+        // Layers are y up: the ribbon hangs from the top edge, its tuck above it.
+        r.frame = CGRect(x: CGFloat(centre) - ribbonWidth / 2, y: bounds.height - ribbonLength, width: ribbonWidth, height: ribbonLength + ribbonTuck)
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: 0, y: ribbonLength + ribbonTuck))
+        path.addLine(to: CGPoint(x: ribbonWidth, y: ribbonLength + ribbonTuck))
+        path.addLine(to: CGPoint(x: ribbonWidth, y: 0))
+        path.addLine(to: CGPoint(x: ribbonWidth / 2, y: ribbonTail))
+        path.addLine(to: CGPoint(x: 0, y: 0))
+        path.closeSubpath()
+        r.path = path
+        r.shadowPath = path
+        r.fillColor = color(palette.paper < 0x808080 ? 0xB5483F : 0x8E2F2A)
+        r.shadowColor = color(0x000000)
     }
 
     // MARK: Markers and links
@@ -750,8 +892,12 @@ final class PageView: NSView {
         let y = bounds.height - p.y
         // A marker or link in a table goes before the table.
         let hits = visibleAreas().filter { $0.rect.insetBy(dx: -4, dy: -4).contains(CGPoint(x: p.x, y: y)) }
+        var centre: Float = 0, corner: Float = 0
+        forzac_ribbon(doc, &centre, &corner)
         if let a = hits.first(where: { !$0.isViewable }) ?? hits.first {
             open(a)
+        } else if y < marginTop && p.x >= CGFloat(corner) {
+            toggleBookmark()
         } else if !scrolling {
             // The side thirds turn the page, as taps do on Android; the middle does nothing.
             if p.x < bounds.width / 3 { turn(-1) } else if p.x > bounds.width * 2 / 3 { turn(1) }
@@ -819,6 +965,7 @@ final class PageView: NSView {
         case 0x2C: onCommand?(.search)                                                        // /
         case 0x35: if focus == nil { clearMatch() } else { unfocus() }; onCommand?(.closePanels) // Esc
         case 0x2D: nextMatch(shift ? -1 : 1)                                                   // n N
+        case 0x0B: if shift { onCommand?(.bookmarks) } else { toggleBookmark() }                // b B
         case 0x0C: window?.performClose(nil)                                                  // q
         default: super.keyDown(with: e)
         }

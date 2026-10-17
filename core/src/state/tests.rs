@@ -38,7 +38,7 @@ fn positions_and_settings_survive_a_restart() {
     let store = Store::open(&file);
     assert_eq!(store.position(&b, Path::new("/books/a.fb2")), Some(at(1, 2, 5)));
     assert_eq!(store.setting("theme"), Some("Dark"));
-    let entry = &store.books[0];
+    let entry = &store.saved.books[0];
     assert_eq!((entry.title.as_str(), entry.authors.as_str()), ("Book\taaaa", "A. Author, B. Author"), "tabs survive escaping");
     assert!((entry.progress - 0.8125).abs() < 1e-4, "{} ≠ (4·10 + 2·10 + 5) / 80", entry.progress);
 }
@@ -71,7 +71,7 @@ fn writes_keep_what_another_process_wrote() {
     second.set_setting("text-size", "22").unwrap();
     first.set_setting("theme", "Sepia").unwrap();
     let store = Store::open(&file);
-    assert_eq!(store.books.len(), 2);
+    assert_eq!(store.saved.books.len(), 2);
     assert_eq!((store.setting("theme"), store.setting("text-size")), (Some("Sepia"), Some("22")));
 }
 
@@ -82,10 +82,39 @@ fn damaged_lines_are_skipped() {
     let good = "book\tid1\t0\t1\t2\t0.5\t100\t/a\tT\tA";
     std::fs::write(&file, format!("{HEADER}\ngarbage\nbook\tid2\tx\t1\t2\t0.5\t100\t/b\tT\tA\n{good}\nsetting\tonly-key\n")).unwrap();
     let store = Store::open(&file);
-    assert_eq!(store.books.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["id1"]);
-    assert!(store.settings.is_empty());
+    assert_eq!(store.saved.books.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["id1"]);
+    assert!(store.saved.settings.is_empty());
     std::fs::write(&file, "not a state file").unwrap();
-    assert!(Store::open(&file).books.is_empty());
+    assert!(Store::open(&file).saved.books.is_empty());
+}
+
+#[test]
+fn bookmarks_survive_a_restart_and_other_processes() {
+    let file = dir().join("state");
+    let (a, b) = (book("aaaa", &[4, 4]), book("bbbb", &[2]));
+    let mut first = Store::open(&file);
+    let mut second = Store::open(&file);
+    first.set_bookmarks(&a, &[at(1, 2, 5), at(0, 3, 0), at(1, 2, 5)]).unwrap();
+    second.set_bookmarks(&b, &[at(0, 1, 0)]).unwrap();
+    second.save_position(&b, Path::new("/b"), at(0, 0, 3), false).unwrap();
+    let store = Store::open(&file);
+    assert_eq!(store.bookmarks(&a), [at(0, 3, 0), at(1, 2, 5)], "in reading order, once each");
+    assert_eq!(store.bookmarks(&b), [at(0, 1, 0)]);
+    assert_eq!(store.bookmarks(&book("cccc", &[1])), []);
+    first.set_bookmarks(&a, &[]).unwrap();
+    let store = Store::open(&file);
+    assert_eq!(store.bookmarks(&a), []);
+    assert_eq!(store.bookmarks(&b), [at(0, 1, 0)], "another book's bookmarks are kept");
+    assert_eq!(store.saved.books.len(), 1);
+}
+
+#[test]
+fn damaged_bookmarks_are_skipped() {
+    let file = dir().join("state");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, format!("{HEADER}\nbookmark\tid1\t0\tx\t2\nbookmark\tid1\t0\t1\nbookmark\tid1\t1\t2\t3\n")).unwrap();
+    let store = Store::open(&file);
+    assert_eq!(store.bookmarks(&book("id1", &[1])), [at(1, 2, 3)]);
 }
 
 #[test]
@@ -128,9 +157,9 @@ fn a_thousand_books_read_and_write_quickly() {
     let file = dir().join("state");
     let mut store = Store::open(&file);
     store
-        .write(|books, _| {
+        .write(|saved| {
             for i in 0..1000 {
-                books.push(Entry {
+                saved.books.push(Entry {
                     id: format!("{i:016x}"),
                     path: PathBuf::from(format!("/home/reader/Books/Some author/A long book title number {i}.fb2.zip")),
                     title: format!("A long book title number {i}"),
@@ -148,7 +177,7 @@ fn a_thousand_books_read_and_write_quickly() {
     store.save_position(&book("aaaa", &[2]), Path::new("/a"), at(0, 1, 0), false).unwrap();
     let elapsed = t.elapsed();
     eprintln!("1000 books: read in {read:?}, read and one save in {elapsed:?}");
-    assert_eq!(store.books.len(), 1001);
+    assert_eq!(store.saved.books.len(), 1001);
     // The requirement is 10 ms on a Raspberry Pi 5 in a release build; debug builds are many times slower.
     assert!(elapsed.as_millis() < 200, "{elapsed:?}");
 }
@@ -171,5 +200,5 @@ fn a_finished_book_reads_100_percent() {
     store.save_position(&b, Path::new("/books/a.fb2"), at(1, 3, 0), true).unwrap();
     let store = Store::open(&file);
     assert_eq!(store.position(&b, Path::new("/books/a.fb2")), Some(at(1, 3, 0)), "the last page's start");
-    assert_eq!(store.books[0].progress, 1.0);
+    assert_eq!(store.saved.books[0].progress, 1.0);
 }

@@ -5,7 +5,7 @@
 // ~/Library/Application Support/Forzac/state.
 //
 // Spike flags: --measure (time to the first presented page), --png out.png (first page), --chapter N, --page N (the
-// page of the chapter --png saves), --panel settings|contents|note:ID|image:ID|table:CHAPTER.BLOCK and --theme N (with
+// page of the chapter --png saves), --panel settings|contents|bookmarks|note:ID|image:ID|table:CHAPTER.BLOCK and --theme N (with
 // --png: the whole window with that panel or view open, in that theme; --keys "ll+\t\r" then sends those keys to it
 // first, 0.3 s apart: letters, digits, + - =, \t Tab, \r Return, \e Esc, an upper-case letter with Shift), --scroll (in
 // "Scroll"); with any of them the reading state is neither read nor written.
@@ -20,7 +20,9 @@ k  h  ←  ↑  Shift+Space  PgUp    previous page (Scroll: k ↑ a line, ⌃U h
 m    pages or scroll
 ]  [    next / previous chapter
 g  G  Home  End    chapter start / end
-o    contents  (/ filters)
+o    contents  (/ filters, ← → tabs)
+b  ⌘D    bookmark the page, again to remove it
+B    bookmarks  (Return goes, d removes)
 Tab  Shift+Tab    notes, links, pictures and tables on the page, Return opens
 ⌃O  ⌘[    back after a jump
 s  ⌘,    settings
@@ -105,6 +107,12 @@ final class Reader: NSObject, NSWindowDelegate {
         help.layer?.cornerRadius = 12
         container.addSubview(help)
         view.onCommand = { [weak self] in self?.run($0) }
+        if let state { forzac_state_load_bookmarks(state, doc) }
+        view.reloadBookmarks()
+        view.onBookmarks = { [weak self] in
+            guard let self, let state = self.state else { return }
+            if !forzac_state_save_bookmarks(state, self.view.doc) { fputs("cannot save the reading state\n", stderr) }
+        }
         view.panelOpen = { [weak self] in self?.panelOpen ?? false }
         view.onMoved = { [weak self] in
             self?.saveTimer?.invalidate()
@@ -163,7 +171,8 @@ final class Reader: NSObject, NSWindowDelegate {
                 settingsSheet = sheet
             }
             if let sheet = settingsSheet { toggle(sheet) { sheet.open() } }
-        case .contents:
+        case .contents, .bookmarks:
+            let tab: ContentsTab = { if case .bookmarks = command { return .bookmarks } else { return .contents } }()
             if contents == nil {
                 let panel = ContentsPanel(view: view)
                 container.addSubview(panel)
@@ -177,7 +186,9 @@ final class Reader: NSObject, NSWindowDelegate {
                 panel.isHidden = true
                 contents = panel
             }
-            if let panel = contents { toggle(panel) { panel.open() } }
+            guard let panel = contents else { return }
+            // Open on another tab: that tab; else open or close, as `o` and `B` do.
+            if !panel.isHidden && panel.tab != tab { panel.show(tab) } else { toggle(panel) { panel.open(tab) } }
         case .search:
             if search == nil {
                 let panel = SearchPanel(view: view)
@@ -509,6 +520,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch panel {
         case "settings": return .settings
         case "contents": return .contents
+        case "bookmarks": return .bookmarks
         case _ where panel.hasPrefix("image:"): return .image(arg)
         case _ where panel.hasPrefix("table:"):
             let n = arg.split(separator: ".").compactMap { UInt32($0) }
@@ -538,6 +550,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func showSettings(_ sender: Any?) { key?.run(.settings) }
     @objc func showContents(_ sender: Any?) { key?.run(.contents) }
+    @objc func showBookmarks(_ sender: Any?) { key?.run(.bookmarks) }
+    @objc func toggleBookmark(_ sender: Any?) { key?.view.toggleBookmark() }
     @objc func find(_ sender: Any?) { key?.run(.search) }
     @objc func findNext(_ sender: Any?) { key?.view.nextMatch(1) }
     @objc func findPrevious(_ sender: Any?) { key?.view.nextMatch(-1) }
@@ -609,7 +623,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let fullScreen = NSMenuItem(title: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
         fullScreen.keyEquivalentModifierMask = [.control, .command]
         submenu("View", [
-            item("Contents", #selector(showContents(_:))), item("Pages or Scroll", #selector(toggleScroll(_:))), item("Next Theme", #selector(nextTheme(_:))),
+            item("Contents", #selector(showContents(_:))), item("Bookmarks", #selector(showBookmarks(_:))),
+            item("Pages or Scroll", #selector(toggleScroll(_:))), item("Next Theme", #selector(nextTheme(_:))),
             .separator(),
             item("Bigger Text", #selector(biggerText(_:)), "+"), item("Smaller Text", #selector(smallerText(_:)), "-"), item("Default Size", #selector(defaultText(_:)), "0"),
             .separator(), fullScreen,
@@ -617,6 +632,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         submenu("Go", [
             item("Next Chapter", #selector(nextChapter(_:))), item("Previous Chapter", #selector(previousChapter(_:))),
             item("Back", #selector(goBack(_:)), "["),
+            .separator(),
+            item("Bookmark", #selector(toggleBookmark(_:)), "d"),
         ])
         let window = NSMenuItem()
         let windowMenu = NSMenu(title: "Window")

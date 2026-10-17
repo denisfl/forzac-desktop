@@ -193,6 +193,12 @@ pub struct Document {
     contents_titles: Vec<CString>,
     /// The last string returned (a note title, a link's address), kept alive for the caller.
     text: CString,
+    /// The book's bookmarks in reading order, and what [`forzac_bookmark_places`] and [`forzac_bookmarks`] last
+    /// returned.
+    bookmarks: Vec<Locator>,
+    bookmark_places: Vec<ForzacLocator>,
+    bookmark_list: Vec<ForzacBookmark>,
+    bookmark_strings: Vec<CString>,
 }
 
 /// A page's contents as the C arrays a [`ForzacPage`] points to.
@@ -348,6 +354,10 @@ pub unsafe extern "C" fn forzac_open(path: *const c_char, error: *mut u32) -> *m
         contents: Vec::new(),
         contents_titles: Vec::new(),
         text: CString::default(),
+        bookmarks: Vec::new(),
+        bookmark_places: Vec::new(),
+        bookmark_list: Vec::new(),
+        bookmark_strings: Vec::new(),
     }))
 }
 
@@ -414,6 +424,17 @@ pub unsafe extern "C" fn forzac_page(doc: *mut Document, page: u32) -> ForzacPag
     doc.publish()
 }
 
+/// Where `page` of the current chapter ends: the next page's start, or the next chapter's start after the last page.
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`] after [`forzac_paginate`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_page_end(doc: *mut Document, page: u32) -> ForzacLocator {
+    let doc = unsafe { &mut *doc };
+    let Some(layout) = doc.layout(doc.current) else { return Locator::default().into() };
+    layout.page_end((page as usize).min(layout.pages.len() - 1)).into()
+}
+
 /// Where `page` of the current chapter starts.
 ///
 /// # Safety
@@ -446,6 +467,20 @@ pub unsafe extern "C" fn forzac_metrics(doc: *const Document, margin_top: *mut f
     unsafe {
         *margin_top = doc.style.map_or(0.0, |s| s.margin_top);
         *line_height = doc.typesetter.as_ref().map_or(0.0, |t| t.line_height);
+    }
+}
+
+/// Where the bookmark ribbon hangs: its centre, and the left edge of the corner (in the top margin, to the window's
+/// right edge) where a click sets or removes a bookmark.
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`] after [`forzac_paginate`]; `centre` and `corner` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_ribbon(doc: *const Document, centre: *mut f32, corner: *mut f32) {
+    let (c, k) = unsafe { &*doc }.style.map_or((0.0, f32::MAX), |s| s.ribbon());
+    unsafe {
+        *centre = c;
+        *corner = k;
     }
 }
 
@@ -742,6 +777,80 @@ unsafe fn copy_rects(rects: &[Rect], out: *mut ForzacRect, capacity: u32) -> u32
     n as u32
 }
 
+/// A bookmark as the list shows it: its place, the section it is in (null when there is none), the text from it and
+/// the share of the book before it.
+#[repr(C)]
+pub struct ForzacBookmark {
+    pub at: ForzacLocator,
+    pub section: *const c_char,
+    pub snippet: *const c_char,
+    pub position: f32,
+}
+
+/// Sets a bookmark at `from` when none lies in `[from, to)` (a page, a screen), else removes those that do; true when
+/// it set one. Save with [`forzac_state_save_bookmarks`].
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_bookmark_toggle(doc: *mut Document, from: ForzacLocator, to: ForzacLocator) -> bool {
+    crate::bookmarks::toggle(&mut unsafe { &mut *doc }.bookmarks, from.into(), to.into())
+}
+
+/// Removes the bookmark at `at`.
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_bookmark_remove(doc: *mut Document, at: ForzacLocator) {
+    let at = Locator::from(at);
+    unsafe { &mut *doc }.bookmarks.retain(|m| *m != at);
+}
+
+/// Whether a bookmark lies in `[from, to)`.
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_bookmarked(doc: *const Document, from: ForzacLocator, to: ForzacLocator) -> bool {
+    crate::bookmarks::marked(&unsafe { &*doc }.bookmarks, from.into(), to.into())
+}
+
+/// The bookmarks' places in reading order (`*count` of them), valid until the next call of this function on `doc`.
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`]; `count` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_bookmark_places(doc: *mut Document, count: *mut u32) -> *const ForzacLocator {
+    let doc = unsafe { &mut *doc };
+    doc.bookmark_places = doc.bookmarks.iter().map(|&l| l.into()).collect();
+    unsafe { *count = doc.bookmark_places.len() as u32 };
+    doc.bookmark_places.as_ptr()
+}
+
+/// The bookmarks as the list shows them, in reading order; valid until the next call of this function on `doc`.
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`]; `count` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_bookmarks(doc: *mut Document, count: *mut u32) -> *const ForzacBookmark {
+    let doc = unsafe { &mut *doc };
+    let entries = crate::bookmarks::entries(&doc.book, &doc.bookmarks);
+    doc.bookmark_strings = entries.iter().flat_map(|e| [cstring(e.section.as_deref().unwrap_or("")), cstring(&e.snippet)]).collect();
+    doc.bookmark_list = entries
+        .iter()
+        .zip(doc.bookmark_strings.chunks(2))
+        .map(|(e, s)| ForzacBookmark {
+            at: e.at.into(),
+            section: if e.section.is_some() { s[0].as_ptr() } else { std::ptr::null() },
+            snippet: s[1].as_ptr(),
+            position: e.position,
+        })
+        .collect();
+    unsafe { *count = doc.bookmark_list.len() as u32 };
+    doc.bookmark_list.as_ptr()
+}
+
 /// The document's book, for searching on another thread; release it with [`forzac_book_release`].
 pub struct BookRef(Arc<Book>);
 
@@ -1033,6 +1142,26 @@ pub unsafe extern "C" fn forzac_state_recent(state: *mut State, n: u32, count: *
         .collect();
     unsafe { *count = state.recent.len() as u32 };
     state.recent.as_ptr()
+}
+
+/// Takes the document's bookmarks from `state`.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`], `doc` from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_state_load_bookmarks(state: *const State, doc: *mut Document) {
+    let (state, doc) = unsafe { (&*state, &mut *doc) };
+    doc.bookmarks = state.store.bookmarks(&doc.book);
+}
+
+/// Remembers the document's bookmarks in `state`; false when the file cannot be written.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`], `doc` from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_state_save_bookmarks(state: *mut State, doc: *const Document) -> bool {
+    let (state, doc) = unsafe { (&mut *state, &*doc) };
+    state.store.set_bookmarks(&doc.book, &doc.bookmarks).is_ok()
 }
 
 /// The settings remembered in `state` (defaults for anything missing or unknown); the defaults for a null `state`.

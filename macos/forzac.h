@@ -101,9 +101,13 @@ uint32_t forzac_paginate(ForzacDocument *doc, uint32_t chapter, float width, flo
 // Pages of the current chapter. A ForzacPage is valid until the next call on the same document.
 ForzacPage forzac_page(ForzacDocument *doc, uint32_t page);
 ForzacLocator forzac_page_start(ForzacDocument *doc, uint32_t page);
+// The next page's start; after the chapter's last page the next chapter's start.
+ForzacLocator forzac_page_end(ForzacDocument *doc, uint32_t page);
 uint32_t forzac_page_of(ForzacDocument *doc, ForzacLocator at);
 // The current style's top margin and line height.
 void forzac_metrics(const ForzacDocument *doc, float *margin_top, float *line_height);
+// The bookmark ribbon's centre and the left edge of the corner (in the top margin) where a click toggles a bookmark.
+void forzac_ribbon(const ForzacDocument *doc, float *centre, float *corner);
 // "Scroll": a chapter as one continuous column (y from the top of the text).
 float forzac_flow_height(ForzacDocument *doc, uint32_t chapter);
 ForzacPage forzac_flow(ForzacDocument *doc, uint32_t chapter, float y0, float y1);
@@ -138,6 +142,21 @@ uint32_t forzac_marks(ForzacDocument *doc, uint32_t page, ForzacLocator from, Fo
 uint32_t forzac_flow_marks(ForzacDocument *doc, uint32_t chapter, float y0, float y1, ForzacLocator from, ForzacLocator to,
                            ForzacRect *out, uint32_t capacity);
 void forzac_close(ForzacDocument *doc);
+
+// Bookmarks, held by the document (load and save them with the state).
+typedef struct {
+    ForzacLocator at;
+    const char *section;    // NULL when there is none
+    const char *snippet;    // the text from it
+    float position;         // share of the book before it, 0-1
+} ForzacBookmark;
+// Sets one at `from` when none lies in [from, to), else removes those that do; true when it set one.
+bool forzac_bookmark_toggle(ForzacDocument *doc, ForzacLocator from, ForzacLocator to);
+void forzac_bookmark_remove(ForzacDocument *doc, ForzacLocator at);
+bool forzac_bookmarked(const ForzacDocument *doc, ForzacLocator from, ForzacLocator to);
+// In reading order; each valid until the next call of the same function.
+const ForzacLocator *forzac_bookmark_places(ForzacDocument *doc, uint32_t *count);
+const ForzacBookmark *forzac_bookmarks(ForzacDocument *doc, uint32_t *count);
 
 // Search: a handle to the book for another thread, then the matches (owned until freed).
 typedef struct ForzacBook ForzacBook;
@@ -181,6 +200,8 @@ bool forzac_state_position(const ForzacState *state, const ForzacDocument *doc, 
 bool forzac_state_save_position(ForzacState *state, const ForzacDocument *doc, ForzacLocator at, bool finished);
 // Valid until the next call on `state`.
 const ForzacRecent *forzac_state_recent(ForzacState *state, uint32_t n, uint32_t *count);
+void forzac_state_load_bookmarks(const ForzacState *state, ForzacDocument *doc);
+bool forzac_state_save_bookmarks(ForzacState *state, const ForzacDocument *doc);
 ForzacSettings forzac_state_settings(const ForzacState *state);
 bool forzac_state_save_settings(ForzacState *state, const ForzacSettings *settings);
 void forzac_state_close(ForzacState *state);

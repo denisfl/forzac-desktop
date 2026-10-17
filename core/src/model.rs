@@ -77,6 +77,69 @@ impl Book {
     }
 }
 
+impl Book {
+    /// The text of `[from, to)`, at most `limit` characters: blocks joined by line breaks (a table row's cells too),
+    /// without note markers and soft hyphens, no-break spaces as spaces, trimmed.
+    pub fn text(&self, from: Locator, to: Locator, limit: usize) -> String {
+        let mut out = String::new();
+        let mut count = 0;
+        'chapters: for (c, chapter) in self.chapters.iter().enumerate().skip(from.chapter) {
+            for (b, block) in chapter.blocks.iter().enumerate() {
+                let here = Locator { chapter: c, block: b, offset: 0 };
+                if (c, b) < (from.chapter, from.block) {
+                    continue;
+                }
+                if here >= to {
+                    break 'chapters;
+                }
+                // The block's text and the byte ranges of its note markers.
+                let (text, notes): (String, Vec<(usize, usize)>) = match block {
+                    Block::TableRow { table, row } => {
+                        let cells = &table.rows[*row];
+                        let starts = table.cell_starts(*row);
+                        let text = cells.iter().map(|c| c.text.text.as_str()).collect::<Vec<_>>().join("\n");
+                        let notes =
+                            cells.iter().zip(&starts).flat_map(|(c, &s)| note_ranges(&c.text).map(move |(a, b)| (a + s, b + s))).collect();
+                        (text, notes)
+                    }
+                    b => match b.text() {
+                        Some(t) => (t.text.clone(), note_ranges(t).collect()),
+                        None => continue,
+                    },
+                };
+                let start = if (c, b) == (from.chapter, from.block) { from.offset } else { 0 };
+                let end = if (c, b) == (to.chapter, to.block) { to.offset.min(text.len()) } else { text.len() };
+                if start >= end {
+                    continue;
+                }
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                for (i, ch) in text.char_indices() {
+                    if i < start || i >= end || notes.iter().any(|&(a, b)| i >= a && i < b) {
+                        continue;
+                    }
+                    match ch {
+                        '\u{AD}' | '\r' => continue,
+                        '\u{A0}' | '\u{202F}' => out.push(' '),
+                        ch => out.push(ch),
+                    }
+                    count += 1;
+                    if count >= limit {
+                        break 'chapters;
+                    }
+                }
+            }
+        }
+        out.trim().to_owned()
+    }
+}
+
+/// The byte ranges of `t`'s note markers.
+fn note_ranges(t: &StyledText) -> impl Iterator<Item = (usize, usize)> + '_ {
+    t.styles.iter().filter(|s| s.style == Style::NoteRef).map(|s| (s.start, s.end))
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Chapter {
     pub title: Option<String>,

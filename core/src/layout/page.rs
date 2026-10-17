@@ -84,6 +84,11 @@ impl ChapterLayout {
         Locator { chapter: self.chapter, block: s.block, offset }
     }
 
+    /// Where page `i` ends: the next page's start, or the next chapter's start after the last page.
+    pub fn page_end(&self, i: usize) -> Locator {
+        if i + 1 < self.pages.len() { self.page_start(i + 1) } else { Locator { chapter: self.chapter + 1, ..Locator::default() } }
+    }
+
     /// The page that contains `at` (the last one starting at or before it).
     pub fn page_of(&self, at: Locator) -> usize {
         (0..self.pages.len()).rev().find(|&i| self.page_start(i) <= at).unwrap_or(0)

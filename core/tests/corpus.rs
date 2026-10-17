@@ -204,3 +204,29 @@ fn tables_for_the_view_are_fast() {
     );
     assert!(slowest.0 <= budget, "{:.1} ms per 100 rows over {budget} ms", slowest.0);
 }
+
+#[test]
+fn bookmarks_list_and_save_quickly() {
+    let Some(books) = corpus() else { return };
+    let file = std::env::temp_dir().join(format!("forzac-corpus-state-{}", std::process::id()));
+    let mut store = forzac_core::state::Store::open(&file);
+    let (mut list, mut save) = ((0, String::new()), (0, String::new()));
+    for path in &books {
+        let Ok(book) = forzac_core::open(path) else { continue };
+        // 200 bookmarks spread over the book's blocks.
+        let blocks: Vec<forzac_core::Locator> = (0..book.chapters.len())
+            .flat_map(|c| (0..book.chapters[c].blocks.len()).map(move |b| forzac_core::Locator { chapter: c, block: b, offset: 0 }))
+            .collect();
+        let marks: Vec<_> = (0..200).map(|i| blocks[i * blocks.len() / 200]).collect();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let t = std::time::Instant::now();
+        assert_eq!(forzac_core::bookmarks::entries(&book, &marks).len(), 200);
+        list = list.max((t.elapsed().as_micros(), name.clone()));
+        let t = std::time::Instant::now();
+        store.set_bookmarks(&book, &marks).unwrap();
+        save = save.max((t.elapsed().as_micros(), name));
+    }
+    let _ = std::fs::remove_file(&file);
+    println!("200 bookmarks: listed in at most {} µs ({}), saved in at most {} µs ({})", list.0, list.1, save.0, save.1);
+    assert!(list.0 <= 50_000 && save.0 <= 10_000, "over 50 ms to list or 10 ms to save");
+}

@@ -5,6 +5,8 @@
 //! boundary only draws.
 //!
 //! Note markers, links, wide images and tables of the page can be focused (`Tab`) and opened; jumps keep a back stack.
+//!
+//! A marked page (or screen) shows a bookmark ribbon over it, which drops in when the reader sets the bookmark.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -79,6 +81,19 @@ const PILL_FADE: i64 = 150_000;
 const PILL_PAGES: i32 = 2;
 const PILL_TEXT: &str = "← Back · Ctrl+O";
 
+/// The bookmark ribbon (Android's): its width, the length below the window's top edge, the part tucked above it, the
+/// swallowtail's depth; bordeaux on light and on dark themes.
+const RIBBON_WIDTH: f32 = 16.0;
+const RIBBON_LENGTH: f32 = 44.0;
+const RIBBON_TUCK: f32 = 12.0;
+const RIBBON_TAIL: f32 = RIBBON_WIDTH * 0.5625;
+const RIBBON_LIGHT: u32 = 0x8E2F2A;
+const RIBBON_DARK: u32 = 0xB5483F;
+/// The drop's spring (Android's: damping ratio 0.5, stiffness 280 s⁻²) and the rise's duration, µs.
+const RIBBON_DAMPING: f32 = 0.5;
+const RIBBON_STIFFNESS: f32 = 280.0;
+const RIBBON_RISE: i64 = 200_000;
+
 /// What opening a note marker, a link, an image or a table asks of the window (jumps inside the book the view does
 /// itself).
 pub enum Open {
@@ -127,6 +142,9 @@ struct Prefetched {
 /// Opens a note or an external link for the view.
 type OnOpen = Box<dyn Fn(Open)>;
 
+/// Saves the bookmarks after they change.
+type OnBookmarks = Box<dyn Fn(&[Locator])>;
+
 /// Runs once, after the first frame with a page is presented.
 type FirstFrame = Box<dyn FnOnce(&PageView)>;
 
@@ -136,8 +154,18 @@ struct Pill {
     turns: i32,
 }
 
+/// The ribbon dropping in (a bookmark set) or going up (removed) on the page or screen `range`; `start` is the frame
+/// time of its first frame.
+struct Ribbon {
+    drop: bool,
+    range: (Locator, Locator),
+    start: Option<i64>,
+}
+
 struct Turn {
     from: gsk::RenderNode,
+    /// Whether the page sliding away has a bookmark: its ribbon slides with it.
+    from_marked: bool,
     /// +1 forward (the new page comes from the right), −1 back.
     dir: f32,
     /// Frame time of the first frame of the animation; `None` until it is drawn. The frame clock's time at the key
@@ -194,6 +222,9 @@ pub struct State {
     fade: Option<(gsk::RenderNode, Option<i64>)>,
     /// The matches of the last search gone to, and the one highlighted (`n`/`N` move it; `None`: no highlight).
     search: Option<(Rc<Vec<Hit>>, Option<usize>)>,
+    /// The book's bookmarks in reading order, and the ribbon's movement after one was set or removed.
+    bookmarks: Vec<Locator>,
+    ribbon: Option<Ribbon>,
     turn: Option<Turn>,
     mode: Mode,
     /// "Scroll": the column's offset, tiles and movement.
@@ -206,7 +237,7 @@ mod imp {
     #[derive(Default)]
     pub struct PageView {
         pub state: RefCell<Option<State>>,
-        /// Frame times (µs) during page turns and the refresh interval, for `--turns`.
+        /// Frame times (µs) during page turns (and scrolls, ribbon drops) and the refresh interval, for `--turns`.
         pub frames: RefCell<Vec<Vec<i64>>>,
         pub refresh: std::cell::Cell<i64>,
         pub on_first_frame: RefCell<Option<FirstFrame>>,
@@ -214,6 +245,8 @@ mod imp {
         pub on_moved: RefCell<Option<Box<dyn Fn()>>>,
         /// Called to open a note or an external link.
         pub on_open: RefCell<Option<OnOpen>>,
+        /// Called with the bookmarks after they change (to save them).
+        pub on_bookmarks: RefCell<Option<OnBookmarks>>,
         /// Scrolling not yet turned into a page turn, and whether this touchpad swipe already turned one.
         pub scroll: std::cell::Cell<(f64, bool)>,
         /// When the page last changed, so background work can wait for a pause in reading.
@@ -299,6 +332,8 @@ impl PageView {
             end: None,
             fade: None,
             search: None,
+            bookmarks: Vec::new(),
+            ribbon: None,
             turn: None,
             mode: Mode::Slide,
             column: scroll::Column::default(),
@@ -466,8 +501,11 @@ impl PageView {
                 |a: &&Area| x >= a.rect.x - 4.0 && x <= a.rect.x + a.rect.w + 4.0 && y >= a.rect.y - 4.0 && y <= a.rect.y + a.rect.h + 4.0;
             areas.iter().filter(hit).min_by_key(|a| a.target.is_viewable()).map(|a| a.target.clone())
         });
+        let corner = self.with(|s| s.style.is_some_and(|st| y < st.margin_top && x >= st.ribbon().1));
         if let Some(t) = target {
             self.open(t);
+        } else if corner {
+            self.toggle_bookmark();
         } else if self.mode() == Mode::Slide {
             // The side thirds turn the page, as taps do on Android; the middle does nothing.
             if x < w / 3.0 {
@@ -621,6 +659,119 @@ impl PageView {
         });
         self.moved();
         self.queue_draw();
+    }
+
+    /// Sets the book's bookmarks (from the reading state) without saving them.
+    pub fn set_bookmarks(&self, marks: Vec<Locator>) {
+        self.with(|s| s.bookmarks = marks);
+        self.queue_draw();
+    }
+
+    /// Calls `f` with the bookmarks whenever they change.
+    pub fn connect_bookmarks(&self, f: impl Fn(&[Locator]) + 'static) {
+        *self.imp().on_bookmarks.borrow_mut() = Some(Box::new(f));
+    }
+
+    /// The bookmarks as the list shows them.
+    pub fn bookmark_entries(&self) -> Vec<forzac_core::bookmarks::Entry> {
+        self.with(|s| forzac_core::bookmarks::entries(&s.book, &s.bookmarks))
+    }
+
+    /// `b`: sets a bookmark on the page (or screen) shown, or removes its bookmarks; the ribbon drops in or goes up.
+    pub fn toggle_bookmark(&self) {
+        let h = WidgetExt::height(self) as f32;
+        let changed = self.with(|s| {
+            let range = Self::shown_range(s, h)?;
+            let drop = forzac_core::bookmarks::toggle(&mut s.bookmarks, range.0, range.1);
+            s.ribbon = Some(Ribbon { drop, range, start: None });
+            Some(())
+        });
+        if changed.is_none() {
+            return;
+        }
+        self.saved_bookmarks();
+        self.imp().frames.borrow_mut().push(Vec::new());
+        self.add_tick_callback(|view, clock| {
+            view.queue_draw();
+            // Frame times for `--toggles`, as for page turns.
+            if let Some(frames) = view.imp().frames.borrow_mut().last_mut() {
+                frames.push(clock.frame_time());
+            }
+            if view.with(|s| s.ribbon.is_some()) { glib::ControlFlow::Continue } else { glib::ControlFlow::Break }
+        });
+    }
+
+    /// Removes the bookmark at `at` (from the list), without animation.
+    pub fn remove_bookmark(&self, at: Locator) {
+        self.with(|s| s.bookmarks.retain(|m| *m != at));
+        self.saved_bookmarks();
+        self.queue_draw();
+    }
+
+    fn saved_bookmarks(&self) {
+        let marks = self.with(|s| s.bookmarks.clone());
+        if let Some(f) = self.imp().on_bookmarks.borrow().as_ref() {
+            f(&marks);
+        }
+    }
+
+    /// The range of text shown: the page in "Slide" (none on the end page), the screen in "Scroll".
+    fn shown_range(s: &mut State, h: f32) -> Option<(Locator, Locator)> {
+        if s.mode == Mode::Scroll {
+            return Self::screen_range(s, h);
+        }
+        let layout = s.layout.as_ref().filter(|_| !s.at_end)?;
+        Some((layout.page_start(s.page), layout.page_end(s.page)))
+    }
+
+    fn shown_marked(s: &mut State, h: f32) -> bool {
+        Self::shown_range(s, h).is_some_and(|(from, to)| forzac_core::bookmarks::marked(&s.bookmarks, from, to))
+    }
+
+    /// Where the ribbon hangs now: 0 at rest, negative while it moves above; `None` when it is not drawn. Ends a
+    /// movement that has finished or whose page is no longer shown.
+    fn ribbon_offset(s: &mut State, h: f32, now: i64, refresh: i64) -> Option<f32> {
+        let marked = Self::shown_marked(s, h);
+        let Some(ribbon) = &mut s.ribbon else { return marked.then_some(0.0) };
+        // Just out of the window: every frame of the movement changes what is shown.
+        let hidden = -RIBBON_LENGTH;
+        // The first frame already moves, as a scroll movement's does: a frame that draws what is on screen presents
+        // nothing and the next one comes a refresh late.
+        let t = (now - *ribbon.start.get_or_insert(now - refresh)) as f32 / 1e6;
+        let offset = if ribbon.drop {
+            // A damped spring from `hidden` to rest (underdamped: the small bounce).
+            let w = RIBBON_STIFFNESS.sqrt();
+            let decay = RIBBON_DAMPING * w;
+            let wd = w * (1.0 - RIBBON_DAMPING * RIBBON_DAMPING).sqrt();
+            let envelope = (-decay * t).exp();
+            (envelope * -hidden >= 0.5).then(|| hidden * envelope * ((wd * t).cos() + decay / wd * (wd * t).sin()))
+        } else {
+            let p = t * 1e6 / RIBBON_RISE as f32;
+            (p < 1.0).then_some(hidden * p * p)
+        };
+        if offset.is_none() || Self::shown_range(s, h) != s.ribbon.as_ref().map(|r| r.range) {
+            s.ribbon = None;
+            return marked.then_some(0.0);
+        }
+        offset
+    }
+
+    /// The ribbon hanging `offset` below its rest, in `theme`, beside the text column of `style`.
+    fn draw_ribbon(snapshot: &gtk::Snapshot, theme: usize, style: &PageStyle, offset: f32) {
+        let palette = THEMES[theme];
+        let colour = rgba(if palette.paper < 0x808080 { RIBBON_DARK } else { RIBBON_LIGHT });
+        let x = style.ribbon().0 - RIBBON_WIDTH / 2.0;
+        let (top, bottom) = (offset - RIBBON_TUCK, offset + RIBBON_LENGTH);
+        let path = gsk::PathBuilder::new();
+        path.move_to(x, top);
+        path.line_to(x + RIBBON_WIDTH, top);
+        path.line_to(x + RIBBON_WIDTH, bottom);
+        path.line_to(x + RIBBON_WIDTH / 2.0, bottom - RIBBON_TAIL);
+        path.line_to(x, bottom);
+        path.close();
+        snapshot.push_shadow(&[gsk::Shadow::new(gdk::RGBA::new(0.0, 0.0, 0.0, 0.3), 0.0, 1.5, 3.0)]);
+        snapshot.append_fill(&path.to_path(), gsk::FillRule::Winding, &colour);
+        snapshot.pop();
     }
 
     /// The body text's line height.
@@ -959,28 +1110,38 @@ impl PageView {
 
     fn draw_page(&self, snapshot: &gtk::Snapshot) {
         let (w, h) = (WidgetExt::width(self) as f32, WidgetExt::height(self) as f32);
-        let now = WidgetExt::frame_clock(self).map_or(0, |c| c.frame_time());
+        let clock = WidgetExt::frame_clock(self);
+        let now = clock.as_ref().map_or(0, |c| c.frame_time());
+        let refresh = clock.and_then(|c| c.current_timings()).map_or(8_333, |t| t.refresh_interval()).clamp(4_000, 17_000);
         self.with(|s| {
             snapshot.append_color(&rgba(THEMES[s.theme].paper), &graphene::Rect::new(0.0, 0.0, w, h));
             if s.mode == Mode::Scroll {
                 Self::draw_column(s, snapshot, h);
+                if let (Some(offset), Some(style)) = (Self::ribbon_offset(s, h, now, refresh), &s.style) {
+                    Self::draw_ribbon(snapshot, s.theme, style, offset);
+                }
                 return;
             }
             let current = if s.at_end { Self::end_node(s) } else { Self::page_node(s, s.page) };
             let Some(current) = current else { return };
             let progress: f32 =
                 s.turn.as_mut().map(|t| ((now - *t.start.get_or_insert(now)) as f32 / TURN as f32).clamp(0.0, 1.0)).unwrap_or(1.0);
+            let style = s.style;
             match &s.turn {
                 Some(t) if progress < 1.0 => {
                     let p = 1.0 - (1.0 - progress).powi(3); // ease-out cubic
-                    snapshot.save();
-                    snapshot.translate(&graphene::Point::new(-t.dir * p * w, 0.0));
-                    snapshot.append_node(&t.from);
-                    snapshot.restore();
-                    snapshot.save();
-                    snapshot.translate(&graphene::Point::new(t.dir * (1.0 - p) * w, 0.0));
-                    snapshot.append_node(&current);
-                    snapshot.restore();
+                    let (dir, from, from_marked) = (t.dir, t.from.clone(), t.from_marked);
+                    let marked = Self::shown_marked(s, h);
+                    // Each page with its ribbon.
+                    for (node, ribbon, x) in [(&from, from_marked, -dir * p * w), (&current, marked, dir * (1.0 - p) * w)] {
+                        snapshot.save();
+                        snapshot.translate(&graphene::Point::new(x, 0.0));
+                        snapshot.append_node(node);
+                        if let (true, Some(style)) = (ribbon, &style) {
+                            Self::draw_ribbon(snapshot, s.theme, style, 0.0);
+                        }
+                        snapshot.restore();
+                    }
                 }
                 _ if s.at_end => {
                     s.turn = None;
@@ -989,6 +1150,9 @@ impl PageView {
                 _ => {
                     s.turn = None;
                     snapshot.append_node(&current);
+                    if let (Some(offset), Some(style)) = (Self::ribbon_offset(s, h, now, refresh), &style) {
+                        Self::draw_ribbon(snapshot, s.theme, style, offset);
+                    }
                     if let (Some((from, to)), Some(layout), Some(style)) = (Self::highlighted(s, s.chapter), &s.layout, &s.style) {
                         Self::draw_marks(s, snapshot, &layout.marks(s.page, style, from, to), 0.0);
                     }
@@ -1023,14 +1187,16 @@ impl PageView {
             self.scroll_by(delta as f32 * (h - self.line_height()));
             return;
         }
+        let h = WidgetExt::height(self) as f32;
         let animate = self.with(|s| {
+            let from_marked = Self::shown_marked(s, h);
             let Some(layout) = &s.layout else { return false };
             if s.at_end {
                 // Back from the end page to the last page of the text; forward does nothing.
                 if delta > 0 {
                     return false;
                 }
-                s.turn = s.end.clone().map(|from| Turn { from, dir: -1.0, start: None });
+                s.turn = s.end.clone().map(|from| Turn { from, from_marked: false, dir: -1.0, start: None });
                 s.at_end = false;
                 return true;
             }
@@ -1042,7 +1208,7 @@ impl PageView {
             if delta > 0 && target as usize >= layout.pages.len() && s.chapter + 1 == s.book.chapters.len() {
                 // Past the book's last page: the end page; the position stays at the last page.
                 s.at_end = true;
-                s.turn = from.map(|from| Turn { from, dir: 1.0, start: None });
+                s.turn = from.map(|from| Turn { from, from_marked, dir: 1.0, start: None });
                 s.focus = None;
                 return true;
             }
@@ -1059,7 +1225,7 @@ impl PageView {
             } else {
                 return false;
             }
-            s.turn = from.map(|from| Turn { from, dir: delta.signum() as f32, start: None });
+            s.turn = from.map(|from| Turn { from, from_marked, dir: delta.signum() as f32, start: None });
             s.focus = None;
             true
         });

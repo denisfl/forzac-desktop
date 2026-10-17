@@ -68,6 +68,8 @@ impl Theme {
              .forzac-panel .keys {{ outline: 2px solid alpha({ink}, 0.55); }}
              .forzac-panel .dot {{ background-color: {ink}; }}
              .forzac-panel .snippet {{ color: alpha({ink}, 0.78); }}
+             .forzac-panel button.tab {{ color: {muted}; }}
+             .forzac-panel button.tab.selected {{ color: {ink}; }}
              .forzac-panel .search {{ background-color: {sheet}; border: 1px solid {line}; }}
              .forzac-panel .search text placeholder {{ color: {muted}; }}
              .forzac-panel button.viewer-close {{ background-color: {sheet}; box-shadow: 0 1px 4px alpha(black, 0.12); }}
@@ -106,6 +108,12 @@ const STATIC_CSS: &str = "
     .forzac-panel .keys { outline-offset: 3px; border-radius: 12px; }
     .forzac-panel .note-label { font-size: 12px; font-weight: 500; letter-spacing: 0.72px; }
     .forzac-panel .panel-title { font-size: 17px; font-weight: 600; }
+    .forzac-panel button.tab { font-size: 17px; font-weight: 500; padding: 10px 12px; border-radius: 8px; }
+    .forzac-panel button.tab.selected { font-weight: 600; }
+    .forzac-panel .bookmark-section { font-family: 'PT Serif'; font-size: 16px; }
+    .forzac-panel .bookmark-snippet { font-size: 13px; }
+    .forzac-panel .empty-title { font-family: 'PT Serif'; font-size: 20px; }
+    .forzac-panel .empty-body { font-size: 14px; }
     .forzac-panel .book-title { font-family: 'PT Serif'; font-size: 18px; font-weight: 600; }
     .forzac-panel .book-meta, .forzac-panel .position { font-size: 13px; font-feature-settings: 'tnum'; }
     .forzac-panel .entry { font-family: 'PT Serif'; font-size: 16px; }
@@ -146,12 +154,26 @@ pub(crate) fn grabber() -> gtk::Box {
     grabber
 }
 
+/// A tab of the contents panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tab {
+    Contents,
+    Bookmarks,
+}
+
+const TABS: [(Tab, &str); 2] = [(Tab::Contents, "Contents"), (Tab::Bookmarks, "Bookmarks")];
+
 /// The contents panel of a reader window, laid out as the Android contents (`TocScreen.kt`, the design's
-/// `Toc.dc.html`): a title with a close button, a filter field, the book, then the entries with their position in the
-/// book. Built once, hidden (a list view: only the rows on screen exist); `open` shows it with the current entry
-/// selected. `Enter` jumps (remembered for `Ctrl+O`), `/` filters, `Esc` or `o` closes.
+/// `Toc.dc.html`): the tabs with a close button, a filter field, the book, then the entries with their position in the
+/// book, or the bookmarks. Built once, hidden (a list view: only the rows on screen exist); `open` shows it with the
+/// current entry selected. `Enter` jumps (remembered for `Ctrl+O`), `/` filters, `←`/`→` switch tabs, `d` removes a
+/// bookmark, `Esc` or `o` closes.
 pub struct Contents {
     panel: gtk::Box,
+    tabs: Vec<gtk::Button>,
+    tab: Cell<Tab>,
+    stack: gtk::Stack,
+    field: gtk::Box,
     list: gtk::ListView,
     search: gtk::Text,
     selection: gtk::SingleSelection,
@@ -161,6 +183,12 @@ pub struct Contents {
     current: Rc<Cell<usize>>,
     /// "author · N% read".
     meta: gtk::Label,
+    /// The bookmarks tab: the list (or the hint when there are none) and the entries it shows.
+    marks: gtk::ListView,
+    marks_selection: gtk::SingleSelection,
+    marks_model: gtk::StringList,
+    marks_page: gtk::Stack,
+    entries: RefCell<Vec<forzac_core::bookmarks::Entry>>,
 }
 
 impl Contents {
@@ -243,16 +271,25 @@ impl Contents {
         panel.set_halign(gtk::Align::End);
         panel.set_visible(false);
 
-        // Title and close.
+        // Tabs and close.
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        header.set_margin_start(20);
+        header.set_margin_start(8);
         header.set_margin_end(8);
-        header.set_margin_top(12);
-        let title = gtk::Label::new(Some("Contents"));
-        title.add_css_class("panel-title");
-        title.set_xalign(0.0);
-        title.set_hexpand(true);
-        header.append(&title);
+        header.set_margin_top(4);
+        let tabs: Vec<gtk::Button> = TABS
+            .iter()
+            .map(|(_, name)| {
+                let tab = gtk::Button::with_label(name);
+                tab.add_css_class("tab");
+                tab.set_focusable(false);
+                tab.set_valign(gtk::Align::Center);
+                header.append(&tab);
+                tab
+            })
+            .collect();
+        let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        spacer.set_hexpand(true);
+        header.append(&spacer);
         let close = gtk::Button::new();
         close.set_child(Some(&Icon::new(icons::X, 22)));
         close.set_size_request(44, 44);
@@ -304,7 +341,12 @@ impl Contents {
 
         let scrolled = gtk::ScrolledWindow::builder().child(&list).hscrollbar_policy(gtk::PolicyType::Never).vexpand(true).build();
         scrolled.set_margin_top(6);
-        panel.append(&scrolled);
+        let stack = gtk::Stack::new();
+        stack.add_named(&scrolled, Some("contents"));
+        let (marks, marks_selection, marks_model, marks_page) = bookmark_list();
+        stack.add_named(&marks_page, Some("bookmarks"));
+        stack.set_vexpand(true);
+        panel.append(&stack);
         overlay.add_overlay(&panel);
         // Shown once, invisibly: styles, the interface font and the rows are ready before the reader presses `o`.
         panel.set_width_request(panel_width(overlay.width()));
@@ -322,6 +364,10 @@ impl Contents {
 
         let contents = Rc::new(Contents {
             panel,
+            tabs: tabs.clone(),
+            tab: Cell::new(Tab::Contents),
+            stack,
+            field,
             list: list.clone(),
             search: search.clone(),
             selection: selection.clone(),
@@ -329,6 +375,11 @@ impl Contents {
             places,
             current,
             meta,
+            marks: marks.clone(),
+            marks_selection,
+            marks_model,
+            marks_page: marks_page.clone(),
+            entries: RefCell::default(),
         });
         let weak = Rc::downgrade(&contents);
         let view = view.downgrade();
@@ -340,6 +391,54 @@ impl Contents {
 
         let w = with.clone();
         close.connect_clicked(move |_| w(&|c, v| c.close(v)));
+        for (tab, (t, _)) in tabs.iter().zip(TABS) {
+            let w = with.clone();
+            tab.connect_clicked(move |_| w(&|c, v| c.show(v, t)));
+        }
+        let w = with.clone();
+        marks.connect_activate(move |_, _| w(&|c, v| c.jump_to_bookmark(v)));
+        let w = with.clone();
+        if let Some(factory) = marks.factory().and_downcast::<gtk::SignalListItemFactory>() {
+            factory.connect_bind(move |_, item| {
+                let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+                let (Some(i), Some(row)) = (item.item().as_ref().and_then(index_of), item.child().and_downcast::<gtk::Box>()) else {
+                    return;
+                };
+                w(&|c, _| {
+                    let entries = c.entries.borrow();
+                    let Some(e) = entries.get(i) else { return };
+                    let top = row.first_child().and_downcast::<gtk::Box>().unwrap();
+                    let section = top.first_child().and_downcast::<gtk::Label>().unwrap();
+                    section.set_text(e.section.as_deref().unwrap_or(""));
+                    let position = section.next_sibling().and_downcast::<gtk::Label>().unwrap();
+                    position.set_text(&format!("{}%", (e.position * 100.0).round() as u32));
+                    let snippet = top.next_sibling().and_downcast::<gtk::Label>().unwrap();
+                    snippet.set_text(&e.snippet);
+                })
+            });
+        }
+        // Keys of both tabs: switching tabs, `B` for the bookmarks.
+        let tab_keys = |keys: &gtk::ShortcutController| {
+            let w = with.clone();
+            shortcut(keys, "Tab|Right|l", move || w(&|c, v| c.switch(v, 1)));
+            let w = with.clone();
+            shortcut(keys, "<Shift>Tab|<Shift>ISO_Left_Tab|Left|h", move || w(&|c, v| c.switch(v, -1)));
+            let w = with.clone();
+            shortcut(keys, "<Shift>b", move || {
+                w(&|c, v| if c.tab.get() == Tab::Bookmarks { c.close(v) } else { c.show(v, Tab::Bookmarks) })
+            });
+        };
+        let mark_keys = gtk::ShortcutController::new();
+        tab_keys(&mark_keys);
+        let w = with.clone();
+        shortcut(&mark_keys, "j|Down", move || w(&|c, _| c.step_bookmark(1)));
+        let w = with.clone();
+        shortcut(&mark_keys, "k|Up", move || w(&|c, _| c.step_bookmark(-1)));
+        let w = with.clone();
+        shortcut(&mark_keys, "d|Delete|KP_Delete", move || w(&|c, v| c.remove_bookmark(v)));
+        let w = with.clone();
+        shortcut(&mark_keys, "Escape|o|q", move || w(&|c, v| c.close(v)));
+        marks_page.add_controller(mark_keys);
         let w = with.clone();
         search.connect_changed(move |entry| {
             *query.borrow_mut() = fold(&entry.text());
@@ -363,6 +462,7 @@ impl Contents {
         });
         let w = with.clone();
         shortcut(&keys, "Escape|o|q", move || w(&|c, v| c.close(v)));
+        tab_keys(&keys);
         list.add_controller(keys);
 
         // Esc in the filter clears it, then goes back to the list; ↓ goes to the list.
@@ -382,8 +482,9 @@ impl Contents {
         contents
     }
 
-    /// Shows the panel over `view`'s window with the entry of the current place selected.
-    pub fn open(&self, view: &PageView) {
+    /// Shows the panel over `view`'s window on `tab`: the contents with the entry of the current place selected, or the
+    /// bookmarks.
+    pub fn open(&self, view: &PageView, tab: Tab) {
         let here = view.locator();
         let book = view.book();
         let read = (forzac_core::state::progress(&book, here) * 100.0).round() as u32;
@@ -400,8 +501,89 @@ impl Contents {
         self.panel.set_opacity(1.0);
         self.panel.set_can_target(true);
         self.panel.set_visible(true);
+        self.show(view, tab);
         self.select(current as u32);
-        self.list.grab_focus();
+        if tab == Tab::Contents {
+            self.list.grab_focus();
+        }
+    }
+
+    /// The tab shown.
+    pub fn tab(&self) -> Tab {
+        self.tab.get()
+    }
+
+    /// Shows `tab`, with the bookmarks read afresh, and gives it the keys.
+    pub fn show(&self, view: &PageView, tab: Tab) {
+        self.tab.set(tab);
+        for (button, (t, _)) in self.tabs.iter().zip(TABS) {
+            if t == tab {
+                button.add_css_class("selected");
+            } else {
+                button.remove_css_class("selected");
+            }
+        }
+        self.field.set_visible(tab == Tab::Contents);
+        match tab {
+            Tab::Contents => {
+                self.stack.set_visible_child_name("contents");
+                self.list.grab_focus();
+            }
+            Tab::Bookmarks => {
+                self.stack.set_visible_child_name("bookmarks");
+                self.reload_bookmarks(view, 0);
+            }
+        }
+    }
+
+    /// The next (`delta` 1) or previous (−1) tab.
+    fn switch(&self, view: &PageView, delta: i32) {
+        let i = TABS.iter().position(|(t, _)| *t == self.tab.get()).unwrap_or(0) as i32;
+        self.show(view, TABS[(i + delta).rem_euclid(TABS.len() as i32) as usize].0);
+    }
+
+    /// Lists the view's bookmarks with `selected` selected (the last one when it is past the end).
+    fn reload_bookmarks(&self, view: &PageView, selected: u32) {
+        let entries = view.bookmark_entries();
+        let n = entries.len();
+        *self.entries.borrow_mut() = entries;
+        let indices: Vec<String> = (0..n).map(|i| i.to_string()).collect();
+        self.marks_model.splice(0, self.marks_model.n_items(), &indices.iter().map(String::as_str).collect::<Vec<_>>());
+        self.marks_page.set_visible_child_name(if n == 0 { "empty" } else { "list" });
+        if n > 0 {
+            let selected = selected.min(n as u32 - 1);
+            self.marks.scroll_to(selected, gtk::ListScrollFlags::FOCUS | gtk::ListScrollFlags::SELECT, None);
+            self.marks.grab_focus();
+        } else {
+            self.marks_page.grab_focus();
+        }
+    }
+
+    fn step_bookmark(&self, delta: i64) {
+        let n = self.marks_selection.n_items() as i64;
+        if n > 0 {
+            let i = (self.marks_selection.selected() as i64 + delta).clamp(0, n - 1) as u32;
+            self.marks.scroll_to(i, gtk::ListScrollFlags::FOCUS | gtk::ListScrollFlags::SELECT, None);
+        }
+    }
+
+    fn selected_bookmark(&self) -> Option<Locator> {
+        let i = self.marks_selection.selected_item().as_ref().and_then(index_of)?;
+        self.entries.borrow().get(i).map(|e| e.at)
+    }
+
+    fn jump_to_bookmark(&self, view: &PageView) {
+        let Some(at) = self.selected_bookmark() else { return };
+        self.close(view);
+        view.go_to(at);
+    }
+
+    /// `d`: removes the selected bookmark; the one after it is selected.
+    fn remove_bookmark(&self, view: &PageView) {
+        let Some(at) = self.selected_bookmark() else { return };
+        let i = self.marks_selection.selected();
+        view.remove_bookmark(at);
+        self.reload_bookmarks(view, i);
     }
 
     pub fn is_open(&self) -> bool {
@@ -471,6 +653,69 @@ fn cover(book: &forzac_core::Book) -> gtk::Widget {
     widget.set_overflow(gtk::Overflow::Hidden);
     widget.set_valign(gtk::Align::Center);
     widget
+}
+
+/// The bookmarks tab: a list of bookmarks (the section with the position, the text from it below) and the hint shown
+/// when there are none, as Android's `BookmarkList`. The rows are bound from the panel's entries.
+fn bookmark_list() -> (gtk::ListView, gtk::SingleSelection, gtk::StringList, gtk::Stack) {
+    let model = gtk::StringList::new(&[]);
+    let selection = gtk::SingleSelection::new(Some(model.clone()));
+    let factory = gtk::SignalListItemFactory::new();
+    factory.connect_setup(|_, item| {
+        let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        row.set_margin_start(20);
+        row.set_margin_end(20);
+        row.set_margin_top(12);
+        row.set_margin_bottom(12);
+        let top = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let section = gtk::Label::new(None);
+        section.add_css_class("bookmark-section");
+        section.set_xalign(0.0);
+        section.set_hexpand(true);
+        section.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        let position = gtk::Label::new(None);
+        position.add_css_class("position");
+        position.add_css_class("muted");
+        position.set_width_request(44);
+        position.set_xalign(1.0);
+        top.append(&section);
+        top.append(&position);
+        let snippet = gtk::Label::new(None);
+        snippet.add_css_class("bookmark-snippet");
+        snippet.add_css_class("muted");
+        snippet.set_xalign(0.0);
+        snippet.set_wrap(true);
+        snippet.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+        snippet.set_lines(2);
+        snippet.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        row.append(&top);
+        row.append(&snippet);
+        item.downcast_ref::<gtk::ListItem>().unwrap().set_child(Some(&row));
+    });
+    let list = gtk::ListView::new(Some(selection.clone()), Some(factory.clone()));
+    let scrolled = gtk::ScrolledWindow::builder().child(&list).hscrollbar_policy(gtk::PolicyType::Never).vexpand(true).build();
+    scrolled.set_margin_top(6);
+
+    let empty = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    empty.set_valign(gtk::Align::Center);
+    empty.set_margin_start(40);
+    empty.set_margin_end(40);
+    empty.set_margin_bottom(80);
+    let title = gtk::Label::new(Some("No bookmarks yet"));
+    title.add_css_class("empty-title");
+    let body = gtk::Label::new(Some("Press b on a page — a ribbon marks the place."));
+    body.add_css_class("empty-body");
+    body.add_css_class("muted");
+    body.set_wrap(true);
+    body.set_justify(gtk::Justification::Center);
+    empty.append(&title);
+    empty.append(&body);
+
+    let page = gtk::Stack::new();
+    page.add_named(&scrolled, Some("list"));
+    page.add_named(&empty, Some("empty"));
+    page.set_focusable(true);
+    (list, selection, model, page)
 }
 
 /// The contents panel's width in a window `width` wide.

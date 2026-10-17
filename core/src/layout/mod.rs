@@ -64,6 +64,13 @@ impl PageStyle {
     pub fn text_height(&self) -> f32 {
         self.height - self.margin_top - self.margin_bottom
     }
+
+    /// Where a bookmark ribbon hangs (its centre) and where the corner a click toggles a bookmark in starts: the ribbon
+    /// beside the text column, in the middle of a margin narrower than 80 px; the corner from 44 px inside the column.
+    pub fn ribbon(&self) -> (f32, f32) {
+        let right = self.width - self.margin_h;
+        (right + (self.margin_h / 2.0).min(40.0), right - 44.0)
+    }
 }
 
 /// Which theme colour a run is drawn in; the shell maps it, so typesetting does not depend on the theme.

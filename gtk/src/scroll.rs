@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use forzac_core::{Area, ChapterLayout, paginate};
+use forzac_core::{Area, ChapterLayout, Locator, paginate};
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk::{glib, graphene, gsk};
@@ -397,6 +397,16 @@ impl PageView {
         }
     }
 
+    /// The text on screen: from the line at the top margin to the first line at or below the window's bottom, in a
+    /// following chapter when the window reaches into it.
+    pub(super) fn screen_range(s: &mut State, h: f32) -> Option<(Locator, Locator)> {
+        let margin = s.style?.margin_top;
+        s.layout.as_ref()?;
+        let from = line_at(s, s.chapter, s.column.offset + margin);
+        let to = line_at(s, s.chapter, s.column.offset + h);
+        Some((from, to))
+    }
+
     /// "Scroll": jumps to the top line or the end of the current chapter.
     pub(super) fn column_edge(&self, end: bool) {
         let h = WidgetExt::height(self) as f32;
@@ -415,6 +425,21 @@ impl PageView {
         s.column.motion = None;
         s.column.glide = None;
         s.column.align = true;
+    }
+}
+
+/// The first line starting at or below height `y` of `chapter`'s column, or of the chapters after it when `y` is past
+/// its last line (the next chapter's start when that one is not laid out, or after the book's end).
+fn line_at(s: &mut State, mut chapter: usize, mut y: f32) -> Locator {
+    let g = gap(s);
+    loop {
+        let Some(l) = layout(s, chapter, false) else { return Locator { chapter, ..Locator::default() } };
+        let at = l.flow_locator(y);
+        if l.flow_y(at) >= y - 0.5 {
+            return at;
+        }
+        y = (y - l.flow_height() - g).max(0.0);
+        chapter += 1;
     }
 }
 
