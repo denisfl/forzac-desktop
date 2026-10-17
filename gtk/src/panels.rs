@@ -114,6 +114,8 @@ const STATIC_CSS: &str = "
     .forzac-panel .bookmark-snippet { font-size: 13px; }
     .forzac-panel .empty-title { font-family: 'PT Serif'; font-size: 20px; }
     .forzac-panel .empty-body { font-size: 14px; }
+    .forzac-panel .marker-rule { min-width: 3px; border-radius: 2px; background-color: #C49A52; }
+    .forzac-panel .quote-text { font-family: 'PT Serif'; font-size: 16px; line-height: 1.44; }
     .forzac-panel .book-title { font-family: 'PT Serif'; font-size: 18px; font-weight: 600; }
     .forzac-panel .book-meta, .forzac-panel .position { font-size: 13px; font-feature-settings: 'tnum'; }
     .forzac-panel .entry { font-family: 'PT Serif'; font-size: 16px; }
@@ -159,9 +161,10 @@ pub(crate) fn grabber() -> gtk::Box {
 pub enum Tab {
     Contents,
     Bookmarks,
+    Highlights,
 }
 
-const TABS: [(Tab, &str); 2] = [(Tab::Contents, "Contents"), (Tab::Bookmarks, "Bookmarks")];
+const TABS: [(Tab, &str); 3] = [(Tab::Contents, "Contents"), (Tab::Bookmarks, "Bookmarks"), (Tab::Highlights, "Highlights")];
 
 /// The contents panel of a reader window, laid out as the Android contents (`TocScreen.kt`, the design's
 /// `Toc.dc.html`): the tabs with a close button, a filter field, the book, then the entries with their position in the
@@ -189,6 +192,12 @@ pub struct Contents {
     marks_model: gtk::StringList,
     marks_page: gtk::Stack,
     entries: RefCell<Vec<forzac_core::bookmarks::Entry>>,
+    /// The highlights tab, the same way.
+    quotes: gtk::ListView,
+    quotes_selection: gtk::SingleSelection,
+    quotes_model: gtk::StringList,
+    quotes_page: gtk::Stack,
+    highlights: RefCell<Vec<forzac_core::quotes::Entry>>,
 }
 
 impl Contents {
@@ -343,8 +352,12 @@ impl Contents {
         scrolled.set_margin_top(6);
         let stack = gtk::Stack::new();
         stack.add_named(&scrolled, Some("contents"));
-        let (marks, marks_selection, marks_model, marks_page) = bookmark_list();
+        let (marks, marks_selection, marks_model, marks_page) =
+            list_page(bookmark_row, ("No bookmarks yet", "Press b on a page — a ribbon marks the place."));
         stack.add_named(&marks_page, Some("bookmarks"));
+        let (quotes, quotes_selection, quotes_model, quotes_page) =
+            list_page(highlight_row, ("No highlights yet", "Select text with the mouse, or press v on a page, then choose Highlight."));
+        stack.add_named(&quotes_page, Some("highlights"));
         stack.set_vexpand(true);
         panel.append(&stack);
         overlay.add_overlay(&panel);
@@ -380,6 +393,11 @@ impl Contents {
             marks_model,
             marks_page: marks_page.clone(),
             entries: RefCell::default(),
+            quotes: quotes.clone(),
+            quotes_selection,
+            quotes_model,
+            quotes_page: quotes_page.clone(),
+            highlights: RefCell::default(),
         });
         let weak = Rc::downgrade(&contents);
         let view = view.downgrade();
@@ -417,7 +435,28 @@ impl Contents {
                 })
             });
         }
-        // Keys of both tabs: switching tabs, `B` for the bookmarks.
+        let w = with.clone();
+        quotes.connect_activate(move |_, _| w(&|c, v| c.jump_to_highlight(v)));
+        let w = with.clone();
+        if let Some(factory) = quotes.factory().and_downcast::<gtk::SignalListItemFactory>() {
+            factory.connect_bind(move |_, item| {
+                let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+                let (Some(i), Some(row)) = (item.item().as_ref().and_then(index_of), item.child().and_downcast::<gtk::Box>()) else {
+                    return;
+                };
+                w(&|c, _| {
+                    let highlights = c.highlights.borrow();
+                    let Some(e) = highlights.get(i) else { return };
+                    let column = row.first_child().and_then(|r| r.next_sibling()).and_downcast::<gtk::Box>().unwrap();
+                    let text = column.first_child().and_downcast::<gtk::Label>().unwrap();
+                    text.set_text(&e.text);
+                    let place = text.next_sibling().and_downcast::<gtk::Label>().unwrap();
+                    let percent = format!("{}%", (e.position * 100.0).round() as u32);
+                    place.set_text(&e.section.as_ref().map_or(percent.clone(), |s| format!("{s} · {percent}")));
+                })
+            });
+        }
+        // Keys of every tab: switching tabs, `B` for the bookmarks.
         let tab_keys = |keys: &gtk::ShortcutController| {
             let w = with.clone();
             shortcut(keys, "Tab|Right|l", move || w(&|c, v| c.switch(v, 1)));
@@ -439,6 +478,27 @@ impl Contents {
         let w = with.clone();
         shortcut(&mark_keys, "Escape|o|q", move || w(&|c, v| c.close(v)));
         marks_page.add_controller(mark_keys);
+        let quote_keys = gtk::ShortcutController::new();
+        tab_keys(&quote_keys);
+        let w = with.clone();
+        shortcut(&quote_keys, "j|Down", move || w(&|c, _| c.step_highlight(1)));
+        let w = with.clone();
+        shortcut(&quote_keys, "k|Up", move || w(&|c, _| c.step_highlight(-1)));
+        let w = with.clone();
+        shortcut(&quote_keys, "d|Delete|KP_Delete", move || w(&|c, v| c.delete_highlight(v)));
+        let w = with.clone();
+        shortcut(&quote_keys, "<Control>c|<Meta>c", move || w(&|_, v| v.copy(&v.highlights_export())));
+        let w = with.clone();
+        shortcut(&quote_keys, "c", move || {
+            w(&|c, v| {
+                if let Some(q) = c.selected_highlight() {
+                    v.copy(&v.text_of(q));
+                }
+            })
+        });
+        let w = with.clone();
+        shortcut(&quote_keys, "Escape|o|q", move || w(&|c, v| c.close(v)));
+        quotes_page.add_controller(quote_keys);
         let w = with.clone();
         search.connect_changed(move |entry| {
             *query.borrow_mut() = fold(&entry.text());
@@ -533,7 +593,54 @@ impl Contents {
                 self.stack.set_visible_child_name("bookmarks");
                 self.reload_bookmarks(view, 0);
             }
+            Tab::Highlights => {
+                self.stack.set_visible_child_name("highlights");
+                self.reload_highlights(view, 0);
+            }
         }
+    }
+
+    /// Lists the view's highlights with `selected` selected (the last one when it is past the end).
+    fn reload_highlights(&self, view: &PageView, selected: u32) {
+        let entries = view.highlight_entries();
+        let n = entries.len();
+        *self.highlights.borrow_mut() = entries;
+        let indices: Vec<String> = (0..n).map(|i| i.to_string()).collect();
+        self.quotes_model.splice(0, self.quotes_model.n_items(), &indices.iter().map(String::as_str).collect::<Vec<_>>());
+        self.quotes_page.set_visible_child_name(if n == 0 { "empty" } else { "list" });
+        if n > 0 {
+            self.quotes.scroll_to(selected.min(n as u32 - 1), gtk::ListScrollFlags::FOCUS | gtk::ListScrollFlags::SELECT, None);
+            self.quotes.grab_focus();
+        } else {
+            self.quotes_page.grab_focus();
+        }
+    }
+
+    fn step_highlight(&self, delta: i64) {
+        let n = self.quotes_selection.n_items() as i64;
+        if n > 0 {
+            let i = (self.quotes_selection.selected() as i64 + delta).clamp(0, n - 1) as u32;
+            self.quotes.scroll_to(i, gtk::ListScrollFlags::FOCUS | gtk::ListScrollFlags::SELECT, None);
+        }
+    }
+
+    fn selected_highlight(&self) -> Option<(Locator, Locator)> {
+        let i = self.quotes_selection.selected_item().as_ref().and_then(index_of)?;
+        self.highlights.borrow().get(i).map(|e| (e.start, e.end))
+    }
+
+    fn jump_to_highlight(&self, view: &PageView) {
+        let Some((start, _)) = self.selected_highlight() else { return };
+        self.close(view);
+        view.go_to(start);
+    }
+
+    /// `d`: deletes the selected highlight; the one after it is selected.
+    fn delete_highlight(&self, view: &PageView) {
+        let Some(q) = self.selected_highlight() else { return };
+        let i = self.quotes_selection.selected();
+        view.delete_highlight(q);
+        self.reload_highlights(view, i);
     }
 
     /// The next (`delta` 1) or previous (−1) tab.
@@ -655,67 +762,99 @@ fn cover(book: &forzac_core::Book) -> gtk::Widget {
     widget
 }
 
-/// The bookmarks tab: a list of bookmarks (the section with the position, the text from it below) and the hint shown
-/// when there are none, as Android's `BookmarkList`. The rows are bound from the panel's entries.
-fn bookmark_list() -> (gtk::ListView, gtk::SingleSelection, gtk::StringList, gtk::Stack) {
+/// A tab's list (rows from `row`, bound by the panel) and the hint shown when it is empty (`empty`: title and text).
+fn list_page(row: fn() -> gtk::Box, empty: (&str, &str)) -> (gtk::ListView, gtk::SingleSelection, gtk::StringList, gtk::Stack) {
     let model = gtk::StringList::new(&[]);
     let selection = gtk::SingleSelection::new(Some(model.clone()));
     let factory = gtk::SignalListItemFactory::new();
-    factory.connect_setup(|_, item| {
-        let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        row.set_margin_start(20);
-        row.set_margin_end(20);
-        row.set_margin_top(12);
-        row.set_margin_bottom(12);
-        let top = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        let section = gtk::Label::new(None);
-        section.add_css_class("bookmark-section");
-        section.set_xalign(0.0);
-        section.set_hexpand(true);
-        section.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        let position = gtk::Label::new(None);
-        position.add_css_class("position");
-        position.add_css_class("muted");
-        position.set_width_request(44);
-        position.set_xalign(1.0);
-        top.append(&section);
-        top.append(&position);
-        let snippet = gtk::Label::new(None);
-        snippet.add_css_class("bookmark-snippet");
-        snippet.add_css_class("muted");
-        snippet.set_xalign(0.0);
-        snippet.set_wrap(true);
-        snippet.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-        snippet.set_lines(2);
-        snippet.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        row.append(&top);
-        row.append(&snippet);
-        item.downcast_ref::<gtk::ListItem>().unwrap().set_child(Some(&row));
-    });
-    let list = gtk::ListView::new(Some(selection.clone()), Some(factory.clone()));
+    factory.connect_setup(move |_, item| item.downcast_ref::<gtk::ListItem>().unwrap().set_child(Some(&row())));
+    let list = gtk::ListView::new(Some(selection.clone()), Some(factory));
     let scrolled = gtk::ScrolledWindow::builder().child(&list).hscrollbar_policy(gtk::PolicyType::Never).vexpand(true).build();
     scrolled.set_margin_top(6);
 
-    let empty = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    empty.set_valign(gtk::Align::Center);
-    empty.set_margin_start(40);
-    empty.set_margin_end(40);
-    empty.set_margin_bottom(80);
-    let title = gtk::Label::new(Some("No bookmarks yet"));
+    let hint = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    hint.set_valign(gtk::Align::Center);
+    hint.set_margin_start(40);
+    hint.set_margin_end(40);
+    hint.set_margin_bottom(80);
+    let title = gtk::Label::new(Some(empty.0));
     title.add_css_class("empty-title");
-    let body = gtk::Label::new(Some("Press b on a page — a ribbon marks the place."));
+    let body = gtk::Label::new(Some(empty.1));
     body.add_css_class("empty-body");
     body.add_css_class("muted");
     body.set_wrap(true);
     body.set_justify(gtk::Justification::Center);
-    empty.append(&title);
-    empty.append(&body);
+    hint.append(&title);
+    hint.append(&body);
 
     let page = gtk::Stack::new();
     page.add_named(&scrolled, Some("list"));
-    page.add_named(&empty, Some("empty"));
+    page.add_named(&hint, Some("empty"));
     page.set_focusable(true);
     (list, selection, model, page)
+}
+
+/// A bookmark's row, as Android's `BookmarkList`: the section with the position, the text from it below.
+fn bookmark_row() -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    row.set_margin_start(20);
+    row.set_margin_end(20);
+    row.set_margin_top(12);
+    row.set_margin_bottom(12);
+    let top = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    let section = gtk::Label::new(None);
+    section.add_css_class("bookmark-section");
+    section.set_xalign(0.0);
+    section.set_hexpand(true);
+    section.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    let position = gtk::Label::new(None);
+    position.add_css_class("position");
+    position.add_css_class("muted");
+    position.set_width_request(44);
+    position.set_xalign(1.0);
+    top.append(&section);
+    top.append(&position);
+    let snippet = gtk::Label::new(None);
+    snippet.add_css_class("bookmark-snippet");
+    snippet.add_css_class("muted");
+    snippet.set_xalign(0.0);
+    snippet.set_wrap(true);
+    snippet.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    snippet.set_lines(2);
+    snippet.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    row.append(&top);
+    row.append(&snippet);
+    row
+}
+
+/// A highlight's row, as Android's `QuoteList`: an ochre rule, the text (six lines at most) and "section · N%" below.
+fn highlight_row() -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 14);
+    row.set_margin_start(20);
+    row.set_margin_end(20);
+    row.set_margin_top(14);
+    row.set_margin_bottom(14);
+    let rule = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    rule.add_css_class("marker-rule");
+    let column = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    column.set_hexpand(true);
+    let text = gtk::Label::new(None);
+    text.add_css_class("quote-text");
+    text.set_xalign(0.0);
+    text.set_wrap(true);
+    text.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    text.set_lines(6);
+    text.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    let place = gtk::Label::new(None);
+    place.add_css_class("position");
+    place.add_css_class("muted");
+    place.set_xalign(0.0);
+    place.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    column.append(&text);
+    column.append(&place);
+    row.append(&rule);
+    row.append(&column);
+    row
 }
 
 /// The contents panel's width in a window `width` wide.

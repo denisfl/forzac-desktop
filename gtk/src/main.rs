@@ -303,6 +303,7 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             (settings_panel.clone(), overlay.clone(), view.clone(), save_style.clone(), close_panels.clone());
         Rc::new(move || {
             let panel = panel.borrow_mut().get_or_insert_with(|| settings_sheet::SettingsSheet::new(&overlay, &view, save.clone())).clone();
+            view.dismiss();
             let was_open = panel.is_open();
             close();
             if !was_open {
@@ -314,6 +315,7 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
         let (search, overlay, view, close) = (search.clone(), overlay.clone(), view.clone(), close_panels.clone());
         Rc::new(move || {
             let s = search.borrow_mut().get_or_insert_with(|| panels::SearchPanel::new(&overlay, &view)).clone();
+            view.dismiss();
             let was_open = s.is_open();
             close();
             if !was_open {
@@ -326,6 +328,7 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
         let (contents, overlay, view, close) = (contents.clone(), overlay.clone(), view.clone(), close_panels.clone());
         Rc::new(move |tab| {
             let c = contents.borrow_mut().get_or_insert_with(|| panels::Contents::new(&overlay, &view)).clone();
+            view.dismiss();
             let was_open = c.is_open();
             if was_open && c.tab() != tab {
                 c.show(&view, tab);
@@ -400,6 +403,13 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
         view.set_bookmarks(starts.collect());
     }
     if !stateless {
+        view.set_highlights(store.borrow().quotes(&view.book()));
+        let (st, book) = (store.clone(), view.book());
+        view.connect_highlights(move |quotes| {
+            if let Err(e) = st.borrow_mut().set_quotes(&book, quotes) {
+                eprintln!("cannot save the reading state: {e}");
+            }
+        });
         view.set_bookmarks(store.borrow().bookmarks(&view.book()));
         let (st, book) = (store.clone(), view.book());
         view.connect_bookmarks(move |marks| {
@@ -584,6 +594,7 @@ g  G  Home  End    chapter start / end
 o    contents  (/ filters, ← → tabs)
 b    bookmark the page, again to remove it
 B    bookmarks  (Enter goes, d removes)
+v    select: h l words, j k lines, v anchors, o other end, Enter highlight, c copy, Esc back
 Tab  Shift+Tab    notes, links, pictures and tables on the page, Enter opens
 Ctrl+O    back after a jump
 s    settings
@@ -593,7 +604,8 @@ t  T    theme
 f  F11    full screen
 ?    this help
 q  Ctrl+W    close
-click    the left or right third of the page turns it; a picture or a table opens
+click    the left or right third of the page turns it; a picture or a table opens; a drag selects (a double click
+         in the middle: a word, a triple: the paragraph)
 
 Picture or table:  + − 0  zoom, fit    arrows  h j k l  Space  move    Esc  q  close
 
@@ -786,6 +798,8 @@ fn shortcuts(
     );
     let v = view.clone();
     add("b", Box::new(move || v.toggle_bookmark()));
+    let v = view.clone();
+    add("v", Box::new(move || v.start_selection()));
     let c = open_contents.clone();
     add("<Shift>b", Box::new(move || c(panels::Tab::Bookmarks)));
     add("o", Box::new(move || open_contents(panels::Tab::Contents)));

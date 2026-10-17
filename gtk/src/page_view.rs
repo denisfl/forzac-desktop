@@ -28,6 +28,8 @@ use crate::fonts::Fonts;
 
 #[path = "scroll.rs"]
 mod scroll;
+#[path = "selection.rs"]
+mod selection;
 
 /// How the reader moves through the text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,6 +147,9 @@ type OnOpen = Box<dyn Fn(Open)>;
 /// Saves the bookmarks after they change.
 type OnBookmarks = Box<dyn Fn(&[Locator])>;
 
+/// Saves the highlights after they change.
+type OnHighlights = Box<dyn Fn(&[(Locator, Locator)])>;
+
 /// Runs once, after the first frame with a page is presented.
 type FirstFrame = Box<dyn FnOnce(&PageView)>;
 
@@ -225,6 +230,8 @@ pub struct State {
     /// The book's bookmarks in reading order, and the ribbon's movement after one was set or removed.
     bookmarks: Vec<Locator>,
     ribbon: Option<Ribbon>,
+    /// The selection, its bar and the highlights.
+    text: selection::Texts,
     turn: Option<Turn>,
     mode: Mode,
     /// "Scroll": the column's offset, tiles and movement.
@@ -247,6 +254,8 @@ mod imp {
         pub on_open: RefCell<Option<OnOpen>>,
         /// Called with the bookmarks after they change (to save them).
         pub on_bookmarks: RefCell<Option<OnBookmarks>>,
+        /// Called with the highlights after they change (to save them).
+        pub on_highlights: RefCell<Option<OnHighlights>>,
         /// Scrolling not yet turned into a page turn, and whether this touchpad swipe already turned one.
         pub scroll: std::cell::Cell<(f64, bool)>,
         /// When the page last changed, so background work can wait for a pause in reading.
@@ -334,6 +343,7 @@ impl PageView {
             search: None,
             bookmarks: Vec::new(),
             ribbon: None,
+            text: Default::default(),
             turn: None,
             mode: Mode::Slide,
             column: scroll::Column::default(),
@@ -348,9 +358,55 @@ impl PageView {
         click.connect_released(glib::clone!(
             #[weak]
             view,
-            move |_, _, x, y| view.click(x as f32, y as f32)
+            move |g, n, x, y| {
+                let shift = g.current_event_state().contains(gdk::ModifierType::SHIFT_MASK);
+                view.click(n, x as f32, y as f32, shift)
+            }
         ));
         view.add_controller(click);
+
+        // Selecting text by dragging (`quotes`).
+        let drag = gtk::GestureDrag::new();
+        drag.connect_drag_begin(glib::clone!(
+            #[weak]
+            view,
+            move |_, x, y| view.drag_begin(x as f32, y as f32)
+        ));
+        drag.connect_drag_update(glib::clone!(
+            #[weak]
+            view,
+            move |g, dx, dy| {
+                if let Some((x, y)) = g.start_point() {
+                    view.drag_update((x + dx) as f32, (y + dy) as f32);
+                }
+            }
+        ));
+        drag.connect_drag_end(glib::clone!(
+            #[weak]
+            view,
+            move |_, _, _| {
+                view.drag_end();
+            }
+        ));
+        view.add_controller(drag);
+
+        // While text is selected (or the selection mode is on) its keys come first; the page's keys wait.
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        keys.connect_key_pressed(glib::clone!(
+            #[weak]
+            view,
+            #[upgrade_or]
+            glib::Propagation::Proceed,
+            move |_, key, code, state| {
+                if !view.selecting() {
+                    return glib::Propagation::Proceed;
+                }
+                let ctrl = state.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::META_MASK);
+                if view.selection_key(selection::latin(key, code), ctrl) { glib::Propagation::Stop } else { glib::Propagation::Proceed }
+            }
+        ));
+        view.add_controller(keys);
 
         // "Slide": a wheel step turns a page, a touchpad swipe at most one. "Scroll": the wheel scrolls three lines a
         // step, smoothly; the touchpad moves the column and glides on after a flick.
@@ -488,10 +544,17 @@ impl PageView {
         }
     }
 
-    fn click(&self, x: f32, y: f32) {
+    fn click(&self, n: i32, x: f32, y: f32, shift: bool) {
         let (w, h) = (WidgetExt::width(self) as f32, WidgetExt::height(self) as f32);
+        // The release that ends a drag is not a click.
+        if self.with(|s| s.text.drag.as_ref().is_some_and(|d| d.started)) {
+            return;
+        }
         if self.with(|s| s.pill_shown && s.pill_rect.is_some_and(|r| r.contains_point(&graphene::Point::new(x, y)))) {
             self.back();
+            return;
+        }
+        if self.selection_click(n, x, y, shift) {
             return;
         }
         let target = self.with(|s| {
@@ -518,10 +581,15 @@ impl PageView {
 
     /// Opens a note marker, a link, an image or a table: a jump inside the book here, the rest through `connect_open`.
     pub fn open(&self, target: Target) {
+        if let Target::Highlight(start) = target {
+            self.open_highlight(start);
+            return;
+        }
         let action = self.with(|s| match target {
             Target::Note(id) => Some(Err(Open::Note(id))),
             Target::Image(id) => Some(Err(Open::Image(id))),
             Target::Table(at) => Some(Err(Open::Table(at))),
+            Target::Highlight(_) => None,
             Target::Link(key) => match s.book.links.get(&key)? {
                 LinkTarget::Place { .. } if s.book.preview(&key).is_some() => Some(Err(Open::Preview(key))),
                 LinkTarget::Place { start, .. } => Some(Ok(*start)),
@@ -564,8 +632,9 @@ impl PageView {
         })
     }
 
-    /// Jumps to `at`, remembering where the jump started (`back` returns there).
+    /// Jumps to `at`, remembering where the jump started (`back` returns there); a selection ends.
     pub fn go_to(&self, at: Locator) {
+        self.dismiss();
         self.with(|s| {
             s.back.push(s.locator);
             if s.back.len() > BACK_STACK {
@@ -1004,8 +1073,16 @@ impl PageView {
         let (layout, style, t) = (s.layout.as_ref()?, s.style?, s.typesetter.as_mut()?);
         let content = layout.render(page, &style, t);
         let node = content_node(&content, s.theme, &mut s.fonts, &mut s.textures, &s.book)?;
+        // Highlights under the text, and among the page's areas (`Tab`, clicks).
+        let layout = s.layout.as_ref()?;
+        let marks = |from, to| layout.marks(page, &style, from, to);
+        let node = match selection::baked(s, layout.chapter, marks) {
+            Some(bands) => gsk::ContainerNode::new(&[bands, node]).upcast(),
+            None => node,
+        };
+        let areas = selection::with_highlights(s, layout.chapter, content.areas, marks);
         s.nodes.insert(page, node.clone());
-        s.areas.insert(page, content.areas);
+        s.areas.insert(page, areas);
         Some(node)
     }
 
@@ -1045,6 +1122,7 @@ impl PageView {
     fn draw_frame(&self, snapshot: &gtk::Snapshot) {
         self.draw_page(snapshot);
         self.draw_pill(snapshot);
+        self.draw_bar(snapshot);
     }
 
     /// The "← Back · Ctrl+O" pill over the foot while the last jump is fresh: the ink as its fill, the paper as its text
@@ -1116,7 +1194,9 @@ impl PageView {
         self.with(|s| {
             snapshot.append_color(&rgba(THEMES[s.theme].paper), &graphene::Rect::new(0.0, 0.0, w, h));
             if s.mode == Mode::Scroll {
+                self.draw_reveal(s, snapshot, h, now);
                 Self::draw_column(s, snapshot, h);
+                self.draw_selection(s, snapshot, h);
                 if let (Some(offset), Some(style)) = (Self::ribbon_offset(s, h, now, refresh), &s.style) {
                     Self::draw_ribbon(snapshot, s.theme, style, offset);
                 }
@@ -1149,7 +1229,9 @@ impl PageView {
                 }
                 _ => {
                     s.turn = None;
+                    self.draw_reveal(s, snapshot, h, now);
                     snapshot.append_node(&current);
+                    self.draw_selection(s, snapshot, h);
                     if let (Some(offset), Some(style)) = (Self::ribbon_offset(s, h, now, refresh), &style) {
                         Self::draw_ribbon(snapshot, s.theme, style, offset);
                     }

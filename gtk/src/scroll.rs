@@ -72,6 +72,11 @@ fn layout(s: &mut State, chapter: usize, now: bool) -> Option<&ChapterLayout> {
     s.neighbours.iter().find(|l| l.chapter == chapter)
 }
 
+/// The layout of `chapter` when it is laid out already (the current one or a neighbour).
+pub(super) fn layout_if_ready(s: &State, chapter: usize) -> Option<&ChapterLayout> {
+    s.layout.as_ref().filter(|l| l.chapter == chapter).or_else(|| s.neighbours.iter().find(|l| l.chapter == chapter))
+}
+
 fn layout_of(s: &mut State, chapter: usize) -> Option<&ChapterLayout> {
     layout(s, chapter, true)
 }
@@ -397,6 +402,20 @@ impl PageView {
         }
     }
 
+    /// The chapters reaching into the window `h` high and where their columns start on screen (on whole pixels, as the
+    /// tiles are drawn); a chapter not laid out yet ends the list.
+    pub(super) fn screen_chapters(s: &mut State, h: f32) -> Vec<(usize, f32)> {
+        let mut out = Vec::new();
+        let (mut chapter, mut top) = (s.chapter, -s.column.offset.round());
+        while top < h && chapter < s.book.chapters.len() {
+            let Some(length) = layout_if_ready(s, chapter).map(|l| l.flow_height()) else { break };
+            out.push((chapter, top));
+            top += length + gap(s);
+            chapter += 1;
+        }
+        out
+    }
+
     /// The text on screen: from the line at the top margin to the first line at or below the window's bottom, in a
     /// following chapter when the window reaches into it.
     pub(super) fn screen_range(s: &mut State, h: f32) -> Option<(Locator, Locator)> {
@@ -478,9 +497,18 @@ fn build_tile(s: &mut State, chapter: usize, k: i64, tile: f32) -> bool {
         return true;
     }
     let Some(style) = s.style else { return false };
-    let Some(content) = layout_of(s, chapter).map(|l| l.render_flow(k as f32 * tile, (k + 1) as f32 * tile, &style)) else { return false };
+    let (y0, y1) = (k as f32 * tile, (k + 1) as f32 * tile);
+    let Some(content) = layout_of(s, chapter).map(|l| l.render_flow(y0, y1, &style)) else { return false };
     let node =
         content_node(&content, s.theme, &mut s.fonts, &mut s.textures, &s.book).unwrap_or_else(|| gsk::ContainerNode::new(&[]).upcast());
-    s.column.tiles.insert((chapter, k), (node, content.areas));
+    // Highlights under the text, and among the tile's areas (`Tab`, clicks).
+    let Some(l) = layout_if_ready(s, chapter) else { return false };
+    let marks = |from, to| l.flow_marks(y0, y1, &style, from, to);
+    let node = match super::selection::baked(s, chapter, marks) {
+        Some(bands) => gsk::ContainerNode::new(&[bands, node]).upcast(),
+        None => node,
+    };
+    let areas = super::selection::with_highlights(s, chapter, content.areas, marks);
+    s.column.tiles.insert((chapter, k), (node, areas));
     true
 }

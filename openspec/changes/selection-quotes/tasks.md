@@ -8,12 +8,12 @@
 
 ## 2. GTK shell
 
-- [ ] 2.1 Selection state; mouse: drag by words, double and triple click, `Shift`+click, handles, edge turning and
+- [x] 2.1 Selection state; mouse: drag by words, double and triple click, `Shift`+click, handles, edge turning and
       scrolling; a click clears
-- [ ] 2.2 Keyboard mode: `v`, `h l j k`, arrows, `o`, `Esc`, crossing pages and the column
-- [ ] 2.3 The bar, the clipboard, `Enter`/`c`/`Ctrl+C`
-- [ ] 2.4 Highlights: storage, bands baked into pages and tiles, the stroke, `Tab` stops, clicks, the highlight's bar
-- [ ] 2.5 The "Highlights" tab: list, `Enter`, `d`, `c`, `Ctrl+C` export, the empty hint; help text
+- [x] 2.2 Keyboard mode: `v`, `h l j k`, arrows, `o`, `Esc`, crossing pages and the column
+- [x] 2.3 The bar, the clipboard, `Enter`/`c`/`Ctrl+C`
+- [x] 2.4 Highlights: storage, bands baked into pages and tiles, the stroke, `Tab` stops, clicks, the highlight's bar
+- [x] 2.5 The "Highlights" tab: list, `Enter`, `d`, `c`, `Ctrl+C` export, the empty hint; help text
 
 ## 3. macOS shell
 

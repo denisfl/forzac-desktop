@@ -19,8 +19,9 @@ any other, images are not.
 
 ### Requirement: Selecting with the mouse
 Pressing on the text and dragging SHALL select from the word under the press to the word under the pointer; a double
-click SHALL select the word, a triple click the paragraph (a table row: the row); `Shift`+click SHALL extend the
-selection to the clicked word. The selection's ends SHALL show handles (a 2 px bar the line's height and a knob, in the
+click SHALL select the word, a triple click the paragraph (a table row: the row) — in "Slide" in the middle third of
+the page, since a click in a side third turns the page at once and quick clicks there keep turning; `Shift`+click SHALL
+extend the selection to the clicked word. The selection's ends SHALL show handles (a 2 px bar the line's height and a knob, in the
 link ink, as on Android); dragging a handle moves that end. In "Slide", holding the pointer for 0.5 s within 24 px of
 the window's right edge or below the text turns the page forward, near the left edge or above the text back, and the
 selection goes on on the new page; in "Scroll", dragging above or below the window scrolls the column, faster the
