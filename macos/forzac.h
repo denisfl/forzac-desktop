@@ -252,7 +252,8 @@ uint32_t forzac_minutes_left(const ForzacDocument *doc, ForzacLocator at);
 
 // The interface language from the preferred languages, comma separated ("ru-RU,en"); then the catalogue: the Russian
 // of an English string (NULL: keep the English), a count with its noun ("{n} match", "{n} matches"; valid until the
-// next call), the help (platform 0 Linux, 1 macOS).
+// next call), the help (platform 0 Linux, 1 macOS: the title, then "# section" and "keys\tmeaning" lines, the support line
+// last; keys separated by spaces).
 void forzac_set_language(const char *locales);
 const char *forzac_tr(const char *english);
 const char *forzac_tr_count(uint32_t n, const char *one, const char *other);
