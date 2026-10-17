@@ -14,12 +14,14 @@
 //! the first frame, 0.15 s apart, and leaves the window open.
 //! With any of them the reading state is neither read nor written.
 //!
-//! Without a file, the recent books are listed. Reading positions and the settings are remembered in
-//! `$XDG_DATA_HOME/forzac/state`.
+//! Without a file, the library is shown (`library.rs`); `--measure` then prints the time to its first frame and to its
+//! last cover, `--png out.png` saves it, both after the covers arrive, and quit. Reading positions and the settings are
+//! remembered in `$XDG_DATA_HOME/forzac/state`, cover thumbnails in `$XDG_CACHE_HOME/forzac/covers`.
 
 mod appearance;
 mod fonts;
 mod icons;
+mod library;
 mod page_view;
 mod panels;
 mod settings_sheet;
@@ -70,8 +72,6 @@ impl Options {
 
 type SharedStore = Rc<RefCell<Store>>;
 
-/// Remembered books shown when Forzac starts without a file.
-const RECENT: usize = 20;
 /// The reading position is saved this long after the last turn.
 const SAVE_DELAY: Duration = Duration::from_secs(1);
 /// The screen stays on this long after the last key, turn, scroll or click in a book window.
@@ -146,18 +146,40 @@ fn main() -> glib::ExitCode {
             }
         }
     });
-    // After the last book window, the recent books (as on macOS); closing them quits. Shown while the window is being
-    // removed, so the application never runs out of windows.
+    // After the last book window, the library (as on macOS); closing it quits. Shown while the window is being removed,
+    // so the application never runs out of windows.
     if !options.stateless() {
         let (opts, st) = (options.clone(), store.clone());
         app.connect_window_removed(move |app, window| {
-            if app.windows().is_empty() && !window.has_css_class("forzac-recent") {
-                recent_window(app, &opts, &st);
+            if app.windows().is_empty() && !window.has_css_class("forzac-library") {
+                library_window(app, &opts, &st);
             }
         });
     }
     let opts = options.clone();
-    app.connect_activate(move |app| recent_window(app, &opts, &store));
+    app.connect_activate(move |app| {
+        let Some(library) = library_window(app, &opts, &store) else { return };
+        if !opts.measure && opts.png.is_none() {
+            return;
+        }
+        // Measurements: the library's first frame and its last cover, then quit.
+        let (opts, weak) = (opts.clone(), Rc::downgrade(&library));
+        library.connect_settled(move || {
+            let Some(library) = weak.upgrade() else { return };
+            if opts.measure {
+                let first = library.first_frame().map_or(Duration::ZERO, |t| t.duration_since(opts.start));
+                println!(
+                    "library: {} books, first frame presented {first:?}, covers loaded {:?}",
+                    library.book_count(),
+                    opts.start.elapsed()
+                );
+            }
+            if let Some(png) = &opts.png {
+                library.save_png(png);
+            }
+            library.window.close();
+        });
+    });
     let mut run_args = vec![args[0].clone()];
     run_args.extend(files.into_iter().cloned());
     app.run_with_args(&run_args)
@@ -174,7 +196,7 @@ fn reason(e: forzac_core::Error) -> &'static str {
     }
 }
 
-/// Says why `path` cannot be opened; then, when no book is open, the recent books follow.
+/// Says why `path` cannot be opened; then, when no book is open, the library follows.
 fn cannot_open(app: &gtk::Application, path: &Path, e: forzac_core::Error, options: &Options, store: &SharedStore) {
     let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
     let message = fill(tr("Couldn't open “{name}”: {reason}"), &[("name", &name), ("reason", reason(e))]);
@@ -191,7 +213,7 @@ fn cannot_open(app: &gtk::Application, path: &Path, e: forzac_core::Error, optio
         gio::Cancellable::NONE,
         move |_| {
             if !has_book_window() {
-                recent_window(&app, &options, &store);
+                library_window(&app, &options, &store);
             }
             drop(hold);
         },
@@ -443,6 +465,7 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             }
         });
         remember_position(&view, &window, path, store);
+        library::cache_cover(&view.book());
         keep_awake(app, &window);
         WINDOWS.with(|w| w.borrow_mut().push((canonical, window.downgrade())));
     }
@@ -652,96 +675,27 @@ fn remember_position(view: &PageView, window: &gtk::ApplicationWindow, path: &Pa
         s();
         glib::Propagation::Proceed
     });
-    save(); // an opened book is a recent book, even if it is closed without turning a page
+    save(); // an opened book is in the library, even if it is closed without turning a page
 }
 
-/// The recent books, the last opened first, in the reader's theme; `Enter` opens one where it was left.
-fn recent_window(app: &gtk::Application, options: &Options, store: &SharedStore) {
-    fonts::add_interface_fonts();
-    panels::set_theme(Settings::load(&store.borrow()).theme_index(appearance::dark()));
-    let books: Vec<(PathBuf, String, String)> = store
-        .borrow()
-        .recent(RECENT)
-        .iter()
-        .map(|e| {
-            let title =
-                if e.title.is_empty() { e.path.file_name().unwrap_or_default().to_string_lossy().into_owned() } else { e.title.clone() };
-            let percent = (e.progress * 100.0).round() as u32;
-            let detail = if e.authors.is_empty() { format!("{percent}%") } else { format!("{} · {percent}%", e.authors) };
-            (e.path.clone(), title, detail)
-        })
-        .collect();
-    let (width, height) = fitted(560, 640);
-    let window = gtk::ApplicationWindow::builder().application(app).title(tr("Forzac")).default_width(width).default_height(height).build();
-    if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
-        window.set_decorated(false);
-    }
-    window.add_css_class("forzac-panel");
-    window.add_css_class("forzac-recent");
-    let list = gtk::ListBox::new();
-    list.set_selection_mode(gtk::SelectionMode::Browse);
-    for (_, title, detail) in &books {
-        let row = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        row.set_margin_top(10);
-        row.set_margin_bottom(10);
-        row.set_margin_start(16);
-        row.set_margin_end(16);
-        let t = gtk::Label::new(Some(title));
-        t.add_css_class("book-title");
-        let d = gtk::Label::new(Some(detail));
-        d.add_css_class("book-meta");
-        d.add_css_class("muted");
-        for label in [&t, &d] {
-            label.set_xalign(0.0);
-            label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            row.append(label);
-        }
-        list.append(&row);
-    }
-    if books.is_empty() {
-        let empty = gtk::Label::new(Some(tr("No books yet.\n\nOpen one from your file manager, or run\nforzac book.epub")));
-        empty.set_justify(gtk::Justification::Center);
-        empty.add_css_class("muted");
-        window.set_child(Some(&empty));
-    } else {
-        let scrolled = gtk::ScrolledWindow::builder().child(&list).hscrollbar_policy(gtk::PolicyType::Never).build();
-        window.set_child(Some(&scrolled));
-        let (app, options, store, w) = (app.clone(), options.clone(), store.clone(), window.clone());
-        list.connect_row_activated(move |_, row| {
-            if let Some((path, ..)) = books.get(row.index() as usize)
-                && open_window(&app, path, &options, &store)
-            {
+/// The library in the reader's theme, or the open one brought forward (then `None`); opening a book from it closes it.
+fn library_window(app: &gtk::Application, options: &Options, store: &SharedStore) -> Option<Rc<library::Library>> {
+    let theme = Settings::load(&store.borrow()).theme_index(appearance::dark());
+    panels::set_theme(theme);
+    let window: Rc<RefCell<Option<glib::WeakRef<gtk::ApplicationWindow>>>> = Rc::default();
+    let open: Rc<dyn Fn(&Path) -> bool> = {
+        let (app, options, store, window) = (app.clone(), options.clone(), store.clone(), window.clone());
+        Rc::new(move |path| {
+            let opened = open_window(&app, path, &options, &store);
+            if opened && let Some(w) = window.borrow().as_ref().and_then(|w| w.upgrade()) {
                 w.close();
             }
-        });
-        if let Some(first) = list.row_at_index(0) {
-            list.select_row(Some(&first));
-            first.grab_focus();
-        }
-    }
-    let controller = gtk::ShortcutController::new();
-    controller.set_scope(gtk::ShortcutScope::Global);
-    let step = |delta: i32| {
-        let list = list.clone();
-        gtk::CallbackAction::new(move |_, _| {
-            let current = list.selected_row().map_or(-1, |r| r.index());
-            if let Some(row) = list.row_at_index((current + delta).max(0)) {
-                list.select_row(Some(&row));
-                row.grab_focus();
-            }
-            glib::Propagation::Stop
+            opened
         })
     };
-    controller.add_shortcut(gtk::Shortcut::new(gtk::ShortcutTrigger::parse_string("j"), Some(step(1))));
-    controller.add_shortcut(gtk::Shortcut::new(gtk::ShortcutTrigger::parse_string("k"), Some(step(-1))));
-    let w = window.clone();
-    let close = gtk::CallbackAction::new(move |_, _| {
-        w.close();
-        glib::Propagation::Stop
-    });
-    controller.add_shortcut(gtk::Shortcut::new(gtk::ShortcutTrigger::parse_string("q|Escape|<Control>w"), Some(close)));
-    window.add_controller(controller);
-    window.present();
+    let library = library::Library::show(app, store, theme, fitted(1040, 760), open)?;
+    *window.borrow_mut() = Some(library.window.downgrade());
+    Some(library)
 }
 
 /// Keys by keyval; GTK also matches them in the first (Latin) layout group, so `j`/`k` work in a Russian layout.

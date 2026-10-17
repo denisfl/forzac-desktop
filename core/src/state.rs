@@ -1,4 +1,4 @@
-//! What Forzac remembers between launches: the reading position of every book, the recent books, the bookmarks, the
+//! What Forzac remembers between launches: the reading position of every book (the library's books), the bookmarks, the
 //! highlights (quotes) and the reader settings, in one text file at a path the shell chooses.
 //!
 //! ```text
@@ -143,10 +143,22 @@ impl Store {
 
     /// Up to `n` books whose files still exist, the last opened first.
     pub fn recent(&self, n: usize) -> Vec<&Entry> {
-        let mut books: Vec<&Entry> = self.saved.books.iter().filter(|e| e.path.is_file()).collect();
-        books.sort_by_key(|e| std::cmp::Reverse(e.opened));
+        let mut books = self.books();
         books.truncate(n);
         books
+    }
+
+    /// The library: every book whose file still exists, the last opened first.
+    pub fn books(&self) -> Vec<&Entry> {
+        let mut books: Vec<&Entry> = self.saved.books.iter().filter(|e| e.path.is_file()).collect();
+        books.sort_by_key(|e| std::cmp::Reverse(e.opened));
+        books
+    }
+
+    /// Forgets the book `id` (removed from the library): its entry and reading position. Its bookmarks and highlights
+    /// stay, so opening the file again brings them back.
+    pub fn forget(&mut self, id: &str) -> io::Result<()> {
+        self.write(|saved| saved.books.retain(|e| e.id != id))
     }
 
     /// Re-reads the file, applies `change`, and replaces the file with the result.

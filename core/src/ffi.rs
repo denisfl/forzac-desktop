@@ -1372,20 +1372,21 @@ pub unsafe extern "C" fn forzac_settings_step(settings: *mut ForzacSettings, set
     unsafe { *settings = s.into() };
 }
 
-/// The reading state (positions, recent books, settings) in the file at a path the shell chooses.
+/// The reading state (positions, the library's books, settings) in the file at a path the shell chooses.
 pub struct State {
     store: crate::state::Store,
     recent: Vec<ForzacRecent>,
     recent_strings: Vec<CString>,
 }
 
-/// A recently read book.
+/// A book of the library.
 #[repr(C)]
 pub struct ForzacRecent {
     pub path: *const c_char,
     pub title: *const c_char,
     pub authors: *const c_char,
     pub progress: f32,
+    pub id: *const c_char,
 }
 
 /// Opens the state file at `path` (it need not exist yet).
@@ -1429,14 +1430,93 @@ pub unsafe extern "C" fn forzac_state_recent(state: *mut State, n: u32, count: *
     let state = unsafe { &mut *state };
     let books = state.store.recent(n as usize);
     state.recent_strings =
-        books.iter().flat_map(|e| [cstring(&e.path.to_string_lossy()), cstring(&e.title), cstring(&e.authors)]).collect();
+        books.iter().flat_map(|e| [cstring(&e.path.to_string_lossy()), cstring(&e.title), cstring(&e.authors), cstring(&e.id)]).collect();
     state.recent = books
         .iter()
-        .zip(state.recent_strings.chunks(3))
-        .map(|(e, s)| ForzacRecent { path: s[0].as_ptr(), title: s[1].as_ptr(), authors: s[2].as_ptr(), progress: e.progress })
+        .zip(state.recent_strings.chunks(4))
+        .map(|(e, s)| ForzacRecent {
+            path: s[0].as_ptr(),
+            title: s[1].as_ptr(),
+            authors: s[2].as_ptr(),
+            progress: e.progress,
+            id: s[3].as_ptr(),
+        })
         .collect();
     unsafe { *count = state.recent.len() as u32 };
     state.recent.as_ptr()
+}
+
+/// Forgets the book `id` (removed from the library); false when the file cannot be written.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`]; `id` a valid NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_state_forget(state: *mut State, id: *const c_char) -> bool {
+    let state = unsafe { &mut *state };
+    state.store.forget(&unsafe { str(id) }).is_ok()
+}
+
+/// How a book matches the library's search `query` (lower first); -1 when it does not.
+///
+/// # Safety
+/// The three must be valid NUL-terminated strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_library_rank(query: *const c_char, title: *const c_char, authors: *const c_char) -> i32 {
+    let (query, title, authors) = unsafe { (str(query), str(title), str(authors)) };
+    crate::library::rank(&query, &title, &authors).map_or(-1, |r| r as i32)
+}
+
+/// A generated cover's look (`library::CoverStyle`).
+#[repr(C)]
+pub struct ForzacCoverStyle {
+    pub marble: bool,
+    pub cloth: u32,
+    pub spine: u32,
+    pub seed: i32,
+    pub title_scale: f32,
+    pub title_lines: u32,
+}
+
+/// The generated cover of the book `id` titled `title`.
+///
+/// # Safety
+/// Both must be valid NUL-terminated strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_cover_style(id: *const c_char, title: *const c_char) -> ForzacCoverStyle {
+    let s = crate::library::cover_style(&unsafe { str(id) }, &unsafe { str(title) });
+    ForzacCoverStyle {
+        marble: s.marble,
+        cloth: s.cloth,
+        spine: s.spine,
+        seed: s.seed,
+        title_scale: s.title_scale,
+        title_lines: s.title_lines,
+    }
+}
+
+/// Marbled paper `width` × `height` as opaque RGBA into `out`.
+///
+/// # Safety
+/// `out` must hold `width * height * 4` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_marble(seed: i32, width: u32, height: u32, out: *mut u8) {
+    let pixels = crate::library::marble(seed, width as usize, height as usize);
+    unsafe { std::ptr::copy_nonoverlapping(pixels.as_ptr(), out, pixels.len()) };
+}
+
+/// The empty library's sample page in the interface language: lines of the running head, the chapter title, its
+/// subtitle (may be empty), the folio, then one line per paragraph (with soft hyphens). Valid for good.
+#[unsafe(no_mangle)]
+pub extern "C" fn forzac_sample_page() -> *const c_char {
+    static PAGES: [std::sync::OnceLock<CString>; 2] = [std::sync::OnceLock::new(), std::sync::OnceLock::new()];
+    PAGES[crate::i18n::language() as usize]
+        .get_or_init(|| {
+            let p = crate::library::sample_page();
+            let mut lines: Vec<String> = [p.head, p.title, p.subtitle, p.folio].map(str::to_owned).to_vec();
+            lines.extend(p.paragraphs.iter().map(|t| crate::library::soft_hyphens(t, p.language)));
+            cstring(&lines.join("\n"))
+        })
+        .as_ptr()
 }
 
 /// Takes the document's bookmarks from `state`.
