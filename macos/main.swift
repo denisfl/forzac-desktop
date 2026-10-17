@@ -6,7 +6,7 @@
 // ~/Library/Caches/Forzac/covers.
 //
 // Spike flags: --measure (time to the first presented page), --png out.png (first page), --chapter N, --page N (the
-// page of the chapter --png saves), --panel settings|contents|bookmarks|highlights|help|note:ID|image:ID|table:CHAPTER.BLOCK and --theme N (with
+// page of the chapter --png saves), --panel settings|contents|bookmarks|highlights|help|note:ID|image:ID|table:CHAPTER.BLOCK and --theme N, --size WxH (with
 // --png: the whole window with that panel or view open, in that theme; --keys "ll+\t\r" then sends those keys to it
 // first, 0.3 s apart: letters, digits, + - =, \t Tab, \r Return, \e Esc, an upper-case letter with Shift; --mouse
 // "down X Y; drag X Y; up X Y; click X Y N" then sends those mouse events to the page, 0.15 s apart, at points of the
@@ -32,7 +32,7 @@ final class Reader: NSObject, NSWindowDelegate {
     let view: PageView
     let path: String
     private let container = NSView()
-    private let help = NSTextField(labelWithString: String(cString: forzac_help(1)))
+    private let help = HelpView()
     private var settingsSheet: SettingsSheet?
     private var contents: ContentsPanel?
     private var search: SearchPanel?
@@ -70,7 +70,11 @@ final class Reader: NSObject, NSWindowDelegate {
         }
         view = PageView(doc: doc, at: at, settings: settings, systemDark: systemIsDark())
         let title = String(cString: forzac_title(doc))
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 980), styleMask: [.titled, .closable, .miniaturizable, .resizable],
+        // `--size WxH` for measurements: another window size.
+        let size = CommandLine.arguments.firstIndex(of: "--size").flatMap { i in
+            CommandLine.arguments.dropFirst(i + 1).first?.split(separator: "x").compactMap { Double($0) }
+        }.flatMap { $0.count == 2 && state == nil ? NSSize(width: $0[0], height: $0[1]) : nil } ?? NSSize(width: 760, height: 980)
+        window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
         super.init()
         window.title = title.isEmpty ? tr("Forzac") : title
@@ -83,11 +87,7 @@ final class Reader: NSObject, NSWindowDelegate {
         view.frame = container.bounds
         view.autoresizingMask = [.width, .height]
         container.addSubview(view)
-        help.font = .systemFont(ofSize: 13)
-        help.isHidden = true
-        help.wantsLayer = true
-        help.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.95).cgColor
-        help.layer?.cornerRadius = 12
+        help.frame = container.bounds
         container.addSubview(help)
         view.onCommand = { [weak self] in self?.run($0) }
         if let state {
@@ -218,9 +218,7 @@ final class Reader: NSObject, NSWindowDelegate {
         case .table(let at):
             openViewer(.table(at))
         case .help:
-            help.sizeToFit()
-            help.setFrameOrigin(NSPoint(x: (container.bounds.width - help.frame.width) / 2, y: (container.bounds.height - help.frame.height) / 2))
-            help.isHidden.toggle()
+            if help.isOpen { help.hide() } else { help.show(in: container, palette: view.palette) }
         case .closePanels:
             closePanels()
             window.makeFirstResponder(view)
@@ -264,12 +262,12 @@ final class Reader: NSObject, NSWindowDelegate {
 
     /// Whether a panel or the help is over the page: a click on the page then closes it.
     var panelOpen: Bool {
-        [settingsSheet, contents, search].contains { $0?.isHidden == false } || note?.superview != nil || !help.isHidden
+        [settingsSheet, contents, search].contains { $0?.isHidden == false } || note?.superview != nil || help.isOpen
     }
 
     private func closePanels() {
         menu?.close()
-        help.isHidden = true
+        help.hide()
         settingsSheet?.isHidden = true
         contents?.isHidden = true
         search?.isHidden = true
@@ -357,7 +355,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let png = value(after: "--png")
         // Values of the flags that take one are not books.
-        let values = Set(["--png", "--chapter", "--page", "--panel", "--theme", "--keys", "--mouse", "--state", "-AppleLanguages"].compactMap { value(after: $0) })
+        let values = Set(["--png", "--chapter", "--page", "--panel", "--theme", "--keys", "--mouse", "--state", "--size", "-AppleLanguages"].compactMap { value(after: $0) })
         if let path = args.dropFirst().first(where: { !$0.hasPrefix("-") && !values.contains($0) && UInt32($0) == nil }) {
             guard let reader = open(path, chapter: value(after: "--chapter").flatMap { UInt32($0) }) else {
                 fputs("\(path): not a readable book\n", stderr)

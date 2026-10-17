@@ -1392,10 +1392,16 @@ pub unsafe extern "C" fn forzac_tr_count(n: u32, one: *const c_char, other: *con
     })
 }
 
-/// The keys and the support line in the interface language (`platform` 0 Linux, 1 macOS); valid for good.
+/// The keys and the support line in the interface language (`platform` 0 Linux, 1 macOS), as `i18n::help_text`;
+/// valid for good.
 #[unsafe(no_mangle)]
 pub extern "C" fn forzac_help(platform: u32) -> *const c_char {
-    c_static(crate::i18n::help(if platform == 1 { crate::i18n::Platform::Mac } else { crate::i18n::Platform::Linux }))
+    let platform = if platform == 1 { crate::i18n::Platform::Mac } else { crate::i18n::Platform::Linux };
+    static TEXTS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, &'static str>>> = std::sync::OnceLock::new();
+    let text = crate::i18n::help_text(platform);
+    let mut texts = TEXTS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    let text: &'static str = texts.entry(text.clone()).or_insert_with(|| Box::leak(text.into_boxed_str()));
+    c_static(text)
 }
 
 /// Where the bundled assets are (`fonts/<family>/…`): the families other than PT Serif are read from there.

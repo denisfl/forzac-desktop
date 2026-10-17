@@ -96,134 +96,190 @@ pub enum Platform {
     Mac,
 }
 
-/// The keys and the support line, in the interface language.
-pub fn help(platform: Platform) -> &'static str {
-    tr(match platform {
-        Platform::Linux => HELP_LINUX,
-        Platform::Mac => HELP_MAC,
-    })
+/// What `?` shows (`help`): every key by section, in the interface language; the keys stay as they are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Help {
+    pub title: &'static str,
+    pub sections: Vec<Section>,
+    pub support: &'static str,
 }
 
-/// The English the core asks for itself (the help is asked for by its platform).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Section {
+    pub title: &'static str,
+    pub rows: Vec<Row>,
+}
+
+/// `keys`: the key caps separated by spaces (a cap has none), empty for the mouse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Row {
+    pub keys: &'static str,
+    pub meaning: &'static str,
+}
+
+/// The keys and the support line in the interface language.
+pub fn help(platform: Platform) -> Help {
+    Help {
+        title: tr("Keys"),
+        sections: HELP
+            .iter()
+            .map(|(title, rows)| Section {
+                title: tr(title),
+                rows: rows
+                    .iter()
+                    .filter_map(|&(linux, mac, meaning)| {
+                        let keys = if platform == Platform::Mac { mac } else { linux };
+                        // Empty keys leave the row out, except in the mouse's section, which has none.
+                        (!keys.is_empty() || *title == MOUSE).then(|| Row { keys, meaning: tr(meaning) })
+                    })
+                    .collect(),
+            })
+            .collect(),
+        support: tr(SUPPORT),
+    }
+}
+
+/// The help as text for the C ABI: the title, a section as `# title`, a row as `keys\tmeaning`, the support line
+/// last; one per line.
+pub fn help_text(platform: Platform) -> String {
+    let help = help(platform);
+    let mut lines = vec![help.title.to_owned()];
+    for section in &help.sections {
+        lines.push(format!("# {}", section.title));
+        lines.extend(section.rows.iter().map(|r| format!("{}\t{}", r.keys, r.meaning)));
+    }
+    lines.push(help.support.to_owned());
+    lines.join("\n")
+}
+
+const MOUSE: &str = "Mouse";
+const SUPPORT: &str = "Forzac is free. Support it: forzac.truenrth.app";
+
+/// A help row: Linux keys, macOS keys, meaning; empty keys: not on that platform (but see `MOUSE`).
+type HelpRow = (&'static str, &'static str, &'static str);
+
+/// Sections of rows.
+const HELP: &[(&str, &[HelpRow])] = &[
+    (
+        "Reading",
+        &[
+            ("j l → ↓ Space PgDn", "j l → ↓ Space PgDn", "next page (in Scroll: a line)"),
+            ("k h ← ↑ Shift+Space PgUp", "k h ← ↑ Shift+Space PgUp", "previous page (in Scroll: a line)"),
+            ("Ctrl+D Ctrl+U", "⌃D ⌃U", "half a screen on or back (Scroll)"),
+            ("m", "m", "pages or scroll"),
+            ("Enter", "Return", "menu (← → h l through the book)"),
+        ],
+    ),
+    (
+        "Moving",
+        &[
+            ("] [", "] [", "next / previous chapter"),
+            ("g G Home End", "g G Home End", "chapter start / end"),
+            ("Tab Shift+Tab", "Tab Shift+Tab", "notes, links, pictures and tables on the page"),
+            ("Ctrl+O", "⌃O ⌘[", "back after a jump"),
+        ],
+    ),
+    (
+        "Book",
+        &[
+            ("o", "o", "contents (/ filters, ← → tabs)"),
+            ("b", "b ⌘D", "bookmark the page, again to remove it"),
+            ("B", "B", "bookmarks (d removes)"),
+            ("/", "/ ⌘F", "search"),
+            ("n N", "n N ⌘G ⇧⌘G", "next / previous match"),
+        ],
+    ),
+    (
+        "Selection",
+        &[
+            ("v", "v", "select; again to anchor"),
+            ("h l", "h l", "by words"),
+            ("j k", "j k", "by lines"),
+            ("o", "o", "the other end"),
+            ("Enter", "Return", "highlight"),
+            ("c", "c ⌘C", "copy"),
+            ("", "s", "share"),
+            ("Esc", "Esc", "cancel"),
+        ],
+    ),
+    (
+        "View",
+        &[
+            ("+ − 0", "+ − 0", "text size, default size"),
+            ("t T", "t T", "theme"),
+            ("s", "s ⌘,", "settings"),
+            ("f F11", "f ⌃⌘F", "full screen"),
+            ("?", "?", "this help"),
+            ("q Ctrl+W", "q ⌘W", "close"),
+        ],
+    ),
+    (
+        MOUSE,
+        &[
+            ("", "", "a click in the left or right third turns the page, in the middle opens the menu"),
+            ("", "", "a click on a picture or a table opens it"),
+            ("", "", "a drag selects; a double click a word, a triple the paragraph"),
+        ],
+    ),
+    (
+        "Picture or table",
+        &[("+ − 0", "+ − 0", "zoom, fit"), ("← → ↑ ↓ h j k l Space", "← → ↑ ↓ h j k l Space", "move"), ("Esc q", "Esc q", "close")],
+    ),
+];
+
+/// The English the core asks for itself: the help's.
 #[cfg(test)]
-const ASKED_BY_HELP: [&str; 2] = [HELP_LINUX, HELP_MAC];
-
-const HELP_LINUX: &str = "\
-j  l  →  ↓  Space  PgDn    next page (Scroll: j ↓ a line, Ctrl+D half a screen)
-k  h  ←  ↑  Shift+Space  PgUp    previous page (Scroll: k ↑ a line, Ctrl+U half a screen)
-m    page or scroll
-Enter    menu: ← → h l through the book, Enter goes there, Esc closes
-]  [    next / previous chapter
-g  G  Home  End    chapter start / end
-o    contents  (/ filters, ← → tabs)
-b    bookmark the page, again to remove it
-B    bookmarks  (Enter goes, d removes)
-v    select: h l words, j k lines, v anchors, o other end,
-     Enter highlight, c copy, Esc back
-Tab  Shift+Tab    notes, links, pictures and tables on the page, Enter opens
-Ctrl+O    back after a jump
-s    settings
-/  n  N    search, next / previous match
-+  −  0    text size, default size
-t  T    theme
-f  F11    full screen
-?    this help
-q  Ctrl+W    close
-click    the left or right third of the page turns it, the middle opens the menu; a picture or a table opens;
-         a drag selects (a double click in the middle: a word, a triple: the paragraph)
-
-Picture or table:  + − 0  zoom, fit    arrows  h j k l  Space  move    Esc  q  close
-
-Forzac is free. Support it: forzac.truenrth.app";
-
-const HELP_LINUX_RU: &str = "\
-j  l  →  ↓  Space  PgDn    следующая страница (Лента: j ↓ на строку, Ctrl+D на полэкрана)
-k  h  ←  ↑  Shift+Space  PgUp    предыдущая страница (Лента: k ↑ на строку, Ctrl+U на полэкрана)
-m    страницы или лента
-Enter    меню: ← → h l по книге, Enter — перейти, Esc — закрыть
-]  [    следующая / предыдущая глава
-g  G  Home  End    начало / конец главы
-o    содержание  (/ фильтр, ← → вкладки)
-b    закладка на странице, ещё раз — убрать
-B    закладки  (Enter — перейти, d — удалить)
-v    выделение: h l слова, j k строки, v закрепить, o другой конец,
-     Enter цитата, c копировать, Esc назад
-Tab  Shift+Tab    примечания, ссылки, картинки и таблицы на странице, Enter открывает
-Ctrl+O    вернуться после перехода
-s    настройки
-/  n  N    поиск, следующее / предыдущее совпадение
-+  −  0    размер текста, обычный размер
-t  T    тема
-f  F11    во весь экран
-?    эта справка
-q  Ctrl+W    закрыть
-щелчок    в левой или правой трети страницы листает, в середине открывает меню; картинка или таблица открывается;
-          протягивание выделяет (двойной щелчок в середине — слово, тройной — абзац)
-
-Картинка или таблица:  + − 0  масштаб, целиком    стрелки  h j k l  Space  сдвиг    Esc  q  закрыть
-
-Форзац бесплатный. Поддержать: forzac.truenrth.app";
-
-const HELP_MAC: &str = "\
-j  l  →  ↓  Space  PgDn    next page (Scroll: j ↓ a line, ⌃D half a screen)
-k  h  ←  ↑  Shift+Space  PgUp    previous page (Scroll: k ↑ a line, ⌃U half a screen)
-m    pages or scroll
-Return    menu: ← → h l through the book, Return goes there, Esc closes
-]  [    next / previous chapter
-g  G  Home  End    chapter start / end
-o    contents  (/ filters, ← → tabs)
-b  ⌘D    bookmark the page, again to remove it
-B    bookmarks  (Return goes, d removes)
-v    select: h l words, j k lines, v anchors, o other end,
-     Return highlight, c ⌘C copy, s share, Esc back
-Tab  Shift+Tab    notes, links, pictures and tables on the page, Return opens
-⌃O  ⌘[    back after a jump
-s  ⌘,    settings
-/  ⌘F    search;  n  N  ⌘G  ⇧⌘G    next / previous match
-+  −  0    text size, default size
-t  T    theme
-f  ⌃⌘F    full screen
-?    this help
-q  ⌘W    close
-click    the left or right third of the page turns it, the middle opens the menu; a picture or a table opens;
-         a drag selects (a double click in the middle: a word, a triple: the paragraph)
-
-Picture or table:  + − 0  zoom, fit    arrows  h j k l  Space  move    Esc  q  close
-
-Forzac is free. Support it: forzac.truenrth.app";
-
-const HELP_MAC_RU: &str = "\
-j  l  →  ↓  Space  PgDn    следующая страница (Лента: j ↓ на строку, ⌃D на полэкрана)
-k  h  ←  ↑  Shift+Space  PgUp    предыдущая страница (Лента: k ↑ на строку, ⌃U на полэкрана)
-m    страницы или лента
-Return    меню: ← → h l по книге, Return — перейти, Esc — закрыть
-]  [    следующая / предыдущая глава
-g  G  Home  End    начало / конец главы
-o    содержание  (/ фильтр, ← → вкладки)
-b  ⌘D    закладка на странице, ещё раз — убрать
-B    закладки  (Return — перейти, d — удалить)
-v    выделение: h l слова, j k строки, v закрепить, o другой конец,
-     Return цитата, c ⌘C копировать, s поделиться, Esc назад
-Tab  Shift+Tab    примечания, ссылки, картинки и таблицы на странице, Return открывает
-⌃O  ⌘[    вернуться после перехода
-s  ⌘,    настройки
-/  ⌘F    поиск;  n  N  ⌘G  ⇧⌘G    следующее / предыдущее совпадение
-+  −  0    размер текста, обычный размер
-t  T    тема
-f  ⌃⌘F    во весь экран
-?    эта справка
-q  ⌘W    закрыть
-щелчок    в левой или правой трети страницы листает, в середине открывает меню; картинка или таблица открывается;
-          протягивание выделяет (двойной щелчок в середине — слово, тройной — абзац)
-
-Картинка или таблица:  + − 0  масштаб, целиком    стрелки  h j k l  Space  сдвиг    Esc  q  закрыть
-
-Форзац бесплатный. Поддержать: forzac.truenrth.app";
+fn asked_by_help() -> Vec<&'static str> {
+    let rows = HELP.iter().flat_map(|(title, rows)| std::iter::once(*title).chain(rows.iter().map(|r| r.2)));
+    ["Keys", SUPPORT].into_iter().chain(rows).collect()
+}
 
 /// English → Russian. The Android app's words where it has the string.
 const RUSSIAN: &[(&str, &str)] = &[
-    (HELP_LINUX, HELP_LINUX_RU),
-    (HELP_MAC, HELP_MAC_RU),
+    // The help.
+    ("Reading", "Чтение"),
+    ("next page (in Scroll: a line)", "следующая страница (в ленте — строка)"),
+    ("previous page (in Scroll: a line)", "предыдущая страница (в ленте — строка)"),
+    ("half a screen on or back (Scroll)", "полэкрана вперёд или назад (лента)"),
+    ("pages or scroll", "страницы или лента"),
+    ("menu (← → h l through the book)", "меню (← → h l — по книге)"),
+    ("Moving", "Переходы"),
+    ("next / previous chapter", "следующая / предыдущая глава"),
+    ("chapter start / end", "начало / конец главы"),
+    ("notes, links, pictures and tables on the page", "примечания, ссылки, картинки и таблицы на странице"),
+    ("back after a jump", "вернуться после перехода"),
+    ("Book", "Книга"),
+    ("contents (/ filters, ← → tabs)", "содержание (/ — фильтр, ← → — вкладки)"),
+    ("bookmark the page, again to remove it", "закладка на странице, ещё раз — убрать"),
+    ("bookmarks (d removes)", "закладки (d — удалить)"),
+    ("search", "поиск"),
+    ("next / previous match", "следующее / предыдущее совпадение"),
+    ("Selection", "Выделение"),
+    ("select; again to anchor", "выделить; ещё раз — закрепить"),
+    ("by words", "по словам"),
+    ("by lines", "по строкам"),
+    ("the other end", "другой конец"),
+    ("highlight", "цитата"),
+    ("copy", "копировать"),
+    ("share", "поделиться"),
+    ("cancel", "отменить"),
+    ("text size, default size", "размер текста, обычный размер"),
+    ("theme", "тема"),
+    ("settings", "настройки"),
+    ("full screen", "во весь экран"),
+    ("this help", "эта справка"),
+    ("close", "закрыть"),
+    ("Mouse", "Мышь"),
+    (
+        "a click in the left or right third turns the page, in the middle opens the menu",
+        "щелчок в левой или правой трети листает, в середине открывает меню",
+    ),
+    ("a click on a picture or a table opens it", "щелчок по картинке или таблице открывает её"),
+    ("a drag selects; a double click a word, a triple the paragraph", "протягивание выделяет; двойной щелчок — слово, тройной — абзац"),
+    ("Picture or table", "Картинка или таблица"),
+    ("zoom, fit", "масштаб, целиком"),
+    ("move", "сдвиг"),
+    ("Forzac is free. Support it: forzac.truenrth.app", "Форзац бесплатный. Поддержать: forzac.truenrth.app"),
     // The app and its windows.
     ("Forzac", "Форзац"),
     ("{title} — Forzac", "{title} — Форзац"),

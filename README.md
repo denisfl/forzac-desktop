@@ -73,7 +73,7 @@ Tests: `cargo test -p forzac-core`. Measurements on a Linux desktop: `scripts/me
 | `+` `−` `0` | text size, the default size |
 | `t` `T` | theme |
 | `f` `F11` (macOS: `⌃⌘F`) | full screen |
-| `?` | help |
+| `?` | the keys (`Esc` closes) |
 | `q` `Ctrl+W` (macOS: `⌘W`) | close |
 
 A wheel step turns a page; one touchpad swipe turns one page; a click in the left or right third of the page turns it

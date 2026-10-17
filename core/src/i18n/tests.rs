@@ -63,7 +63,7 @@ fn asked(source: &str, call: &str) -> Vec<String> {
 #[test]
 fn every_string_the_shells_ask_for_has_its_russian_and_none_is_left_over() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-    let mut asked_for: Vec<String> = ASKED_BY_HELP.iter().map(|s| s.to_string()).collect();
+    let mut asked_for: Vec<String> = asked_by_help().iter().map(|s| s.to_string()).collect();
     for (dir, ext, calls) in
         [("gtk/src", "rs", ["tr", "tr_count"]), ("core/src", "rs", ["tr", "tr_count"]), ("macos", "swift", ["tr", "trCount"])]
     {
@@ -98,4 +98,29 @@ fn files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 /// The English singular of a plural entry ("{n} match"): it has no Russian of its own.
 fn is_plural_one(s: &str) -> bool {
     PLURALS.iter().any(|p| p.0.starts_with("{n} ") && s.starts_with("{n} ") && !s.ends_with('s'))
+}
+
+#[test]
+fn the_help_has_every_key_in_its_sections() {
+    let linux = help(Platform::Linux);
+    let mac = help(Platform::Mac);
+    let titles: Vec<&str> = linux.sections.iter().map(|s| s.title).collect();
+    assert_eq!(titles, ["Reading", "Moving", "Book", "Selection", "View", "Mouse", "Picture or table"]);
+    let rows = |h: &Help| h.sections.iter().map(|s| s.rows.len()).sum::<usize>();
+    // Share is the Mac's only.
+    assert_eq!(rows(&mac), rows(&linux) + 1);
+    assert!(mac.sections[3].rows.iter().any(|r| r.keys == "s" && r.meaning == "share"));
+    assert!(linux.sections[5].rows.iter().all(|r| r.keys.is_empty()));
+    assert_eq!(linux.sections[0].rows[0].keys, "j l → ↓ Space PgDn");
+    assert_eq!(mac.sections[2].rows[1].keys, "b ⌘D");
+    assert_eq!(linux.support, "Forzac is free. Support it: forzac.truenrth.app");
+}
+
+#[test]
+fn the_help_text_for_the_mac() {
+    let text = help_text(Platform::Mac);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines[..3], ["Keys", "# Reading", "j l → ↓ Space PgDn\tnext page (in Scroll: a line)"]);
+    assert!(lines.contains(&"\ta click on a picture or a table opens it"));
+    assert_eq!(lines.last(), Some(&"Forzac is free. Support it: forzac.truenrth.app"));
 }

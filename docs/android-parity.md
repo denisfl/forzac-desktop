@@ -446,3 +446,21 @@ The book: the corpus's slowest to typeset, "Тень богов" (EPUB, 50 chapt
   maintainer asked not to touch it (2026-10-17); a real pointer on GTK (the slider's drag, the bars' buttons; no pointer
   injection under headless sway); the back button on both (it needs the reading state, which measurement runs do not
   open).
+
+### The help card (`help-card`)
+
+Checked on 2026-10-17 with the build of the change. GTK in the `ci/debian` container under a headless Weston (pixman),
+`--show-help --png` in English and Russian: a 760 × 980 book window (one column, the sections scrolling inside the
+card) and a 1440 × 900 kiosk window (two columns, the whole card visible). The Mac with `--panel help --png`, `--size`,
+`--theme 2` and `-AppleLanguages (ru)`: the same two layouts in Light and Dark.
+
+- Mac: `--keys` `j`×24 scrolls the sections to the end; `l l Esc` and `?` hide the help and leave the page where it was
+  (the same picture as `Esc` alone); a click beside the card hides it without turning the page, a click on the card
+  keeps it.
+- Found and fixed on the way: unstyled GTK labels measure narrower than drawn, so the key caps are broken into lines
+  once they are in the window; the Mac's `NSTextField` adds its own padding, so a cap's frame is a layer sized from the
+  text; on the Mac the release after a click beside the card went to the page and turned it, so the help hides on the
+  release.
+- Not checked: GTK's keys and clicks (no input injection under Weston), the close button and the link on both, idle CPU
+  with the help open, the Pi 5. On this Mac's screen a titled window is at most 872 points high inside: in Russian the
+  last row then scrolls into view.

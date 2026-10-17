@@ -11,7 +11,8 @@
 //! every page shows the ribbon and highlights; `--toggles N` sets and removes a bookmark N times (the ribbon drops and
 //! rises), `--strokes N` highlights N paragraphs one after another (the marker's stroke), each printing the same
 //! statistics; `--mouse "down X Y; drag X Y; up X Y; click X Y N"` sends those mouse events to the page's handlers after
-//! the first frame, 0.15 s apart, and leaves the window open.
+//! the first frame, 0.15 s apart, and leaves the window open; `--show-help` opens the help (with `--png`: the whole
+//! window is saved once it has faded in).
 //! With any of them the reading state is neither read nor written.
 //!
 //! Without a file, the library is shown (`library.rs`); `--measure` then prints the time to its first frame and to its
@@ -20,6 +21,7 @@
 
 mod appearance;
 mod fonts;
+mod help;
 mod icons;
 mod library;
 mod menu;
@@ -262,23 +264,25 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
     let view = PageView::new(book, at, settings, appearance::dark());
     view.set_mode(if settings.turning == Turning::Scroll { Mode::Scroll } else { Mode::Slide });
 
-    let help = gtk::Label::new(Some(forzac_core::i18n::help(forzac_core::i18n::Platform::Linux)));
-    help.add_css_class("osd");
-    help.set_halign(gtk::Align::Center);
-    help.set_valign(gtk::Align::Center);
-    help.set_visible(false);
+    let help = help::Help::new();
     let overlay = gtk::Overlay::new();
     overlay.set_child(Some(&view));
-    overlay.add_overlay(&help);
+    // The help over everything, the panels (added to `overlay` later) and the menu included.
+    let outer = gtk::Overlay::new();
+    outer.set_child(Some(&overlay));
+    outer.add_overlay(&help.root);
 
     let (width, height) = fitted(760, 980);
-    let window = gtk::ApplicationWindow::builder()
-        .application(app)
-        .title(&title)
-        .default_width(width)
-        .default_height(height)
-        .child(&overlay)
-        .build();
+    let window =
+        gtk::ApplicationWindow::builder().application(app).title(&title).default_width(width).default_height(height).child(&outer).build();
+    // While the help is open it takes every key, before the panels, the menu and the page.
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let h = help.clone();
+    keys.connect_key_pressed(move |_, key, code, state| {
+        if h.key(key, page_view::latin(key, code), state) { glib::Propagation::Stop } else { glib::Propagation::Proceed }
+    });
+    window.add_controller(keys);
     // Tiling compositors draw no title bars; a client-side one would only take space.
     if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
         window.set_decorated(false);
@@ -478,6 +482,10 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             Open::Table(at) => *viewer.borrow_mut() = viewer::open(&overlay, &view, viewer::Subject::Table(at)).map(|v| v.downgrade()),
         }
     ));
+    // For screenshots: `wtype` cannot type `?`.
+    if stateless && std::env::args().any(|a| a == "--show-help") {
+        help.show();
+    }
     if stateless && std::env::args().any(|a| a == "--marked") {
         let book = view.book();
         let starts = book
@@ -541,6 +549,15 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             }
             if options.page > 0 {
                 view.go_to_page(options.page);
+            }
+            if let Some(png) = options.png.clone().filter(|_| std::env::args().any(|a| a == "--show-help")) {
+                // The whole window once the help has faded in.
+                let window = window.clone();
+                glib::timeout_add_local_once(Duration::from_millis(400), move || {
+                    save_window_png(&window, &png);
+                    window.close();
+                });
+                return;
             }
             if let Some(png) = &options.png {
                 save_png(view, png);
@@ -693,6 +710,21 @@ fn save_png(view: &PageView, path: &std::path::Path) {
     }
 }
 
+/// The window's content as it is drawn (`--show-help --png`).
+fn save_window_png(window: &gtk::ApplicationWindow, path: &std::path::Path) {
+    let Some(child) = window.child() else { return };
+    let snapshot = gtk::Snapshot::new();
+    window.snapshot_child(&child, &snapshot);
+    let (Some(node), Some(renderer)) = (snapshot.to_node(), window.renderer()) else { return };
+    let scale = window.scale_factor() as f32;
+    let rect = graphene::Rect::new(0.0, 0.0, window.width() as f32 * scale, window.height() as f32 * scale);
+    let scaled = gtk::gsk::TransformNode::new(&node, Some(&gtk::gsk::Transform::new().scale(scale, scale)));
+    match renderer.render_texture(&scaled, Some(&rect)).save_to_png(path) {
+        Ok(()) => println!("saved {}", path.display()),
+        Err(e) => eprintln!("{}: {e}", path.display()),
+    }
+}
+
 /// Saves the reading position when the book opens, `SAVE_DELAY` after the last move and when the window closes.
 fn remember_position(view: &PageView, window: &gtk::ApplicationWindow, path: &Path, store: &SharedStore) {
     let save = {
@@ -760,7 +792,7 @@ struct PanelKeys {
 
 fn shortcuts(
     view: &PageView,
-    help: &gtk::Label,
+    help: &Rc<help::Help>,
     panels: PanelKeys,
     window: &gtk::ApplicationWindow,
     save_style: Rc<dyn Fn()>,
@@ -876,15 +908,13 @@ fn shortcuts(
         }),
     );
     let h = help.clone();
-    add("question", Box::new(move || h.set_visible(!h.is_visible())));
-    let (h, v) = (help.clone(), view.clone());
+    add("question", Box::new(move || h.show()));
+    let v = view.clone();
     add(
         "Escape",
         Box::new(move || {
-            // The help, else a panel, else the focused marker or link, else the match highlight.
-            if h.is_visible() {
-                h.set_visible(false);
-            } else if !close_panels() && !v.unfocus() {
+            // A panel, else the focused marker or link, else the match highlight (the help takes its own keys).
+            if !close_panels() && !v.unfocus() {
                 v.clear_match();
             }
         }),

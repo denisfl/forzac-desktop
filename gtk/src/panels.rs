@@ -37,8 +37,8 @@ impl Theme {
 
     fn set(&self, theme: usize) {
         let hex = |c: u32| format!("#{c:06x}");
-        let Palette { paper, ink, muted, line, sheet, .. } = THEMES[theme];
-        let (paper, ink, muted, line, sheet) = (hex(paper), hex(ink), hex(muted), hex(line), hex(sheet));
+        let Palette { paper, ink, muted, line, sheet, link } = THEMES[theme];
+        let (paper, ink, muted, line, sheet, link) = (hex(paper), hex(ink), hex(muted), hex(line), hex(sheet), hex(link));
         // The theme circles keep their own theme's colours. GTK draws a later shadow over an earlier one: the gap in the
         // panel's colour lies over the ring, as on Android (a 4 px gap, a 2 px ring).
         let circles: String = THEMES
@@ -59,6 +59,10 @@ impl Theme {
             "{STATIC_CSS}
              .forzac-panel {{ color: {ink}; }}
              .forzac-panel .muted {{ color: {muted}; }}
+             .help-card {{ background-color: {sheet}; box-shadow: 0 0 0 1px {line}, 0 12px 32px alpha(black, 0.16); }}
+             .keycap {{ border: 1px solid {line}; background-color: {paper}; }}
+             .forzac-help .help-section, .forzac-help .help-support {{ color: {muted}; }}
+             .forzac-help .help-support link {{ color: {link}; }}
              .forzac-sheet {{ background-color: {sheet}; box-shadow: 0 -1px 0 {line}, 0 -12px 32px alpha(black, 0.08); }}
              .forzac-side {{ background-color: {paper}; box-shadow: -1px 0 0 {line}, -12px 0 32px alpha(black, 0.08); }}
              .forzac-panel .grabber, .forzac-panel .rule, .forzac-panel .divider {{ background-color: {line}; }}
@@ -133,6 +137,18 @@ const STATIC_CSS: &str = "
     .forzac-panel listview, .forzac-panel row, .forzac-panel scrolledwindow { background: none; color: inherit; padding: 0; }
     .forzac-panel row:focus-visible { outline: none; }
     .forzac-panel, .forzac-sheet, .forzac-side { transition: color 200ms, background-color 200ms, box-shadow 200ms; }
+    .forzac-help { background-color: alpha(black, 0.24); opacity: 0; transition: opacity 150ms ease-in; }
+    .forzac-help.open { opacity: 1; transition: opacity 200ms ease-out; }
+    .help-card { border-radius: 22px; padding: 20px 28px 20px 28px; }
+    .help-head { margin-bottom: 16px; }
+    .forzac-help .help-title { font-size: 20px; font-weight: 600; }
+    .forzac-help button.help-close { min-width: 32px; min-height: 32px; padding: 0; border-radius: 16px; }
+    .forzac-help .help-section { font-size: 12px; font-weight: 500; letter-spacing: 0.72px; }
+    .forzac-help .help-meaning { font-size: 14px; }
+    .keycap { font-size: 13px; font-weight: 500; border-radius: 6px; padding: 1px 7px; min-width: 8px; }
+    .forzac-help flowboxchild { padding: 0; }
+    .forzac-help .help-rule { margin-top: 20px; }
+    .forzac-help .help-support { font-size: 13px; margin-top: 16px; }
     .reader-bar { opacity: 0; transition: opacity 150ms ease-in, transform 150ms ease-in; }
     .reader-bar.open { opacity: 1; transform: none; transition: opacity 200ms ease-out, transform 200ms ease-out; }
     .bar-top { min-height: 56px; padding: 0 4px; transform: translateY(-28px); }
