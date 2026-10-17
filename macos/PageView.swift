@@ -7,7 +7,7 @@ import QuartzCore
 
 /// What the view asks its window for.
 enum Command {
-    case contents, bookmarks, settings, search, help, closePanels, note(String)
+    case contents, bookmarks, highlights, settings, search, help, closePanels, note(String)
     /// A link's short target in the note sheet.
     case preview(String)
     /// An image (by id) or a table (by its first row) in the view (`Viewer`).
@@ -78,6 +78,23 @@ final class PageView: NSView {
     /// The bookmarks changed (to save them).
     var onBookmarks: (() -> Void)?
 
+    // Selection and highlights (`quotes`).
+    /// The selection (or the keyboard's cursor), where the cursor goes once the words shown allow, the highlights, the bar.
+    var textSelection: TextSelection?
+    var pendingMove: PendingMove?
+    private(set) var highlights: [LocRange] = []
+    var selectionBar: SelectionBar?
+    /// The bar's items (y down) for clicks; the bar's layer.
+    var barItems: [(CGRect, BarAction)] = []
+    let barLayer = CALayer()
+    /// A drag with the mouse (y down): where it was pressed, where it is, whether it selects yet; the edge timer.
+    var drag: (press: CGPoint, at: CGPoint, started: Bool)?
+    var edgeTimer: Timer?
+    var edgeDir: Int32 = 0
+    var dragLink: CADisplayLink?
+    /// The highlights changed (to save them).
+    var onHighlights: (() -> Void)?
+
     // "Scroll".
     private var offset: CGFloat = 0
     private var tiles: [TileKey: CALayer] = [:]
@@ -131,6 +148,13 @@ final class PageView: NSView {
         pillText.alignmentMode = .center
         pillLayer.addSublayer(pillText)
         layer!.addSublayer(pillLayer)
+        barLayer.actions = ["position": NSNull(), "bounds": NSNull(), "sublayers": NSNull(), "backgroundColor": NSNull()]
+        barLayer.opacity = 0
+        barLayer.cornerRadius = 14
+        barLayer.shadowOpacity = 0.18
+        barLayer.shadowRadius = 10
+        barLayer.shadowOffset = CGSize(width: 0, height: -4)
+        layer!.addSublayer(barLayer)
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -194,9 +218,13 @@ final class PageView: NSView {
     private func image(_ index: UInt32) -> CGImage? {
         if let i = images[index] { return i }
         let h = bounds.height
+        // Highlights under the text, and among the page's areas (`Tab`, clicks).
+        let marked = highlights.map { ($0, pageMarks(index, $0)) }
+        let bands = marked.map(\.1)
         let image = bitmap(bounds.size, scale: scale, background: palette.paper) { ctx in
+            drawBands(bands, in: ctx, height: h)
             let page = forzac_page(doc, index)
-            pageAreas[index] = areas(of: page)
+            pageAreas[index] = withHighlights(areas(of: page), marked)
             drawPage(page, in: ctx, height: h, palette: palette, fonts: fonts, pictures: &pictures)
         }
         images[index] = image
@@ -329,6 +357,7 @@ final class PageView: NSView {
 
     /// Goes to `at` (a contents entry, a link); `remember` keeps the place left for `⌃O`.
     func go(to at: ForzacLocator, remember: Bool = true) {
+        dismissSelection()
         if remember {
             back.append(locator)
             if back.count > 50 { back.removeFirst() }
@@ -518,11 +547,24 @@ final class PageView: NSView {
     }
 
     private func buildTile(_ key: TileKey, tile: CGFloat) {
-        let w = bounds.width
         let layer = CALayer()
         layer.actions = ["position": NSNull(), "bounds": NSNull(), "contents": NSNull()]
-        let content = forzac_flow(doc, key.chapter, Float(CGFloat(key.index) * tile), Float(CGFloat(key.index + 1) * tile))
-        tileAreas[key] = areas(of: content)
+        let (image, height) = tileImage(key, tile: tile)
+        layer.contents = image
+        layer.contentsScale = scale
+        layer.bounds = CGRect(x: 0, y: 0, width: bounds.width, height: height)
+        self.layer!.insertSublayer(layer, below: focusLayer)
+        tiles[key] = layer
+    }
+
+    /// Tile `key`'s bitmap (its highlights under the text) and height; its areas go to `tileAreas`.
+    private func tileImage(_ key: TileKey, tile: CGFloat) -> (CGImage?, CGFloat) {
+        let w = bounds.width
+        let (y0, y1) = (Float(CGFloat(key.index) * tile), Float(CGFloat(key.index + 1) * tile))
+        let marked = highlights.map { ($0, flowMarks(key.chapter, y0, y1, $0)) }
+        let bands = marked.map(\.1)
+        let content = forzac_flow(doc, key.chapter, y0, y1)
+        tileAreas[key] = withHighlights(areas(of: content), marked)
         // A tile's last line (or image, or table row) may hang below it: the bitmap reaches to its bottom and is
         // transparent, the paper is the view's background.
         var bottom = tile
@@ -533,13 +575,11 @@ final class PageView: NSView {
         for i in 0..<Int(content.image_count) { bottom = max(bottom, CGFloat(content.images[i].rect.y + content.images[i].rect.h)) }
         for i in 0..<Int(content.rule_count) { bottom = max(bottom, CGFloat(content.rules[i].rect.y + content.rules[i].rect.h)) }
         bottom = bottom.rounded(.up)
-        layer.contents = bitmap(CGSize(width: w, height: bottom), scale: scale, background: nil) { ctx in
+        let image = bitmap(CGSize(width: w, height: bottom), scale: scale, background: nil) { ctx in
+            drawBands(bands, in: ctx, height: bottom)
             drawPage(content, in: ctx, height: bottom, palette: palette, fonts: fonts, pictures: &pictures)
         }
-        layer.contentsScale = scale
-        layer.bounds = CGRect(x: 0, y: 0, width: w, height: bottom)
-        self.layer!.insertSublayer(layer, below: focusLayer)
-        tiles[key] = layer
+        return (image, bottom)
     }
 
     /// Puts the tiles on screen where the offset says; drops tiles far from it.
@@ -832,8 +872,10 @@ final class PageView: NSView {
         if let f = focus, let stop = stops(areas)[safe: f] {
             for l in focusLayers(areas, stop, palette: palette, height: bounds.height) { focusLayer.addSublayer(l) }
         }
+        for l in selectionLayers() { focusLayer.addSublayer(l) }
         focusLayer.frame = bounds
         CATransaction.commit()
+        updateBar()
     }
 
     /// Opens the focused marker, link, image or table; false when nothing is focused.
@@ -847,6 +889,7 @@ final class PageView: NSView {
     /// Opens a marker or link (a note or a short target in the sheet, a place in the book here, an address in the
     /// browser), an image or a table (in the view).
     func open(_ area: Area) {
+        if area.kind == 4 { return openHighlight(area.at) }
         if area.isNote { return onCommand?(.note(area.target)) ?? () }
         if area.kind == 2 { return onCommand?(.image(area.target)) ?? () }
         if area.kind == 3 { return onCommand?(.table(area.at)) ?? () }
@@ -881,15 +924,24 @@ final class PageView: NSView {
     }
 
     override func mouseDown(with e: NSEvent) {
-        mouseDownAt = convert(e.locationInWindow, from: nil)
+        let p = convert(e.locationInWindow, from: nil)
+        mouseDownAt = p
+        drag = (CGPoint(x: p.x, y: bounds.height - p.y), CGPoint(x: p.x, y: bounds.height - p.y), false)
+    }
+
+    override func mouseDragged(with e: NSEvent) {
+        let p = convert(e.locationInWindow, from: nil)
+        dragUpdate(CGPoint(x: p.x, y: bounds.height - p.y))
     }
 
     override func mouseUp(with e: NSEvent) {
+        if dragEnd() { return } // a drag that selected
         if panelOpen?() == true { return onCommand?(.closePanels) ?? () }
         let p = convert(e.locationInWindow, from: nil)
         if let down = mouseDownAt, hypot(p.x - down.x, p.y - down.y) > 4 { return } // a drag, not a click
         if pillLayer.opacity > 0, pillLayer.frame.contains(p) { return goBack() }
         let y = bounds.height - p.y
+        if selectionClick(e.clickCount, CGPoint(x: p.x, y: y), shift: e.modifierFlags.contains(.shift)) { return }
         // A marker or link in a table goes before the table.
         let hits = visibleAreas().filter { $0.rect.insetBy(dx: -4, dy: -4).contains(CGPoint(x: p.x, y: y)) }
         var centre: Float = 0, corner: Float = 0
@@ -935,6 +987,7 @@ final class PageView: NSView {
 
     /// Keys by physical key code, so they work in any layout (Russian included).
     override func keyDown(with e: NSEvent) {
+        if selecting && selectionKey(e) { return }
         let shift = e.modifierFlags.contains(.shift)
         let control = e.modifierFlags.contains(.control)
         let line = lineHeight, screen = bounds.height - lineHeight
@@ -966,6 +1019,7 @@ final class PageView: NSView {
         case 0x35: if focus == nil { clearMatch() } else { unfocus() }; onCommand?(.closePanels) // Esc
         case 0x2D: nextMatch(shift ? -1 : 1)                                                   // n N
         case 0x0B: if shift { onCommand?(.bookmarks) } else { toggleBookmark() }                // b B
+        case 0x09: startSelection()                                                           // v
         case 0x0C: window?.performClose(nil)                                                  // q
         default: super.keyDown(with: e)
         }
@@ -981,4 +1035,630 @@ final class PageView: NSView {
 
 extension Array {
     subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
+}
+
+// MARK: - Selection and highlights (`quotes`)
+
+/// A text range `[start, end)`: a word, a selection, a highlight.
+struct LocRange: Equatable {
+    var start, end: ForzacLocator
+}
+
+extension ForzacLocator: @retroactive Equatable, @retroactive Comparable {
+    public static func == (a: ForzacLocator, b: ForzacLocator) -> Bool { (a.chapter, a.block, a.offset) == (b.chapter, b.block, b.offset) }
+    public static func < (a: ForzacLocator, b: ForzacLocator) -> Bool { (a.chapter, a.block, a.offset) < (b.chapter, b.block, b.offset) }
+}
+
+/// A selection: the cursor's word and, once anchored, the anchor's word; `keyboard` when the cursor is shown.
+struct TextSelection {
+    var cursor: LocRange
+    var anchor: LocRange?
+    var keyboard: Bool
+    var range: LocRange? { anchor.map { LocRange(start: min($0.start, cursor.start), end: max($0.end, cursor.end)) } }
+}
+
+enum SelectionBar: Equatable {
+    case selection, highlight(LocRange)
+}
+
+enum BarAction {
+    case highlight, copy, share, delete
+}
+
+/// Where the cursor goes once the words of what is shown allow it: the next (previous) word, the word on the next
+/// (previous) line nearest a middle.
+enum PendingMove {
+    case step(Int32), line(Int32, CGFloat)
+}
+
+/// Android's marker colour: the Forzac ochre at 32 %, 30 % on dark themes.
+private let markerRGB: UInt32 = 0xC49A52
+
+extension PageView {
+    var selecting: Bool { textSelection != nil || selectionBar != nil }
+
+    /// Sets the highlights (from the reading state) without saving them.
+    func setHighlights(_ list: [LocRange]) {
+        highlights = list.sorted { ($0.start, $0.end) < ($1.start, $1.end) }
+        redrawPages()
+    }
+
+    /// Pages and tiles have the highlights baked in: drawn again when they change.
+    private func redrawPages() {
+        images = [:]
+        pageAreas = [:]
+        clearTiles()
+        show(animated: 0)
+    }
+
+    // Words and rectangles shown (y down).
+
+    /// The chapters reaching into the window and where their columns start on screen ("Scroll").
+    private func screenChapters() -> [(UInt32, CGFloat)] {
+        var out: [(UInt32, CGFloat)] = []
+        var (c, top) = (chapter, -offset.rounded())
+        while top < bounds.height && c < forzac_chapter_count(doc) {
+            out.append((c, top))
+            top += CGFloat(forzac_flow_height(doc, c)) + gap
+            c += 1
+        }
+        return out
+    }
+
+    /// The words shown: the page's, or in "Scroll" those on lines wholly in the window.
+    func shownWords() -> [ForzacWord] {
+        var n: UInt32 = 0
+        if scrolling {
+            var out: [ForzacWord] = []
+            let h = bounds.height
+            for (c, top) in screenChapters() {
+                let p = forzac_flow_words(doc, c, Float(-top), Float(h - top), &n)
+                out += (0..<Int(n)).map { p![$0] }.filter { CGFloat($0.rect.y) >= -0.5 && CGFloat($0.rect.y + $0.rect.h) <= h + 0.5 }
+            }
+            return out
+        }
+        if atEnd { return [] }
+        let p = forzac_page_words(doc, page, &n)
+        return (0..<Int(n)).map { p![$0] }
+    }
+
+    /// Rectangles over `r` shown (y down).
+    func shownRects(_ r: LocRange) -> [CGRect] {
+        var buf = [ForzacRect](repeating: ForzacRect(x: 0, y: 0, w: 0, h: 0), count: 256)
+        var out: [CGRect] = []
+        func add(_ n: UInt32, _ dy: CGFloat) { out += buf[0..<Int(n)].map { CGRect(x: CGFloat($0.x), y: CGFloat($0.y) + dy, width: CGFloat($0.w), height: CGFloat($0.h)) } }
+        if scrolling {
+            let h = bounds.height
+            for (c, top) in screenChapters() { add(forzac_flow_marks(doc, c, Float(-top), Float(h - top), r.start, r.end, &buf, 256), 0) }
+        } else if !atEnd {
+            add(forzac_marks(doc, page, r.start, r.end, &buf, 256), 0)
+        }
+        return out
+    }
+
+    fileprivate func pageMarks(_ index: UInt32, _ r: LocRange) -> [CGRect] {
+        var buf = [ForzacRect](repeating: ForzacRect(x: 0, y: 0, w: 0, h: 0), count: 256)
+        let n = forzac_marks(doc, index, r.start, r.end, &buf, 256)
+        return buf[0..<Int(n)].map { CGRect(x: CGFloat($0.x), y: CGFloat($0.y), width: CGFloat($0.w), height: CGFloat($0.h)) }
+    }
+
+    fileprivate func flowMarks(_ chapter: UInt32, _ y0: Float, _ y1: Float, _ r: LocRange) -> [CGRect] {
+        guard r.start.chapter <= chapter && r.end.chapter >= chapter else { return [] }
+        var buf = [ForzacRect](repeating: ForzacRect(x: 0, y: 0, w: 0, h: 0), count: 256)
+        let n = forzac_flow_marks(doc, chapter, y0, y1, r.start, r.end, &buf, 256)
+        return buf[0..<Int(n)].map { CGRect(x: CGFloat($0.x), y: CGFloat($0.y), width: CGFloat($0.w), height: CGFloat($0.h)) }
+    }
+
+    /// Android's bands under the text: rounded, 2 px wider on each side, in the marker colour (`ctx` y up, `h` high).
+    fileprivate func drawBands(_ bands: [[CGRect]], in ctx: CGContext, height h: CGFloat) {
+        ctx.setFillColor(markerColor)
+        for r in bands.joined() {
+            ctx.addPath(CGPath(roundedRect: CGRect(x: r.minX - 2, y: h - r.maxY, width: r.width + 4, height: r.height), cornerWidth: 3, cornerHeight: 3, transform: nil))
+            ctx.fillPath()
+        }
+    }
+
+    var markerColor: CGColor { color(markerRGB, alpha: palette.paper < 0x808080 ? 0.30 : 0.32) }
+
+    /// `areas` with the highlights' line rectangles added in reading order: each before the first area after its first
+    /// line (kind 4, `at` its start).
+    fileprivate func withHighlights(_ areas: [Area], _ marked: [(LocRange, [CGRect])]) -> [Area] {
+        var areas = areas
+        for (q, rects) in marked {
+            guard let first = rects.first else { continue }
+            let at = areas.firstIndex { $0.rect.minY > first.midY || ($0.rect.maxY > first.minY && $0.rect.minY < first.maxY && $0.rect.minX > first.minX) } ?? areas.count
+            areas.insert(contentsOf: rects.map { Area(rect: $0, kind: 4, target: "", at: q.start) }, at: at)
+        }
+        return areas
+    }
+
+    private func word(_ w: ForzacWord) -> LocRange { LocRange(start: w.start, end: w.end) }
+
+    private func wordAt(_ words: [ForzacWord], _ p: CGPoint) -> Int? {
+        let i = words.withUnsafeBufferPointer { forzac_word_at($0.baseAddress, UInt32($0.count), Float(p.x), Float(p.y)) }
+        return i < 0 ? nil : Int(i)
+    }
+
+    // Mouse.
+
+    /// The pointer moved to `p` while pressed: past a few points the drag selects from the pressed word to this one.
+    func dragUpdate(_ p: CGPoint) {
+        guard var d = drag else { return }
+        d.at = p
+        let words = shownWords()
+        if !d.started {
+            guard hypot(p.x - d.press.x, p.y - d.press.y) >= 4 else { drag = d; return }
+            d.started = true
+            if !grabHandle(d.press) {
+                guard let i = wordAt(words, d.press) else { drag = d; return }
+                textSelection = TextSelection(cursor: word(words[i]), anchor: word(words[i]), keyboard: false)
+            }
+            selectionBar = nil
+        }
+        drag = d
+        if let i = wordAt(words, p) { textSelection?.cursor = word(words[i]) }
+        // Held at a side, above or below the text: the page turns ("Slide"); out of the window: the column moves.
+        if scrolling {
+            if p.y < 0 || p.y > bounds.height { startGlide() }
+        } else {
+            let dir: Int32 = p.x > bounds.width - 24 || p.y > bounds.height - marginTop ? 1 : p.x < 24 || p.y < marginTop ? -1 : 0
+            if dir != edgeDir {
+                edgeTimer?.invalidate()
+                edgeTimer = nil
+                edgeDir = dir
+                if dir != 0 {
+                    edgeTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+                        guard let self, let at = self.drag?.at else { return }
+                        self.turn(self.edgeDir)
+                        self.dragUpdate(at)
+                    }
+                }
+            }
+        }
+        drawFocus()
+    }
+
+    /// The press at `point` is on a handle: the selection's other end becomes the anchor, so the drag moves this one.
+    private func grabHandle(_ point: CGPoint) -> Bool {
+        guard let sel = textSelection, let anchor = sel.anchor, let range = sel.range else { return false }
+        let rects = shownRects(range)
+        guard let first = rects.first, let last = rects.last else { return false }
+        let near = { (x: CGFloat, y: CGFloat) in hypot(point.x - x, point.y - y) < 14 }
+        let (early, late) = anchor.start <= sel.cursor.start ? (anchor, sel.cursor) : (sel.cursor, anchor)
+        if near(first.minX, first.midY) {
+            textSelection = TextSelection(cursor: early, anchor: late, keyboard: sel.keyboard)
+        } else if near(last.maxX, last.midY) {
+            textSelection = TextSelection(cursor: late, anchor: early, keyboard: sel.keyboard)
+        } else {
+            return false
+        }
+        return true
+    }
+
+    private func startGlide() {
+        guard dragLink == nil else { return }
+        let l = displayLink(target: self, selector: #selector(glide(_:)))
+        l.add(to: .main, forMode: .common)
+        dragLink = l
+    }
+
+    @objc private func glide(_ l: CADisplayLink) {
+        guard let at = drag?.at, at.y < 0 || at.y > bounds.height else {
+            dragLink?.invalidate()
+            dragLink = nil
+            settle()
+            return
+        }
+        let out = at.y < 0 ? at.y : at.y - bounds.height
+        offset += out * 8 * CGFloat(l.targetTimestamp - l.timestamp)
+        placeTiles()
+        dragUpdate(CGPoint(x: at.x, y: min(max(at.y, 0), bounds.height - 1)))
+        drag?.at = at
+    }
+
+    /// The press ended; true when it was a drag that selected (the bar shows).
+    func dragEnd() -> Bool {
+        edgeTimer?.invalidate()
+        edgeTimer = nil
+        edgeDir = 0
+        dragLink?.invalidate()
+        dragLink = nil
+        guard let d = drag else { return false }
+        drag = nil
+        guard d.started else { return false }
+        if textSelection?.range != nil { selectionBar = .selection }
+        drawFocus()
+        return true
+    }
+
+    /// A click (`n` in a row) at `p` (y down); true when the selection used it.
+    func selectionClick(_ n: Int, _ p: CGPoint, shift: Bool) -> Bool {
+        if let item = barItems.first(where: { $0.0.contains(p) }) {
+            act(item.1, at: item.0)
+            return true
+        }
+        let words = shownWords()
+        let hit = wordAt(words, p).map { word(words[$0]) }
+        let middle = scrolling || (p.x >= bounds.width / 3 && p.x <= bounds.width * 2 / 3)
+        switch (n, hit) {
+        case (2, let w?) where middle:
+            textSelection = TextSelection(cursor: w, anchor: w, keyboard: false)
+        case (3, let w?) where middle:
+            let block = forzac_block_range(doc, w.start)
+            textSelection = TextSelection(cursor: LocRange(start: block.end, end: block.end), anchor: LocRange(start: block.start, end: block.start), keyboard: false)
+        case (_, let w?) where shift && textSelection != nil:
+            if var sel = textSelection {
+                if sel.anchor == nil { sel.anchor = sel.cursor }
+                sel.cursor = w
+                textSelection = sel
+            }
+        default:
+            guard selecting else { return false }
+            dismissSelection() // a click away from the selection clears it, and does nothing else
+            return true
+        }
+        selectionBar = .selection
+        drawFocus()
+        return true
+    }
+
+    /// Shows the bar of the highlight that starts at `start` (a click, or `Enter` on its `Tab` stop).
+    func openHighlight(_ start: ForzacLocator) {
+        guard let q = highlights.first(where: { $0.start == start }) else { return }
+        textSelection = nil
+        selectionBar = .highlight(q)
+        drawFocus()
+    }
+
+    // Keyboard.
+
+    /// `v`: the selection mode, a word cursor on the first word shown.
+    func startSelection() {
+        guard let w = shownWords().first else { return }
+        textSelection = TextSelection(cursor: word(w), anchor: nil, keyboard: true)
+        selectionBar = nil
+        focus = nil
+        drawFocus()
+    }
+
+    /// A key while selecting; true when it was used. The mode uses every key; a highlight's bar takes `d`, `c`, `s`, `Esc`.
+    func selectionKey(_ e: NSEvent) -> Bool {
+        let command = e.modifierFlags.contains(.command) || e.modifierFlags.contains(.control)
+        if case .highlight = selectionBar {
+            switch e.shortcutKey {
+            case 0x02, 0x33, 0x75: act(.delete)          // d Delete
+            case 0x08 where !command: act(.copy)          // c
+            case 0x01: act(.share)                        // s
+            case 0x35: dismissSelection()                 // Esc
+            default:
+                dismissSelection()
+                return false
+            }
+            return true
+        }
+        guard textSelection != nil else { return false }
+        if command { return false } // ⌘C goes to Edit → Copy
+        switch e.shortcutKey {
+        case 0x04, 0x7B: moveCursor(.step(-1))            // h ←
+        case 0x25, 0x7C: moveCursor(.step(1))             // l →
+        case 0x26, 0x7D: moveCursor(.line(1, .nan))       // j ↓
+        case 0x28, 0x7E: moveCursor(.line(-1, .nan))      // k ↑
+        case 0x09:                                        // v
+            if var sel = textSelection {
+                sel.keyboard = true
+                sel.anchor = sel.anchor == nil ? sel.cursor : nil
+                selectionBar = sel.anchor == nil ? nil : .selection
+                textSelection = sel
+            }
+        case 0x1F:                                        // o
+            if let a = textSelection?.anchor, let c = textSelection?.cursor {
+                textSelection?.anchor = c
+                textSelection?.cursor = a
+                textSelection?.keyboard = true
+            }
+        case 0x24, 0x4C: act(.highlight)                  // Return
+        case 0x08: act(.copy)                             // c
+        case 0x01: act(.share)                            // s
+        case 0x35:                                        // Esc
+            if textSelection?.anchor != nil && textSelection?.keyboard == true {
+                textSelection?.anchor = nil
+                selectionBar = nil
+            } else {
+                dismissSelection()
+            }
+        default: break
+        }
+        drawFocus()
+        return true
+    }
+
+    /// Moves the cursor; past the words shown it turns the page ("Slide") or moves the column a line ("Scroll").
+    private func moveCursor(_ how: PendingMove) {
+        var how = how
+        textSelection?.keyboard = true
+        if case .line(let d, let m) = how, m.isNaN, let sel = textSelection {
+            let words = shownWords()
+            let middle = words.first { $0.start == sel.cursor.start }.map { CGFloat($0.rect.x + $0.rect.w / 2) } ?? 0
+            how = .line(d, middle)
+        }
+        pendingMove = how
+        resolvePending()
+        guard let pending = pendingMove else { return }
+        let dir: Int32 = { switch pending { case .step(let d), .line(let d, _): return d } }()
+        if scrolling {
+            motion = nil
+            offset += CGFloat(dir) * lineHeight
+            placeTiles()
+            settle()
+        } else {
+            turn(dir)
+            if atEnd { pendingMove = nil; turn(-dir) }
+        }
+        resolvePending()
+    }
+
+    /// Moves the cursor as `pendingMove` says when the words shown allow it.
+    private func resolvePending() {
+        guard let pending = pendingMove, let sel = textSelection else { return }
+        let words = shownWords()
+        guard !words.isEmpty else { return }
+        let here = words.firstIndex { $0.start == sel.cursor.start }
+        var next: Int?
+        words.withUnsafeBufferPointer { b in
+            let (p, n) = (b.baseAddress, UInt32(b.count))
+            switch (pending, here) {
+            case (.step(let d), let i?): next = Int(forzac_word_step(p, n, UInt32(i), d))
+            case (.line(let d, _), let i?): next = Int(forzac_word_line(p, n, UInt32(i), d))
+            case (.step(let d), nil): next = d > 0 ? 0 : words.count - 1
+            case (.line(let d, let middle), nil):
+                let line = d > 0 ? words[0].rect.y : words[words.count - 1].rect.y
+                next = words.indices.filter { abs(words[$0].rect.y - line) < 0.5 }.min { abs(CGFloat(words[$0].rect.x + words[$0].rect.w / 2) - middle) < abs(CGFloat(words[$1].rect.x + words[$1].rect.w / 2) - middle) }
+            }
+        }
+        guard let i = next, i >= 0 else { return }
+        // A hyphenated word reached from the right: its first piece.
+        let first = words.firstIndex { $0.start == words[i].start } ?? i
+        textSelection?.cursor = word(words[first])
+        pendingMove = nil
+    }
+
+    // Acting.
+
+    /// Copies, highlights, shares or deletes what the bar is for; `at` is the item's rectangle (y down) for the share menu.
+    func act(_ action: BarAction, at item: CGRect? = nil) {
+        let range: LocRange?
+        if case .highlight(let q) = selectionBar { range = q } else { range = textSelection?.range }
+        guard let range else { return }
+        switch action {
+        case .copy:
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(String(cString: forzac_text(doc, range.start, range.end)), forType: .string)
+        case .share:
+            let text = String(cString: forzac_share_text(doc, range.start, range.end))
+            let at = item ?? barItems.first { $0.1 == .share }?.0 ?? CGRect(x: bounds.midX, y: bounds.midY, width: 1, height: 1)
+            NSSharingServicePicker(items: [text]).show(relativeTo: CGRect(x: at.minX, y: bounds.height - at.maxY, width: at.width, height: at.height), of: self, preferredEdge: .minY)
+        case .highlight:
+            forzac_quote_add(doc, range.start, range.end)
+            reloadHighlights()
+            onHighlights?()
+            dismissSelection()
+            reveal(range)
+            return
+        case .delete:
+            deleteHighlight(range)
+        }
+        dismissSelection()
+    }
+
+    /// Edit → Copy (`⌘C`): the selection, or the highlight whose bar is open.
+    @objc func copy(_ sender: Any?) {
+        guard textSelection?.range != nil || selectionBar != nil else { return }
+        act(.copy)
+    }
+
+    /// Ends the selection and closes the bar.
+    func dismissSelection() {
+        guard textSelection != nil || selectionBar != nil || pendingMove != nil else { return }
+        textSelection = nil
+        selectionBar = nil
+        pendingMove = nil
+        drawFocus()
+    }
+
+    /// Takes the highlights from the document (after they were loaded or changed); pages and tiles are drawn again.
+    func reloadHighlights(redraw: Bool = false) {
+        var n: UInt32 = 0
+        let p = forzac_quote_places(doc, &n)
+        highlights = (0..<Int(n)).map { LocRange(start: p![$0].start, end: p![$0].end) }
+        if redraw { redrawPages() }
+    }
+
+    /// Deletes the highlight `q` (from the list or its bar), without animation.
+    func deleteHighlight(_ q: LocRange) {
+        forzac_quote_remove(doc, q.start, q.end)
+        reloadHighlights(redraw: true)
+        if selectionBar == .highlight(q) { selectionBar = nil }
+        focus = nil
+        onHighlights?()
+        drawFocus()
+    }
+
+    /// A new highlight draws in along its lines (90 ms a line, 180–600 ms): the pages drawn with it lie over the old ones,
+    /// masked by bands that grow one after another in the window server.
+    private func reveal(_ q: LocRange) {
+        let rects = shownRects(q)
+        let total = rects.reduce(0) { $0 + $1.width + 4 }
+        let duration = min(0.6, max(0.18, 0.09 * Double(rects.count)))
+        // Old pages and tiles stay on screen under the new ones while the stroke runs.
+        images = [:]
+        pageAreas = [:]
+        let now = CACurrentMediaTime()
+        func mask(_ frame: CGRect, top: CGFloat) -> CALayer {
+            let m = CALayer()
+            m.frame = CGRect(origin: .zero, size: frame.size)
+            var before: CGFloat = 0
+            for r in rects {
+                let band = CALayer()
+                band.backgroundColor = color(0x000000)
+                band.anchorPoint = CGPoint(x: 0, y: 0.5)
+                let w = r.width + 4
+                band.frame = CGRect(x: r.minX - 2, y: frame.height - (r.maxY - top), width: w, height: r.height)
+                let grow = CABasicAnimation(keyPath: "bounds.size.width")
+                grow.fromValue = 0
+                grow.toValue = w
+                grow.beginTime = now + duration * Double(before / max(total, 1))
+                grow.duration = duration * Double(w / max(total, 1))
+                grow.fillMode = .backwards
+                band.add(grow, forKey: "stroke")
+                m.addSublayer(band)
+                before += w
+            }
+            return m
+        }
+        var overlays: [(CALayer, () -> Void)] = []
+        if scrolling {
+            let tile = max(1, bounds.height.rounded())
+            for (key, t) in tiles where !t.isHidden && key.chapter >= q.start.chapter && key.chapter <= q.end.chapter {
+                let (image, _) = tileImage(key, tile: tile)
+                let over = CALayer()
+                over.contents = image
+                over.contentsScale = scale
+                over.frame = t.frame
+                over.mask = mask(t.frame, top: bounds.height - t.frame.maxY)
+                layer!.insertSublayer(over, above: t)
+                overlays.append((over, { t.contents = image }))
+            }
+            for (key, t) in tiles where t.isHidden && key.chapter >= q.start.chapter && key.chapter <= q.end.chapter {
+                t.removeFromSuperlayer()
+                tiles[key] = nil
+                tileAreas[key] = nil
+            }
+        } else if let image = image(page) {
+            let over = CALayer()
+            over.contents = image
+            over.contentsScale = scale
+            over.frame = current.frame
+            over.mask = mask(current.frame, top: 0)
+            layer!.insertSublayer(over, above: current)
+            overlays.append((over, { [weak self] in self?.current.contents = self?.images[self?.page ?? 0] ?? image }))
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.05) {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            for (over, done) in overlays {
+                done()
+                over.removeFromSuperlayer()
+            }
+            CATransaction.commit()
+        }
+        drawFocus()
+    }
+
+    // Drawing.
+
+    /// The selection over the page (bands in the ink at 14 %, the handles) and the keyboard's cursor.
+    fileprivate func selectionLayers() -> [CALayer] {
+        resolvePending()
+        guard let sel = textSelection else { return [] }
+        let h = bounds.height
+        var out: [CALayer] = []
+        if let range = sel.range {
+            let rects = shownRects(range)
+            for m in rects {
+                let r = CALayer()
+                r.backgroundColor = color(palette.ink, alpha: 0.14)
+                r.cornerRadius = 4
+                r.frame = CGRect(x: m.minX - 2, y: h - m.maxY, width: m.width + 4, height: m.height)
+                out.append(r)
+            }
+            // Handles at the ends shown: a bar the line's height and a knob above the start, below the end.
+            let words = shownWords()
+            if let r = rects.first, words.contains(where: { $0.start <= range.start && range.start < $0.end }) { out += handle(r.minX, r.minY, r.height, start: true) }
+            if let r = rects.last, words.contains(where: { $0.start < range.end && range.end <= $0.end }) { out += handle(r.maxX, r.minY, r.height, start: false) }
+        }
+        if sel.keyboard {
+            for m in shownRects(sel.cursor) {
+                let r = CALayer()
+                r.backgroundColor = color(palette.link, alpha: 0.22)
+                r.cornerRadius = 4
+                r.frame = CGRect(x: m.minX - 3, y: h - m.maxY + 2, width: m.width + 6, height: m.height - 4)
+                out.append(r)
+            }
+        }
+        return out
+    }
+
+    private func handle(_ x: CGFloat, _ y: CGFloat, _ lineHeight: CGFloat, start: Bool) -> [CALayer] {
+        let h = bounds.height
+        let knob: CGFloat = 5.5
+        let bar = CALayer()
+        bar.backgroundColor = color(palette.link)
+        bar.frame = CGRect(x: x - 1, y: h - y - lineHeight, width: 2, height: lineHeight)
+        let dot = CALayer()
+        dot.backgroundColor = color(palette.link)
+        dot.cornerRadius = knob
+        let cy = start ? y - knob * 0.6 : y + lineHeight + knob * 0.6
+        dot.frame = CGRect(x: x - knob, y: h - cy - knob, width: 2 * knob, height: 2 * knob)
+        return [bar, dot]
+    }
+
+    /// The bar over the selection or a highlight: the ink as its fill, the paper as its labels (Android's `SelectionBar`).
+    fileprivate func updateBar() {
+        barItems = []
+        let range: LocRange?
+        switch selectionBar {
+        case .selection?: range = textSelection?.range
+        case .highlight(let q)?: range = q
+        case nil: range = nil
+        }
+        let rects = range.map(shownRects) ?? []
+        guard let bar = selectionBar, drag?.started != true, let first = rects.first else {
+            barLayer.opacity = 0
+            return
+        }
+        let bounds = rects.reduce(first) { $0.union($1) }
+        let items: [(String, BarAction)] = bar == .selection ? [("Highlight", .highlight), ("Copy", .copy), ("Share", .share)] : [("Delete", .delete), ("Copy", .copy), ("Share", .share)]
+        let font = interfaceFont(15, .medium)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        barLayer.sublayers = nil
+        barLayer.backgroundColor = color(palette.ink)
+        var x: CGFloat = 0
+        var widths: [CGFloat] = []
+        let height = ceil(font.ascender - font.descender) + 24
+        for (i, (label, _)) in items.enumerated() {
+            if i > 0 {
+                let rule = CALayer()
+                rule.backgroundColor = color(palette.paper, alpha: 0.2)
+                rule.frame = CGRect(x: x, y: (height - 20) / 2, width: 1, height: 20)
+                barLayer.addSublayer(rule)
+                x += 1
+            }
+            let text = CATextLayer()
+            text.string = NSAttributedString(string: label, attributes: [.font: font, .foregroundColor: nsColor(palette.paper)])
+            text.contentsScale = scale
+            let size = text.preferredFrameSize()
+            text.frame = CGRect(x: x + 16, y: (height - size.height) / 2, width: size.width, height: size.height)
+            barLayer.addSublayer(text)
+            widths.append(size.width + 32)
+            x += size.width + 32
+        }
+        let h = self.bounds.height
+        let above = bounds.minY - 14 - height
+        let top = above > 8 ? above : bounds.maxY + 14 + 8
+        let left = min(max(8, bounds.midX - x / 2), max(8, self.bounds.width - x - 8))
+        barLayer.frame = CGRect(x: left, y: h - top - height, width: x, height: height)
+        CATransaction.commit()
+        var at = left
+        for ((_, action), w) in zip(items, widths) {
+            barItems.append((CGRect(x: at, y: top, width: w, height: height), action))
+            at += w + 1
+        }
+        if barLayer.opacity == 0 {
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(0.12)
+            barLayer.opacity = 1
+            CATransaction.commit()
+        }
+    }
 }

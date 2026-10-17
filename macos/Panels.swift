@@ -398,8 +398,8 @@ final class SettingsSheet: SheetView {
 
 /// The tabs of the contents panel.
 enum ContentsTab: Int, CaseIterable {
-    case contents, bookmarks
-    var title: String { ["Contents", "Bookmarks"][rawValue] }
+    case contents, bookmarks, highlights
+    var title: String { ["Contents", "Bookmarks", "Highlights"][rawValue] }
 }
 
 /// The contents: the tabs with a close button, a filter field, the book, then the entries with their position in the
@@ -414,6 +414,10 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
     private let tabs = ContentsTab.allCases.map { FlatButton(label($0.title, interfaceFont(17, .medium), 0)) }
     /// The bookmarks as listed, and the hint shown when there are none.
     private var marks: [(at: ForzacLocator, section: String, position: Float, snippet: String)] = []
+    /// The highlights as listed: range, text and "section · N%".
+    private var quotes: [(range: LocRange, text: String, place: String)] = []
+    /// Shares all highlights (the header, on the "Highlights" tab when there are any).
+    private let share = FlatButton(IconView(Icons.share, size: 20))
     private let empty = NSStackView()
     private let emptyTitle = label("No bookmarks yet", bookFont("PT Serif", 20), 0)
     private let emptyBody = label("Press b on a page — a ribbon marks the place.", interfaceFont(14), 0)
@@ -450,7 +454,10 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
             button.heightAnchor.constraint(equalToConstant: 44).isActive = true
             button.onClick = { [weak self] in self?.show(t) }
         }
-        let header = NSStackView(views: tabs + [spacer, close])
+        fixed(share, width: 44, height: 44)
+        share.onClick = { [weak self] in self?.shareAll() }
+        share.isHidden = true
+        let header = NSStackView(views: tabs + [spacer, share, close])
         header.spacing = 0
         header.distribution = .fill
         header.edgeInsets = NSEdgeInsets(top: 4, left: 8, bottom: 0, right: 8)
@@ -567,6 +574,7 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
             button.colour(p)
             (button.content as? NSTextField)?.textColor = nsColor(selected ? p.ink : p.muted)
         }
+        share.colour(p)
         emptyTitle.textColor = nsColor(p.ink)
         emptyBody.textColor = nsColor(p.muted)
         close.colour(p)
@@ -606,14 +614,64 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
         fieldHeight.constant = contents ? 44 : 0
         cardTop.constant = contents ? 12 : 0
         colour(view.palette)
+        share.isHidden = true
         if contents {
             empty.isHidden = true
             table.reloadData()
             select(shown.firstIndex(of: currentEntry) ?? 0)
-        } else {
+        } else if tab == .bookmarks {
+            emptyTitle.stringValue = "No bookmarks yet"
+            emptyBody.stringValue = "Press b on a page — a ribbon marks the place."
             reloadBookmarks(selecting: 0)
+        } else {
+            emptyTitle.stringValue = "No highlights yet"
+            emptyBody.stringValue = "Select text with the mouse, or press v on a page, then choose Highlight."
+            reloadHighlights(selecting: 0)
         }
         window?.makeFirstResponder(table)
+    }
+
+    private func reloadHighlights(selecting row: Int) {
+        guard let view else { return }
+        var n: UInt32 = 0
+        let list = forzac_quotes(view.doc, &n)
+        quotes = (0..<Int(n)).map { i in
+            let q = list![i]
+            let percent = "\(Int((q.position * 100).rounded()))%"
+            return (LocRange(start: q.start, end: q.end), String(cString: q.text), q.section.map { "\(String(cString: $0)) · \(percent)" } ?? percent)
+        }
+        empty.isHidden = !quotes.isEmpty
+        share.isHidden = quotes.isEmpty
+        table.reloadData()
+        select(row)
+    }
+
+    /// `d`: deletes the selected highlight; the one after it is selected.
+    func deleteHighlight() {
+        guard let view, tab == .highlights, quotes.indices.contains(table.selectedRow) else { return }
+        let row = table.selectedRow
+        view.deleteHighlight(quotes[row].range)
+        reloadHighlights(selecting: row)
+    }
+
+    /// `c`: copies the selected highlight's text.
+    func copyHighlight() {
+        guard tab == .highlights, quotes.indices.contains(table.selectedRow) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(quotes[table.selectedRow].text, forType: .string)
+    }
+
+    /// `⌘C`: all highlights in the export format.
+    func copyAll() {
+        guard let view, tab == .highlights, !quotes.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(String(cString: forzac_quotes_export(view.doc)), forType: .string)
+    }
+
+    private func shareAll() {
+        guard let view, !quotes.isEmpty else { return }
+        let text = String(cString: forzac_quotes_export(view.doc))
+        NSSharingServicePicker(items: [text]).show(relativeTo: share.bounds, of: share, preferredEdge: .minY)
     }
 
     /// The next (`delta` 1) or previous (−1) tab.
@@ -664,14 +722,54 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
 
     @objc func jump() {
         guard let view, table.selectedRow >= 0, table.selectedRow < numberOfRows(in: table) else { return }
-        let at = tab == .contents ? entries[shown[table.selectedRow]].at : marks[table.selectedRow].at
+        let at = tab == .contents ? entries[shown[table.selectedRow]].at : tab == .bookmarks ? marks[table.selectedRow].at : quotes[table.selectedRow].range.start
         dismiss()
         view.go(to: at)
     }
 
     func focusFilter() { window?.makeFirstResponder(filter) }
 
-    func numberOfRows(in tableView: NSTableView) -> Int { tab == .contents ? shown.count : marks.count }
+    func numberOfRows(in tableView: NSTableView) -> Int { tab == .contents ? shown.count : tab == .bookmarks ? marks.count : quotes.count }
+
+    private func quoteText(_ text: String) -> NSAttributedString {
+        let style = NSMutableParagraphStyle()
+        style.minimumLineHeight = 23
+        style.maximumLineHeight = 23
+        style.lineBreakMode = .byWordWrapping
+        return NSAttributedString(string: text, attributes: [.font: bookFont("PT Serif", 16), .foregroundColor: nsColor(palette.ink), .paragraphStyle: style])
+    }
+
+    /// A highlight as Android lists it: an ochre rule, the text (six lines at most), "section · N%" below.
+    private func highlightCell(_ row: Int) -> NSView {
+        let q = quotes[row]
+        let rule = LayerView()
+        rule.layer!.backgroundColor = color(0xC49A52)
+        rule.layer!.cornerRadius = 1.5
+        let text = NSTextField(labelWithAttributedString: quoteText(q.text))
+        text.maximumNumberOfLines = 6
+        text.cell?.wraps = true
+        text.cell?.truncatesLastVisibleLine = true
+        text.preferredMaxLayoutWidth = markWidth - 17
+        let place = label(q.place, interfaceFont(13), palette.muted)
+        place.lineBreakMode = .byTruncatingTail
+        let column = NSStackView(views: [text, place])
+        column.orientation = .vertical
+        column.alignment = .leading
+        column.spacing = 6
+        let cell = NSView()
+        for v in [rule, column] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            cell.addSubview(v)
+        }
+        NSLayoutConstraint.activate([
+            rule.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 20), rule.widthAnchor.constraint(equalToConstant: 3),
+            rule.topAnchor.constraint(equalTo: cell.topAnchor, constant: 14), rule.bottomAnchor.constraint(equalTo: cell.bottomAnchor, constant: -14),
+            column.leadingAnchor.constraint(equalTo: rule.trailingAnchor, constant: 14), column.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -20),
+            column.topAnchor.constraint(equalTo: cell.topAnchor, constant: 14),
+            text.widthAnchor.constraint(equalTo: column.widthAnchor), place.widthAnchor.constraint(equalTo: column.widthAnchor),
+        ])
+        return cell
+    }
 
     /// The room for a bookmark's text: the panel less the margins.
     private var markWidth: CGFloat { max(100, (table.bounds.width > 0 ? table.bounds.width : 400) - 40) }
@@ -716,6 +814,11 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
     }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        if tab == .highlights {
+            let h: CGFloat = quoteText(quotes[row].text).boundingRect(with: NSSize(width: markWidth - 17, height: 1000), options: [.usesLineFragmentOrigin]).height
+            let text: CGFloat = min(ceil(h), 6 * 23)
+            return text + 52 // 14 above, 6 and the 18 of "section · N%", 14 below
+        }
         if tab == .bookmarks {
             let h = snippet(marks[row].snippet).boundingRect(with: NSSize(width: markWidth, height: 1000), options: [.usesLineFragmentOrigin]).height
             return 12 + 21 + 4 + min(ceil(h), 36) + 12
@@ -729,6 +832,7 @@ final class ContentsPanel: LayerView, NSTableViewDataSource, NSTableViewDelegate
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         if tab == .bookmarks { return bookmarkCell(row) }
+        if tab == .highlights { return highlightCell(row) }
         let i = shown[row]
         let e = entries[i]
         let isCurrent = i == currentEntry
@@ -797,20 +901,25 @@ final class ContentsTable: NSTableView {
     override func keyDown(with e: NSEvent) {
         let shift = e.modifierFlags.contains(.shift)
         let bookmarks = panel?.tab == .bookmarks
+        let highlights = panel?.tab == .highlights
         switch e.shortcutKey {
         case 0x26: panel?.select(selectedRow + 1)        // j
         case 0x28: panel?.select(selectedRow - 1)        // k
         case 0x24, 0x4C: panel?.jump()                    // Return
-        case 0x2C where !shift && !bookmarks: panel?.focusFilter() // /
+        case 0x2C where !shift && panel?.tab == .contents: panel?.focusFilter() // /
         case 0x30: panel?.switchTab(shift ? -1 : 1)      // Tab
         case 0x7C, 0x25: panel?.switchTab(1)             // → l
         case 0x7B, 0x04: panel?.switchTab(-1)            // ← h
-        case 0x02, 0x33, 0x75: panel?.removeBookmark()   // d Delete
+        case 0x02, 0x33, 0x75: if highlights { panel?.deleteHighlight() } else { panel?.removeBookmark() } // d Delete
+        case 0x08 where highlights && !e.modifierFlags.contains(.command): panel?.copyHighlight() // c
         case 0x0B where shift: if bookmarks { panel?.dismiss() } else { panel?.show(.bookmarks) } // B
         case 0x35, 0x1F, 0x0C: panel?.dismiss()           // Esc o q
         default: super.keyDown(with: e)
         }
     }
+
+    /// Edit → Copy (`⌘C`) on the "Highlights" tab: all highlights.
+    @objc func copy(_ sender: Any?) { panel?.copyAll() }
 }
 
 final class ContentsRow: NSTableRowView {

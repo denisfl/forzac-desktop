@@ -17,10 +17,10 @@
 
 ## 3. macOS shell
 
-- [ ] 3.1 Selection: mouse, keyboard mode, crossing pages
-- [ ] 3.2 The bar, `⌘C`, Edit → Copy, Share (`NSSharingServicePicker`)
-- [ ] 3.3 Highlights: bitmaps and tiles, the masked stroke, `Tab` stops, clicks, the highlight's bar
-- [ ] 3.4 The "Highlights" tab, its share button, View → Highlights; help text
+- [x] 3.1 Selection: mouse, keyboard mode, crossing pages
+- [x] 3.2 The bar, `⌘C`, Edit → Copy, Share (`NSSharingServicePicker`)
+- [x] 3.3 Highlights: bitmaps and tiles, the masked stroke, `Tab` stops, clicks, the highlight's bar
+- [x] 3.4 The "Highlights" tab, its share button, View → Highlights; help text
 
 ## 4. Docs
 

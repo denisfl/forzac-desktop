@@ -5,10 +5,11 @@
 // ~/Library/Application Support/Forzac/state.
 //
 // Spike flags: --measure (time to the first presented page), --png out.png (first page), --chapter N, --page N (the
-// page of the chapter --png saves), --panel settings|contents|bookmarks|note:ID|image:ID|table:CHAPTER.BLOCK and --theme N (with
+// page of the chapter --png saves), --panel settings|contents|bookmarks|highlights|note:ID|image:ID|table:CHAPTER.BLOCK and --theme N (with
 // --png: the whole window with that panel or view open, in that theme; --keys "ll+\t\r" then sends those keys to it
-// first, 0.3 s apart: letters, digits, + - =, \t Tab, \r Return, \e Esc, an upper-case letter with Shift), --scroll (in
-// "Scroll"); with any of them the reading state is neither read nor written.
+// first, 0.3 s apart: letters, digits, + - =, \t Tab, \r Return, \e Esc, an upper-case letter with Shift; --mouse
+// "down X Y; drag X Y; up X Y; click X Y N" then sends those mouse events to the page, 0.15 s apart, at points of the
+// page, y down), --scroll (in "Scroll"); with any of them the reading state is neither read nor written.
 
 import AppKit
 
@@ -23,6 +24,7 @@ g  G  Home  End    chapter start / end
 o    contents  (/ filters, ← → tabs)
 b  ⌘D    bookmark the page, again to remove it
 B    bookmarks  (Return goes, d removes)
+v    select: h l words, j k lines, v anchors, o other end, Return highlight, c ⌘C copy, s share, Esc back
 Tab  Shift+Tab    notes, links, pictures and tables on the page, Return opens
 ⌃O  ⌘[    back after a jump
 s  ⌘,    settings
@@ -32,7 +34,8 @@ t  T    theme
 f  ⌃⌘F    full screen
 ?    this help
 q  ⌘W    close
-click    the left or right third of the page turns it; a picture or a table opens
+click    the left or right third of the page turns it; a picture or a table opens; a drag selects (a double click
+         in the middle: a word, a triple: the paragraph)
 
 Picture or table:  + − 0  zoom, fit    arrows  h j k l  Space  move    Esc  q  close
 
@@ -107,8 +110,16 @@ final class Reader: NSObject, NSWindowDelegate {
         help.layer?.cornerRadius = 12
         container.addSubview(help)
         view.onCommand = { [weak self] in self?.run($0) }
-        if let state { forzac_state_load_bookmarks(state, doc) }
+        if let state {
+            forzac_state_load_bookmarks(state, doc)
+            forzac_state_load_quotes(state, doc)
+        }
         view.reloadBookmarks()
+        view.reloadHighlights(redraw: true)
+        view.onHighlights = { [weak self] in
+            guard let self, let state = self.state else { return }
+            if !forzac_state_save_quotes(state, self.view.doc) { fputs("cannot save the reading state\n", stderr) }
+        }
         view.onBookmarks = { [weak self] in
             guard let self, let state = self.state else { return }
             if !forzac_state_save_bookmarks(state, self.view.doc) { fputs("cannot save the reading state\n", stderr) }
@@ -171,8 +182,14 @@ final class Reader: NSObject, NSWindowDelegate {
                 settingsSheet = sheet
             }
             if let sheet = settingsSheet { toggle(sheet) { sheet.open() } }
-        case .contents, .bookmarks:
-            let tab: ContentsTab = { if case .bookmarks = command { return .bookmarks } else { return .contents } }()
+        case .contents, .bookmarks, .highlights:
+            let tab: ContentsTab = {
+                switch command {
+                case .bookmarks: return .bookmarks
+                case .highlights: return .highlights
+                default: return .contents
+                }
+            }()
             if contents == nil {
                 let panel = ContentsPanel(view: view)
                 container.addSubview(panel)
@@ -268,6 +285,18 @@ final class Reader: NSObject, NSWindowDelegate {
                                        context: nil, characters: text, charactersIgnoringModifiers: text, isARepeat: false, keyCode: codes[key] ?? 0xFFFF)
         else { return }
         window.sendEvent(e)
+    }
+
+    /// A mouse event at `(x, y)` of the page (y down) as the mouse would send it (`--mouse`): `down`, `drag`, `up`, or
+    /// `click` (a press and a release, the `n`th click in a row).
+    func mouse(_ kind: String, _ x: CGFloat, _ y: CGFloat, _ n: Int = 1) {
+        let at = view.convert(CGPoint(x: x, y: view.bounds.height - y), to: nil)
+        let types: [NSEvent.EventType] = kind == "down" ? [.leftMouseDown] : kind == "drag" ? [.leftMouseDragged] : kind == "up" ? [.leftMouseUp] : [.leftMouseDown, .leftMouseUp]
+        for type in types {
+            guard let e = NSEvent.mouseEvent(with: type, location: at, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                             context: nil, eventNumber: 0, clickCount: n, pressure: type == .leftMouseUp ? 0 : 1) else { continue }
+            window.sendEvent(e)
+        }
     }
 
     /// The whole window as drawn, panels included (`--panel`).
@@ -507,7 +536,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             for (i, key) in keys.enumerated() {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5 + 0.3 * Double(i)) { reader.send(key) }
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8 + 0.3 * Double(keys.count)) {
+            let events = (self.value(after: "--mouse") ?? "").split(separator: ";").map { $0.split(separator: " ").map(String.init) }.filter { $0.count >= 3 }
+            let start = 0.5 + 0.3 * Double(keys.count)
+            for (i, e) in events.enumerated() {
+                DispatchQueue.main.asyncAfter(deadline: .now() + start + 0.15 * Double(i)) {
+                    reader.mouse(e[0], CGFloat(Double(e[1]) ?? 0), CGFloat(Double(e[2]) ?? 0), e.count > 3 ? Int(e[3]) ?? 1 : 1)
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8 + 0.3 * Double(keys.count) + 0.15 * Double(events.count)) {
                 reader.savePNG(png)
                 NSApp.terminate(nil)
             }
@@ -521,6 +557,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "settings": return .settings
         case "contents": return .contents
         case "bookmarks": return .bookmarks
+        case "highlights": return .highlights
         case _ where panel.hasPrefix("image:"): return .image(arg)
         case _ where panel.hasPrefix("table:"):
             let n = arg.split(separator: ".").compactMap { UInt32($0) }
@@ -551,6 +588,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func showSettings(_ sender: Any?) { key?.run(.settings) }
     @objc func showContents(_ sender: Any?) { key?.run(.contents) }
     @objc func showBookmarks(_ sender: Any?) { key?.run(.bookmarks) }
+    @objc func showHighlights(_ sender: Any?) { key?.run(.highlights) }
     @objc func toggleBookmark(_ sender: Any?) { key?.view.toggleBookmark() }
     @objc func find(_ sender: Any?) { key?.run(.search) }
     @objc func findNext(_ sender: Any?) { key?.view.nextMatch(1) }
@@ -616,14 +654,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recentItem.submenu = recentMenu
         let close = NSMenuItem(title: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         submenu("File", [item("Open…", #selector(openDocument(_:)), "o"), recentItem, .separator(), close])
+        let copy = NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         submenu("Edit", [
+            copy, .separator(),
             item("Find…", #selector(find(_:)), "f"), item("Find Next", #selector(findNext(_:)), "g"),
             item("Find Previous", #selector(findPrevious(_:)), "g", [.command, .shift]),
         ])
         let fullScreen = NSMenuItem(title: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
         fullScreen.keyEquivalentModifierMask = [.control, .command]
         submenu("View", [
-            item("Contents", #selector(showContents(_:))), item("Bookmarks", #selector(showBookmarks(_:))),
+            item("Contents", #selector(showContents(_:))), item("Bookmarks", #selector(showBookmarks(_:))), item("Highlights", #selector(showHighlights(_:))),
             item("Pages or Scroll", #selector(toggleScroll(_:))), item("Next Theme", #selector(nextTheme(_:))),
             .separator(),
             item("Bigger Text", #selector(biggerText(_:)), "+"), item("Smaller Text", #selector(smallerText(_:)), "-"), item("Default Size", #selector(defaultText(_:)), "0"),
