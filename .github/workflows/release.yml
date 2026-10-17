@@ -55,7 +55,7 @@ jobs:
 
   macos:
     name: macOS disk image (arm64)
-    runs-on: macos-14
+    runs-on: macos-15  # Xcode 16: the shell uses Swift 6 (@retroactive)
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable

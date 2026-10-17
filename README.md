@@ -4,8 +4,14 @@ An offline reader for FB2, FB3 and EPUB books with book-quality typesetting — 
 at page edges — for Linux (first of all [Omarchy](https://omarchy.org)) and macOS. Keyboard first, few settings,
 free. The desktop sibling of Forzac for Android.
 
-**Status: spike done, planning the full version.** The stack is described in [ADR 0001](docs/adr/0001-stack.md),
-the spike results in [docs/spike.md](docs/spike.md), the plan to 1.0 in [docs/roadmap.md](docs/roadmap.md).
+**Status: not released yet.** Reading, search, bookmarks, highlights, the library and the interface in English and
+Russian work on Linux and macOS; the first release is being prepared ([docs/publishing.md](docs/publishing.md)). The stack
+is described in [ADR 0001](docs/adr/0001-stack.md), the spike results in [docs/spike.md](docs/spike.md), the plan to 1.0
+in [docs/roadmap.md](docs/roadmap.md).
+
+**Try it in your browser:** [forzac.truenrth.app/read](https://forzac.truenrth.app/read/) opens your own FB2, FB3 or
+EPUB with Forzac's typesetting, themes and fonts. The book stays on your computer. It is the web reader of Forzac for
+Android, a separate implementation from this app, so some keys and details differ.
 
 Work is planned with [OpenSpec](https://github.com/Fission-AI/OpenSpec): each feature is a change in
 `openspec/changes/<name>` (`proposal → specs → design → tasks`), implemented from its tasks and archived when done.

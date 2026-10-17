@@ -4,9 +4,11 @@
 #   macos/build.sh && macos/build/Forzac book.fb2.zip
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
+# The oldest macOS the app runs on (Info.plist LSMinimumSystemVersion), whatever SDK builds it.
+export MACOSX_DEPLOYMENT_TARGET=14.0
 cargo build --release -p forzac-core --manifest-path "$root/Cargo.toml" --target aarch64-apple-darwin
 mkdir -p "$root/macos/build"
-swiftc -O -import-objc-header "$root/macos/forzac.h" "$root"/macos/*.swift \
+swiftc -O -target arm64-apple-macos$MACOSX_DEPLOYMENT_TARGET -import-objc-header "$root/macos/forzac.h" "$root"/macos/*.swift \
   -L "$root/target/aarch64-apple-darwin/release" -lforzac_core \
   -framework AppKit -framework CoreText -framework QuartzCore \
   -o "$root/macos/build/Forzac"
