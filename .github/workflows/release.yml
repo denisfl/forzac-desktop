@@ -54,7 +54,7 @@ jobs:
           path: forzac_*_arm64.deb
 
   macos:
-    name: macOS app (arm64)
+    name: macOS disk image (arm64)
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v5
@@ -62,15 +62,12 @@ jobs:
         with:
           targets: aarch64-apple-darwin
       - run: macos/build.sh
-      - name: Archive
-        run: |
-          name="Forzac-${GITHUB_REF_NAME#v}-macos-arm64.zip"
-          ditto -c -k --keepParent macos/build/Forzac.app "$name"
-          echo "ARCHIVE=$name" >> "$GITHUB_ENV"
+      - name: Disk image
+        run: scripts/package-macos.sh "${GITHUB_REF_NAME#v}"
       - uses: actions/upload-artifact@v4
         with:
           name: macos-arm64
-          path: ${{ env.ARCHIVE }}
+          path: Forzac-*-macos-arm64.dmg*
 
   release:
     name: Draft release

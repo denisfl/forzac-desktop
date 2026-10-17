@@ -32,7 +32,8 @@ cargo clippy --workspace --all-targets -- -D warnings      # needs GTK 4 dev fil
 cargo test -p forzac-core
 FORZAC_CORPUS=~/Books cargo test -p forzac-core --test corpus
 cargo run --release -p forzac-gtk -- book.fb2.zip          # Linux
-macos/build.sh                                             # macOS: macos/build/Forzac and Forzac.app
+macos/build.sh                                             # macOS: macos/build/Forzac and Forzac.app (signed ad hoc)
+scripts/package-macos.sh X.Y.Z                             # macOS: the DMG and its .sha256, after macos/build.sh
 cargo run --release -p forzac-core --example bench -- book.fb2.zip
 scripts/measure.sh book.fb2.zip                            # Linux desktop measurements
 scripts/pi-headless.sh target/release/forzac book.fb2.zip  # headless measurements on GPU (Raspberry Pi)

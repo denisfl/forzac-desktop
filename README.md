@@ -37,7 +37,9 @@ macos/build.sh && open macos/build/Forzac.app
 ```
 
 `Forzac.app` opens books from Finder ("Open With", or set it as the default app for EPUB and FB2), from `⌘O` and from
-the Dock icon. The build is unsigned: macOS asks once on first open (right-click › Open).
+the Dock icon. The build is signed ad hoc, without a Developer ID. The download for forzac.truenrth.app is a disk image
+with a SHA-256 checksum (`scripts/package-macos.sh X.Y.Z`); a downloaded copy needs a first-open step in macOS,
+described for the download page in [docs/macos-first-open.md](docs/macos-first-open.md).
 
 A book reopens where it was left; the settings are remembered. Until a theme is chosen, the theme follows the
 system's light or dark appearance. Without a file, Forzac lists the recent books (`Enter` opens one). The state is kept in `$XDG_DATA_HOME/forzac/state` on Linux and

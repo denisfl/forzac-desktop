@@ -8,14 +8,16 @@ Gatekeeper, so there is no cask.
 
 ## What Changes
 
-- An ad-hoc signed `.app` (`codesign --sign -`, which Apple Silicon requires for a bundle to run) in a DMG, built by
-  a script and a CI job; a SHA-256 checksum published next to it.
+- An ad-hoc signed `.app` (`codesign --sign -`, which Apple Silicon requires for a bundle to run) with the app icon
+  (from the Android app's vector icon, on the macOS icon grid) in a DMG, built by a script and a CI job; a SHA-256
+  checksum published next to it.
 - First-open instructions for the download page, with screenshots for macOS 14 and 15+.
 
 ## Capabilities
 
 ### Modified Capabilities
 - `macos-app`: distribution.
+- `project-infrastructure`: the macOS release artefact is the DMG and its checksum instead of a zip.
 
 ## Impact
 

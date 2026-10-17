@@ -14,6 +14,10 @@ packages.
 - The measurement scripts (`scripts/measure.sh`, `scripts/pi-headless.sh`) produce the evidence attached to the
   release.
 - Release notes, version 1.0.0, packages published (AUR, Raspberry Pi OS `.deb`, the macOS DMG on forzac.truenrth.app).
+- Before the DMG is published (left over from `macos-release`): the maintainer opens the downloaded DMG on a fresh Mac
+  user account following `docs/macos-first-open.md`, including the Gatekeeper step on a quarantined copy; the steps
+  are checked on a macOS 15 Mac; screenshots of the macOS 14 and 15 steps are added to the download page.
+- Publishing the AUR packages: `updpkgsums` and `.SRCINFO` from the tag's archives (`packaging/aur/`).
 
 ## Capabilities
 

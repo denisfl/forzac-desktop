@@ -10,13 +10,18 @@ swiftc -O -import-objc-header "$root/macos/forzac.h" "$root"/macos/*.swift \
   -L "$root/target/aarch64-apple-darwin/release" -lforzac_core \
   -framework AppKit -framework CoreText -framework QuartzCore \
   -o "$root/macos/build/Forzac"
-# The same binary as an app bundle (unsigned until the macos-app change adds signing).
+# The same binary as an app bundle, with the icon (scripts/icons.py).
 app="$root/macos/build/Forzac.app/Contents"
 rm -rf "$root/macos/build/Forzac.app"
 install -d "$app/MacOS"
 cp "$root/macos/build/Forzac" "$app/MacOS/Forzac"
 cp "$root/macos/Info.plist" "$app/Info.plist"
+install -d "$app/Resources"
+cp "$root/macos/Forzac.icns" "$app/Resources/"
 # The fonts read from files (the other book families, the interface font) and the licences of everything bundled.
 install -d "$app/Resources/licenses"
 cp -r "$root/assets/fonts" "$app/Resources/"
 cp "$root/LICENSE" "$root/assets/hyph/hyph-ru.lic.txt" "$root/assets/hyph/hyph-en-us.lic.txt" "$app/Resources/licenses/"
+# Signed ad hoc as a whole bundle (Apple Silicon runs nothing unsigned; sealing the resources keeps Gatekeeper's check
+# of a download to the first-open step). No Developer ID: see docs/macos-first-open.md.
+codesign --force --sign - --identifier app.truenrth.forzac "$root/macos/build/Forzac.app"
