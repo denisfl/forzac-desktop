@@ -378,3 +378,38 @@ labwc (`wtype`, `grim`), the Mac build with `-AppleLanguages (ru)` and `(en)` an
   follow the language because `Info.plist` lists Russian. Found, not fixed (older than this change): "Enter Full Screen"
   appears twice in View, AppKit's and Forzac's.
 - Not checked by hand: the Mac's alert for a file that cannot be opened (measurement runs show no alerts).
+
+### The reading menu and the book's pages (`reader-menu`, R1, R3)
+
+Checked on 2026-10-17 with the build of the change. The Mac build was driven with `--keys`, `--mouse` (real mouse
+events through `NSWindow.sendEvent`) and `-AppleLanguages (ru)`, and saved with `--png`; the GTK build ran in the Debian
+trixie container (GTK 4.18, the Pi's userland) under a headless sway (pixman), driven with `wtype` in one call (one
+keymap: separate calls lost the first key after each keymap change) and watched with `grim`, in `en_US` and `ru_RU`.
+The book: the corpus's slowest to typeset, "Тень богов" (EPUB, 50 chapters).
+
+- Mac, both languages: `Return` opens the bars over the page (the top: the chevron, "Глава 3. Орка" over "Тень богов",
+  the list icon; the bottom: the slider with 49 chapter ticks, "Страница 42 из 834", the minutes left in the chapter
+  — "14 min left in chapter" in English —, "Aa");
+  `l` three times shows "Страница 45 из 834" and "Глава 3. Орка" under it, `Return` goes there with the "← Вернуться ·
+  ⌃O" pill. A click in the middle third opens the menu; pressing the slider at a quarter and dragging to the middle
+  shows "Page 418 of 834" and "Глава 26. Варг", releasing shows that page with the pill; the list icon opens the
+  contents (page numbers 42, 55, 76… instead of percent), "Aa" the settings sheet. The foot reads "42 из 834".
+- GTK, both languages: `Enter` opens the bars with their fade and slide (a screenshot 0.2 s in catches them half
+  way; "Страница 1 из 1006", "1 мин до конца главы"), `Escape` closes, `Enter` and `→ → l` show "Страница 4 из 1006", `Enter` jumps with "← Back · Ctrl+O",
+  `Ctrl+O` returns to "1 из 1006"; `o` shows the contents with page numbers (7, 26, 49…); `Enter` then `Space` closes
+  the menu and turns the page ("2 из 1006"). `--mouse "click 640 300"` (the page's click handler) opens the menu.
+- Found and fixed: GTK panicked on the second opening of the menu (the bars' hide timer was removed after it had fired);
+  GTK's contents built in the first pause kept rows bound before the count (percent) and without the current entry's
+  bold and dot — the list view keeps the rows of items it already has, so `open` now replaces the items.
+- Cost on the Raspberry Pi 5 (`scripts/pi-headless.sh`, 1920×1200 at 123 Hz, the build before the count waited for
+  pauses): the book's 692 pages counted in 1.0 s (1.2 s after the start, its first page at 0.19 s, unchanged); page
+  turns 1, 1, 3 and 0 missed frames with the default, `ngl`, `vulkan` and `gl` renderers; idle 0 CPU ticks in 10 s. A
+  test book of 4675 pages (25 copies of a novel) counted in 6.5 s; with the count running beside 20 turns six paired
+  runs against the build before this change gave 18 and 13 late frames at normal priority (5 of them in the middle of a
+  turn, which the old build has once), 13 and 6 at the lowest priority (all at a turn's first frames). Hence the count
+  now waits between chapters until the reader has been still for 0.5 s, as the web reader's does; that build was not
+  measured on the Pi (below). On the Mac the corpus's slowest count is 1.2 s (`whole_book_page_counts`).
+- Not checked: anything on the Pi with the final build — the Pi's SSH host keys changed during the pass and the
+  maintainer asked not to touch it (2026-10-17); a real pointer on GTK (the slider's drag, the bars' buttons; no pointer
+  injection under headless sway); the back button on both (it needs the reading state, which measurement runs do not
+  open).

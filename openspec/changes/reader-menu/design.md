@@ -25,7 +25,7 @@ position; no frame missed because of the count.
 ```rust
 pub struct BookPages { style: PageStyle, starts: Vec<Vec<Locator>>, first: Vec<usize>, total: usize }
 impl BookPages {
-    pub fn count(book: &Book, style: PageStyle, hyphenator: Option<Arc<Hyphenator>>, stop: &AtomicBool) -> Option<Self>;
+    pub fn count(book: &Book, style: PageStyle, hyphenator: Option<Arc<Hyphenator>>, control: &CountControl) -> Option<Self>;
     pub fn style(&self) -> &PageStyle;      // what it was counted for
     pub fn total(&self) -> usize;
     pub fn chapter_starts(&self) -> &[usize]; // book page of each chapter's first page (the ticks)
@@ -36,7 +36,9 @@ impl BookPages {
 
 `count` runs `paginate` for every chapter with its own `Typesetter` (same style, same hyphenator: the same pages as
 reading, by construction) and keeps only each page's start `Locator` (`ChapterLayout::page_start`): about 24 bytes a
-page. `stop` is checked between chapters; a stopped count returns `None`. The shaped-word cache grows over the whole book
+page. Between chapters it reads its `CountControl` (any thread): `stop()` ends it with `None`; `moved()` (the reader
+turned, scrolled, a frame was drawn) makes it wait until the reader has been still for 0.5 s, as the web reader's count
+waits while the reader turns (`pages.ts` `idle(busy)`). The shaped-word cache grows over the whole book
 and is dropped with the typesetter at the end. Alternative considered: reuse the reading layouts as they appear — no
 total until every chapter is read; rejected.
 
@@ -52,10 +54,10 @@ chapter's end, `/ 1000`, rounded).
 
 ### Running the count
 
-- **GTK** (`page_view.rs`): `State` gains `pages: Option<Arc<BookPages>>` and `counting: Option<Arc<AtomicBool>>`. After
-  the first frame, and 300 ms after the last style change (a `glib::timeout` restarted by each change, so a live resize
-  does not start a count per pixel), `count_pages()` sets the old job's stop flag and runs a new one on
-  `gio::spawn_blocking`. On arrival the result is kept if its style is still current; the page nodes are dropped
+- **GTK** (`page_view.rs`): `State` gains `pages: Option<Arc<BookPages>>` and `count: Option<(PageStyle,
+  Arc<CountControl>)>`. After the first frame, and 300 ms after the last style change (a `glib::timeout` restarted by
+  each change, so a live resize does not start a count per pixel), the old job is stopped and a new one runs on a thread
+  of its own at the lowest priority (`setpriority` 19); every snapshot of the page view calls `moved()`. On arrival the result is kept if its style is still current; the page nodes are dropped
   (their foot changes) when no turn or scroll runs, else after it (a 50 ms retry), so no frame of an animation renders
   pages again. The menu and the lists read `view.book_pages()`.
 - **macOS** (C ABI): a job object captures the `Arc<Book>`, the style and the hyphenator on the main thread, runs on a
@@ -66,6 +68,7 @@ chapter's end, `/ 1000`, rounded).
   | `forzac_count_new(doc, width, height, settings) -> *mut Count` | main | a job for the current style |
   | `forzac_count_run(count)` | any | counts (blocking) |
   | `forzac_count_stop(count)` | any | asks a running count to stop |
+  | `forzac_count_moved(count)` | any | the reader moved: the count waits for a still 0.5 s |
   | `forzac_count_install(doc, count) -> bool` | main | moves the result into the document if its style is current |
   | `forzac_count_free(count)` | main | |
   | `forzac_book_pages(doc) -> u32` | main | the book's pages, 0 when not counted for the current style |
@@ -76,8 +79,11 @@ chapter's end, `/ 1000`, rounded).
   `forzac_page` draws the foot with the installed count. `forzac_paginate` drops a count of another style. On install
   the Mac drops its page bitmaps and shows the current page again (Core Animation keeps animating in the window server).
 
-The count runs on another core than drawing: the Pi 5 has four. If the Pi measurement shows missed frames, the
-fallback is to let the job wait between chapters while a turn or scroll runs (the web's `busy()`); measured first.
+Measured on the Pi 5 with a 4675-page book (the count takes 6.5 s) and 20 page turns started 0.8 s after opening: a
+count running beside the turns at normal priority made frames late in the middle of turns (5 times in 6 runs, the
+build before this change once); at the lowest priority the middle stayed clean but a turn's first frames were late
+more often (13 against 6). Hence the wait while the reader moves: the count yields to reading, and finishes in the
+first pause.
 
 ### The menu in GTK (`gtk/src/menu.rs`)
 

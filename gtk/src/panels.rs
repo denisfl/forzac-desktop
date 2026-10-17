@@ -607,10 +607,12 @@ impl Contents {
         self.search.set_text("");
         let current = self.places.iter().rposition(|p| *p <= here).unwrap_or(0);
         let counted = view.book_pages().map_or(0, |p| Arc::as_ptr(&p) as usize);
-        if current != self.current.replace(current) || counted != self.counted.replace(counted) {
-            // Rows bound for the old current entry are bound again.
-            let n = self.model.n_items();
-            self.model.items_changed(0, n, n);
+        let current_changed = current != self.current.replace(current);
+        if counted != self.counted.replace(counted) || current_changed {
+            // Rows bound for the old current entry or before the count are bound again: new items, as the list view
+            // keeps the rows of items it already has.
+            let indices: Vec<String> = (0..self.model.n_items()).map(|i| i.to_string()).collect();
+            self.model.splice(0, self.model.n_items(), &indices.iter().map(String::as_str).collect::<Vec<_>>());
         }
         self.panel.set_width_request(panel_width(view.parent().map_or(0, |p| p.width())));
         self.panel.set_opacity(1.0);

@@ -41,7 +41,8 @@ pub struct Menu {
     /// The book page the slider shows while the reader moves it; `None`: the reading position's.
     scrub: Cell<Option<usize>>,
     open: Rc<Cell<bool>>,
-    hide: RefCell<Option<glib::SourceId>>,
+    /// Hides the bars after they faded out; `None` once it fired.
+    hide: Rc<RefCell<Option<glib::SourceId>>>,
     actions: RefCell<Option<Actions>>,
     view: glib::WeakRef<PageView>,
 }
@@ -134,7 +135,7 @@ impl Menu {
             hint,
             scrub: Cell::new(None),
             open: Rc::new(Cell::new(false)),
-            hide: RefCell::new(None),
+            hide: Rc::default(),
             actions: RefCell::new(None),
             view: view.downgrade(),
         });
@@ -231,8 +232,9 @@ impl Menu {
         for bar in [&self.top, &self.bottom] {
             bar.remove_css_class("open");
         }
-        let (top, bottom) = (self.top.downgrade(), self.bottom.downgrade());
+        let (top, bottom, hide) = (self.top.downgrade(), self.bottom.downgrade(), self.hide.clone());
         let id = glib::timeout_add_local_once(CLOSE, move || {
+            hide.borrow_mut().take(); // fired: the id is no longer valid
             for bar in [top.upgrade(), bottom.upgrade()].into_iter().flatten() {
                 bar.set_visible(false);
             }
