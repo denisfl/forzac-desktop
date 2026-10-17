@@ -231,13 +231,30 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("the book is DRM-protected and can't be opened", "книга защищена (DRM) — такие файлы открыть нельзя"),
     ("the book has no text", "в книге нет текста"),
     ("the file is unavailable", "файл недоступен"),
-    // Recent books.
+    // The library.
+    ("Open a book", "Открыть книгу"),
     (
-        "No books yet.\n\nOpen one from your file manager, or run\nforzac book.epub",
-        "Книг пока нет.\n\nОткройте книгу из файлового менеджера или выполните\nforzac book.epub",
+        "We don’t store or send any data to a server. Everything runs on your computer. FB2, FB2.ZIP, FB3 and EPUB are supported.",
+        "Мы не\u{a0}храним и\u{a0}не\u{a0}отправляем никакие данные на\u{a0}сервер. Всё работает у\u{a0}вас на\u{a0}компьютере. \
+         Поддерживаются FB2, FB2.ZIP, FB3 и\u{a0}EPUB.",
     ),
-    ("Open a book: ⌘O, or drop it on Forzac in the Dock.", "Откройте книгу: ⌘O — или перетащите её на значок Форзаца в Dock."),
-    ("Recent books — Return opens, ⌘O opens another.", "Недавние книги — Return открывает, ⌘O открывает другую."),
+    ("Read books right on your computer", "Читайте книги прямо на\u{a0}компьютере"),
+    (
+        "Open a book file — it stays where it is, the library only remembers it.",
+        "Откройте файл книги — он останется на\u{a0}своём месте, библиотека его только запомнит.",
+    ),
+    ("or drop a file into this window", "или перетащите файл в\u{a0}это окно"),
+    ("Release the file to open it", "Отпустите файл, чтобы открыть"),
+    ("Continue reading", "Продолжить"),
+    ("Search", "Поиск"),
+    ("Title or author", "Название или автор"),
+    ("No results", "Ничего не найдено"),
+    ("Remove from library", "Убрать из библиотеки"),
+    ("Remove “{title}” from the library?", "Убрать «{title}» из библиотеки?"),
+    ("The book file stays where it is.", "Файл книги останется на\u{a0}месте."),
+    ("Cancel", "Отмена"),
+    ("Remove", "Убрать"),
+    ("Books", "Книги"),
     ("{n}% read", "прочитано {n}%"),
     // The page.
     ("Finished", "Прочитано"),

@@ -79,8 +79,8 @@ process of their own.
 
 ### Requirement: Window size
 On Hyprland, Forzac windows SHALL have no client-side title bar, since the compositor draws none and arranges the
-windows. On floating compositors a book window SHALL open at 760 × 980 logical pixels and the recent books at
-560 × 640, each no larger than 85% of the monitor's width and height, so that a window fits a small screen whole.
+windows. On floating compositors a book window SHALL open at 760 × 980 logical pixels and the library at 1040 × 760,
+each no larger than 85% of the monitor's width and height, so that a window fits a small screen whole.
 
 #### Scenario: Hyprland
 - **WHEN** Forzac starts in a Hyprland session

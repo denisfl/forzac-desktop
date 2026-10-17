@@ -13,6 +13,7 @@ pub mod i18n;
 pub mod knuth_plass;
 mod language;
 pub mod layout;
+pub mod library;
 pub mod model;
 pub mod quotes;
 pub mod search;

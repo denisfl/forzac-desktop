@@ -60,7 +60,6 @@ impl Theme {
              .forzac-panel .muted {{ color: {muted}; }}
              .forzac-sheet {{ background-color: {sheet}; box-shadow: 0 -1px 0 {line}, 0 -12px 32px alpha(black, 0.08); }}
              .forzac-side {{ background-color: {paper}; box-shadow: -1px 0 0 {line}, -12px 0 32px alpha(black, 0.08); }}
-             window.forzac-recent {{ background-color: {paper}; }}
              .forzac-panel .grabber, .forzac-panel .rule, .forzac-panel .divider {{ background-color: {line}; }}
              .forzac-panel .segmented {{ border: 1px solid {line}; }}
              .forzac-panel .chip {{ border: 1px solid {line}; }}
@@ -129,8 +128,6 @@ const STATIC_CSS: &str = "
     .forzac-panel listview, .forzac-panel row, .forzac-panel scrolledwindow { background: none; color: inherit; padding: 0; }
     .forzac-panel row:focus-visible { outline: none; }
     .forzac-panel, .forzac-sheet, .forzac-side { transition: color 200ms, background-color 200ms, box-shadow 200ms; }
-    .forzac-recent .book-title { font-size: 15px; }
-    .forzac-recent list { background: none; }
 ";
 
 /// Lower case and "ё" as "е", for filtering the contents.

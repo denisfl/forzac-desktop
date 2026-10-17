@@ -86,7 +86,19 @@ typedef struct {
     const char *title;
     const char *authors;
     float progress;
+    const char *id;
 } ForzacRecent;
+
+// A generated cover: cloth or marbled paper (forzac_marble with `seed`) under `cloth`, a spine, the title's size
+// (a share of 11.5 % of the cover's width) and its most lines.
+typedef struct {
+    bool marble;
+    uint32_t cloth;
+    uint32_t spine;
+    int32_t seed;
+    float title_scale;
+    uint32_t title_lines;
+} ForzacCoverStyle;
 
 // Finds a font file with character `ch`: writes its path into `path` and the face index into `*index`.
 typedef bool (*ForzacFallback)(uint32_t ch, char *path, size_t capacity, uint32_t *index);
@@ -95,6 +107,8 @@ typedef bool (*ForzacFallback)(uint32_t ch, char *path, size_t capacity, uint32_
 // 4 a damaged archive, 5 the file cannot be read.
 ForzacDocument *forzac_open(const char *path, uint32_t *error);
 const char *forzac_title(const ForzacDocument *doc);
+// The book's identity: the key of its cached cover.
+const char *forzac_book_id(const ForzacDocument *doc);
 const char *forzac_authors(const ForzacDocument *doc);
 uint32_t forzac_chapter_count(const ForzacDocument *doc);
 // Typesets `chapter` for the window with `settings`, makes it current; returns its page count.
@@ -242,13 +256,22 @@ uint32_t forzac_settings_size_count(void);
 // setting: 0 theme, 1 font, 2 size, 3 spacing, 4 alignment, 5 margins, 6 pages.
 void forzac_settings_step(ForzacSettings *settings, uint32_t setting, int32_t delta, bool system_dark);
 
-// Reading state: positions, recent books and settings in the file at `path`.
+// Reading state: positions, the library's books and settings in the file at `path`.
 ForzacState *forzac_state_open(const char *path);
 bool forzac_state_position(const ForzacState *state, const ForzacDocument *doc, ForzacLocator *out);
 // `finished`: the end page was shown; the book reads 100 %.
 bool forzac_state_save_position(ForzacState *state, const ForzacDocument *doc, ForzacLocator at, bool finished);
-// Valid until the next call on `state`.
+// The last opened first, files that exist only; valid until the next call on `state`.
 const ForzacRecent *forzac_state_recent(ForzacState *state, uint32_t n, uint32_t *count);
+// Removes the book from the library (its bookmarks and highlights stay).
+bool forzac_state_forget(ForzacState *state, const char *id);
+
+// The library: search rank (lower first, -1 no match), generated covers, the empty state's sample page (lines: head,
+// title, subtitle, folio, paragraphs; valid for good).
+int32_t forzac_library_rank(const char *query, const char *title, const char *authors);
+ForzacCoverStyle forzac_cover_style(const char *id, const char *title);
+void forzac_marble(int32_t seed, uint32_t width, uint32_t height, uint8_t *out);
+const char *forzac_sample_page(void);
 void forzac_state_load_bookmarks(const ForzacState *state, ForzacDocument *doc);
 bool forzac_state_save_bookmarks(ForzacState *state, const ForzacDocument *doc);
 void forzac_state_load_quotes(const ForzacState *state, ForzacDocument *doc);

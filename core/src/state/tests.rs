@@ -154,6 +154,25 @@ fn recent_books_are_the_existing_files_last_opened_first() {
     let store = Store::open(&file);
     assert_eq!(store.recent(10).iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["B", "A"]);
     assert_eq!(store.recent(1).len(), 1);
+    assert_eq!(store.books().iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["B", "A"]);
+}
+
+#[test]
+fn a_forgotten_book_keeps_its_bookmarks_and_highlights() {
+    let file = dir().join("state");
+    let (a, b) = (book("aaaa", &[4]), book("bbbb", &[4]));
+    let mut store = Store::open(&file);
+    store.save_position(&a, Path::new("/books/a.fb2"), at(0, 2, 0), false).unwrap();
+    store.save_position(&b, Path::new("/books/b.fb2"), at(0, 3, 0), false).unwrap();
+    store.set_bookmarks(&a, &[at(0, 1, 0), at(0, 2, 0)]).unwrap();
+    store.set_quotes(&a, &[(at(0, 1, 0), at(0, 1, 4))]).unwrap();
+    store.forget("aaaa").unwrap();
+
+    let store = Store::open(&file);
+    assert_eq!(store.position(&a, Path::new("/books/a.fb2")), None, "the entry and its position are gone");
+    assert_eq!(store.position(&b, Path::new("/books/b.fb2")), Some(at(0, 3, 0)), "the other book stays");
+    assert_eq!(store.bookmarks(&a), [at(0, 1, 0), at(0, 2, 0)]);
+    assert_eq!(store.quotes(&a), [(at(0, 1, 0), at(0, 1, 4))]);
 }
 
 #[test]

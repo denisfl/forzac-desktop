@@ -65,6 +65,7 @@ the Android app in features and behaviour.
 | 12a | `two-page-spread` | Two pages side by side when the window is wider than tall and holds two text columns, as on Android tablets | A full-screen landscape window on the Pi 5 and the Mac shows two pages and keeps the reading position | 1 w |
 | 13 | `bookmarks` | Bookmarks (`b`) and their list in the contents panel | A bookmark survives re-layout and restart | 3–4 d |
 | 13a | `selection-quotes` | Selecting text with the mouse and from the keyboard (Vim's visual mode), copying, highlights (Android's quotes) and their list, export; asked for by the maintainer on 2026-10-17 | A highlight made from the keyboard on the Pi 5 survives re-layout and restart; copied text is clean | 1.5–2 w |
+| 13b | `library` | The web reader's library instead of the recent books: covers (their own or generated), "Continue reading", search, removing, opening and dropping files; asked for by the maintainer on 2026-10-17 | 50 books open in the library in at most 200 ms on the Pi 5; checked by hand in both languages on the Pi 5 and the Mac | 1 w |
 | 14 | `release-1-0` | Performance budgets checked on the Pi 5 and the Mac; x86_64 packages checked in containers; release notes; packages published | Budgets met on the Pi 5 and the Mac | 3–4 d |
 
 Total: about 18–22 weeks.
@@ -76,8 +77,7 @@ Total: about 18–22 weeks.
 ## Not planned for 1.0
 
 Confirmed with the maintainer in `android-parity` (2026-10-16). Text selection and quotes left the list on 2026-10-17,
-when the maintainer asked for them (`selection-quotes`).
+when the maintainer asked for them (`selection-quotes`), and so did the library screen (`library`): only importing stays.
 
-PDF; a library screen with import and covers
-(books open in place; recent books are enough); dictionaries; formulas (MathML); fixed-layout EPUB; Flatpak (AUR and
+PDF; importing books into the library (books open in place; the library lists them); dictionaries; formulas (MathML); fixed-layout EPUB; Flatpak (AUR and
 the `.deb` first); a Developer ID, notarisation, Homebrew and the App Store; following the Omarchy theme colours (a possible later change).
