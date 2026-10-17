@@ -11,8 +11,9 @@ page shows where the reader is. Everything is reachable from the keyboard; the m
 "Bookmarks" (`bookmarks`) and "Highlights" (`quotes`) with a close button, a filter field (on the "Contents" tab), the
 book (cover, title, author and the share read), then the tab's list. `o` opens the panel on the "Contents" tab, `B` on
 the "Bookmarks" tab; `←`/`→`, `h`/`l` or `Tab`/`Shift+Tab` on the list, or a click on a tab, switch tabs. The
-"Contents" tab lists the book's titled sections with their nesting and their position in the book (in percent), the
-current one bold and marked. The entry of the current place is selected; `j`/`k` or `↓`/`↑` move the selection, `Enter`
+"Contents" tab lists the book's titled sections with their nesting and, at the right, the book page each starts on
+once the book's pages are counted (`reader-menu`), before that their position in the book in percent; the current one
+bold and marked. The entry of the current place is selected; `j`/`k` or `↓`/`↑` move the selection, `Enter`
 jumps to the entry and closes the panel, `/` filters the entries by the typed text (ignoring case and the difference
 between "ё" and "е"), `Esc` clears the filter or closes the panel, `o` closes it. A book without contents shows every
 chapter, an untitled one as "Chapter N" (N counted from 1 in reading order), as in the Android app. While the panel is
@@ -34,6 +35,10 @@ open, keys do not turn pages.
 - **WHEN** the reader presses `o` and then `←`
 - **THEN** the panel shows the "Highlights" tab
 
+#### Scenario: Page numbers
+- **WHEN** the book's pages are counted and the reader presses `o`
+- **THEN** each entry shows the page it starts on, the first chapter's "1"
+
 ### Requirement: Active markers and links
 The note markers and links of the current page, its highlights (`quotes`), its images at least a third of the text
 column wide and its tables SHALL be reachable from the keyboard: `Tab` and `Shift+Tab` cycle through them in reading
@@ -41,8 +46,8 @@ order (a table before the markers and links in its cells, a table spanning pages
 first line on the page), highlighting the focused one — a marker, link or highlight with a soft box in the link ink
 over each of its lines on the page, an image or a table with a rounded outline in the link ink around it; `Enter` opens
 it (an image or a table in the view, `viewer`; a highlight's bar, `quotes`); `Esc` or turning the page removes the
-focus. Without focus, `Enter` turns the page as before. A click on a marker or link opens it; a click on such an image
-or table, away from the markers and links in it, opens it in the view.
+focus. Without focus, `Enter` opens the menu (`reader-menu`). A click on a marker or link opens it; a click on such an
+image or table, away from the markers and links in it, opens it in the view.
 
 #### Scenario: A footnote from the keyboard
 - **WHEN** a page has two note markers and a link and the reader presses `Tab` twice and `Enter`
@@ -90,12 +95,17 @@ where the jump arrived; the remembered places stay for `Ctrl+O`.
 
 ### Requirement: Where the reader is
 Every page except the first page of a chapter SHALL show the chapter's title as a running head in the secondary ink,
-shortened with "…" when it does not fit. The foot of the page SHALL show the page within the chapter and the position
-in the book: "4 / 22 · 37%".
+shortened with "…" when it does not fit. Once the book's pages are counted (`reader-menu`) the foot of the page SHALL
+show the page of the book and the book's pages, "37 of 212"; before, the page within the chapter and the position in
+the book: "4 / 22 · 37%".
 
 #### Scenario: Middle of a book
-- **WHEN** the reader is on page 4 of the 22 pages of a chapter that ends at 40% of the book
+- **WHEN** the reader is on page 4 of the 22 pages of a chapter that ends at 40% of the book, before the count
 - **THEN** the head shows the chapter title and the foot "4 / 22 · 37%" (or the actual share)
+
+#### Scenario: A counted book
+- **WHEN** the book's 212 pages are counted and the reader is on its 37th
+- **THEN** the foot shows "37 of 212"
 
 ### Requirement: Mouse and touchpad
 A scroll wheel step SHALL turn one page (down: forward); one touchpad swipe SHALL turn at most one page. Clicks on
