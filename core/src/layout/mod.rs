@@ -6,12 +6,14 @@
 //! kept with the next block, the chapter start lowered by two lines, images and table rows never split.
 
 mod page;
+mod pages;
 mod table;
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 pub use page::{ChapterLayout, Page, PageContent, PageImage, Rule, Word, end_page, layout_note, layout_preview, paginate};
+pub use pages::{BookPages, CountControl};
 pub use table::{TableView, layout_table};
 
 use crate::fonts::{self, Face, Family, FontId, Glyph, Shaper};

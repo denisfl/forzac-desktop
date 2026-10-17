@@ -101,6 +101,44 @@ fn a_book_through_the_c_functions() {
 }
 
 #[test]
+fn the_book_pages_through_the_c_functions() {
+    let path = book_file();
+    let doc = unsafe { forzac_open(c(path.to_str().unwrap()).as_ptr(), std::ptr::null_mut()) };
+    unsafe {
+        let settings = forzac_settings_default();
+        let in_chapter = forzac_paginate(doc, 2, 600.0, 800.0, &settings);
+        assert_eq!(forzac_book_pages(doc), 0, "not counted yet");
+        let count = forzac_count_new(doc, 600.0, 800.0, &settings);
+        // On another thread, as the shell runs it.
+        let address = count as usize;
+        std::thread::spawn(move || forzac_count_run(address as *const Count)).join().unwrap();
+        assert!(forzac_count_install(doc, count));
+        forzac_count_free(count);
+        let total = forzac_book_pages(doc);
+        let mut n = 0;
+        let starts = std::slice::from_raw_parts(forzac_chapter_starts(doc, &mut n), n as usize).to_vec();
+        assert_eq!(starts.len(), 4);
+        assert_eq!(total, starts[3] + forzac_paginate(doc, 3, 600.0, 800.0, &settings));
+        forzac_paginate(doc, 2, 600.0, 800.0, &settings);
+        let start = forzac_page_start(doc, in_chapter - 1);
+        assert_eq!(forzac_book_page_of(doc, start), starts[2] + in_chapter - 1);
+        assert_eq!(forzac_book_page_start(doc, starts[2]).chapter, 2);
+        assert_eq!(string(forzac_section(doc, start)).as_deref(), Some("Глава 2"));
+        assert_eq!(forzac_minutes_left(doc, ForzacLocator { chapter: 2, block: 0, offset: 0 }), 1);
+
+        // Another window: the count no longer applies; a stopped count installs nothing.
+        forzac_paginate(doc, 2, 500.0, 800.0, &settings);
+        assert_eq!(forzac_book_pages(doc), 0);
+        let count = forzac_count_new(doc, 500.0, 800.0, &settings);
+        forzac_count_stop(count);
+        forzac_count_run(count);
+        assert!(!forzac_count_install(doc, count));
+        forzac_count_free(count);
+        forzac_close(doc);
+    }
+}
+
+#[test]
 fn settings_and_recent_books_through_the_state() {
     let path = book_file();
     let state_path = path.with_file_name("state");

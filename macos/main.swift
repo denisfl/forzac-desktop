@@ -39,7 +39,11 @@ final class Reader: NSObject, NSWindowDelegate {
     private weak var viewer: Viewer?
     private let state: OpaquePointer?
     private var saveTimer: Timer?
+    /// The reading menu, made when it first opens.
+    private var menu: ReaderMenu?
     var onClose: ((Reader) -> Void)?
+    /// "Back to library" in the menu, after the window closed: the recent books show.
+    var onLibrary: (() -> Void)?
 
     /// Why the last `init` failed: the core's reason (`forzac_open`), 0 when it did not.
     static var openError: UInt32 = 0
@@ -99,6 +103,8 @@ final class Reader: NSObject, NSWindowDelegate {
             if !forzac_state_save_bookmarks(state, self.view.doc) { fputs("cannot save the reading state\n", stderr) }
         }
         view.panelOpen = { [weak self] in self?.panelOpen ?? false }
+        view.menuOpen = { [weak self] in self?.menu?.isOpen ?? false }
+        view.menuKey = { [weak self] e in self?.menu?.key(e) ?? false }
         view.onMoved = { [weak self] in
             self?.saveTimer?.invalidate()
             self?.saveTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: false) { _ in self?.savePosition() }
@@ -215,6 +221,22 @@ final class Reader: NSObject, NSWindowDelegate {
         case .closePanels:
             closePanels()
             window.makeFirstResponder(view)
+        case .menu:
+            closePanels()
+            if menu == nil {
+                let m = ReaderMenu(view: view, in: container, below: help)
+                m.onBack = { [weak self] in
+                    guard let self else { return }
+                    let library = self.onLibrary
+                    self.window.performClose(nil)
+                    library?()
+                }
+                m.onContents = { [weak self] in self?.run(.contents) }
+                m.onSettings = { [weak self] in self?.run(.settings) }
+                menu = m
+            }
+            menu?.open()
+            window.makeFirstResponder(view)
         }
     }
 
@@ -243,6 +265,7 @@ final class Reader: NSObject, NSWindowDelegate {
     }
 
     private func closePanels() {
+        menu?.close()
         help.isHidden = true
         settingsSheet?.isHidden = true
         contents?.isHidden = true
@@ -484,6 +507,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.readers.removeAll { $0 === r }
             if self?.readers.isEmpty == true, let state = self?.state { DispatchQueue.main.async { self?.showRecent(state) } }
         }
+        reader.onLibrary = { [weak self] in
+            // With no book left, `onClose` shows them.
+            guard let self, self.recent == nil, !self.readers.isEmpty, let state = self.state else { return }
+            self.showRecent(state)
+        }
         readers.append(reader)
         reader.show()
         recent?.window.close()
@@ -536,6 +564,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let arg = String(panel.drop { $0 != ":" }.dropFirst())
         switch panel {
         case "settings": return .settings
+        case "menu": return .menu
         case "help": return .help
         case "contents": return .contents
         case "bookmarks": return .bookmarks

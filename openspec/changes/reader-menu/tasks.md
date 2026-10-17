@@ -2,18 +2,18 @@
 
 ## 1. Core: the book's pages and the labels
 
-- [ ] 1.1 `BookPages` in `core/src/layout/pages.rs` (`count` with a stop flag, `total`, `chapter_starts`, `page_of`,
+- [x] 1.1 `BookPages` in `core/src/layout/pages.rs` (`count` with a stop flag, `total`, `chapter_starts`, `page_of`,
   `start`, `style`); tests: the count equals the sum of `paginate`'s chapter pages, `page_of(start(p)) == p` for every
   page, a set stop flag returns `None` — `cargo test -p forzac-core`
-- [ ] 1.2 `ChapterLayout::render_numbered` draws the foot "N of M" with a matching count; test: the foot reads
+- [x] 1.2 `ChapterLayout::render_numbered` draws the foot "N of M" with a matching count; test: the foot reads
   "37 of 212"-style text, and "4 / 22 · N%" without a count
-- [ ] 1.3 `Book::section_at` and `Book::minutes_left` (characters, 1000 a minute, rounded); tests with Cyrillic text
+- [x] 1.3 `Book::section_at` and `Book::minutes_left` (characters, 1000 a minute, rounded); tests with Cyrillic text
 - [ ] 1.4 New strings with Russian in `core/src/i18n.rs`; the help texts list `Enter` as the menu (Linux and macOS, both
   languages); the catalogue test passes
-- [ ] 1.5 The C ABI (`forzac_count_*`, `forzac_book_pages`, `forzac_book_page_of`, `forzac_book_page_start`,
+- [x] 1.5 The C ABI (`forzac_count_*`, `forzac_book_pages`, `forzac_book_page_of`, `forzac_book_page_start`,
   `forzac_chapter_starts`, `forzac_section`, `forzac_minutes_left`; `forzac_page` draws the counted foot) in
   `core/src/ffi.rs` and `macos/forzac.h`; an ffi test runs a count through it
-- [ ] 1.6 The corpus test counts every corpus book and prints the slowest count —
+- [x] 1.6 The corpus test counts every corpus book and prints the slowest count —
   `FORZAC_CORPUS=~/Books cargo test -p forzac-core --test corpus`
 
 ## 2. GTK shell

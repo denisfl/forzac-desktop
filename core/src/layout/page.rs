@@ -1,6 +1,6 @@
 //! Pagination (a port of the Android `Paginator`) and page contents.
 
-use super::{Area, BlockLayout, Content, GlyphRun, Group, Ink, PageStyle, Rect, Stroke, Target, Typesetter};
+use super::{Area, BlockLayout, BookPages, Content, GlyphRun, Group, Ink, PageStyle, Rect, Stroke, Target, Typesetter};
 use crate::fonts::Face;
 use crate::model::{Block, Book, Chapter, Locator};
 
@@ -125,6 +125,12 @@ impl ChapterLayout {
     /// What to draw on page `i`: the text, the running head (the chapter's title, not on its first page) and the foot
     /// (the page in the chapter and the position in the book).
     pub fn render(&self, i: usize, style: &PageStyle, typesetter: &mut Typesetter) -> PageContent {
+        self.render_numbered(i, style, typesetter, None)
+    }
+
+    /// The same, the foot as the page of the book and the book's pages ("37 of 212") when `pages` were counted for
+    /// `style`.
+    pub fn render_numbered(&self, i: usize, style: &PageStyle, typesetter: &mut Typesetter, pages: Option<&BookPages>) -> PageContent {
         let mut out = self.render_body(i, style);
         let size = style.text_size * 0.7;
         let width = style.text_width();
@@ -134,7 +140,13 @@ impl ChapterLayout {
             let y = style.margin_top / 2.0 + size * 0.35;
             out.runs.push(label(typesetter, title, Ink::Secondary, size, style.width / 2.0, y, width));
         }
-        let foot = format!("{} / {} · {}%", i + 1, self.pages.len(), (self.progress(i) * 100.0).round() as u32);
+        let foot = match pages.filter(|p| p.style() == style) {
+            Some(p) => crate::i18n::fill(
+                crate::i18n::tr("{n} of {m}"),
+                &[("n", &(p.of_chapter_page(self.chapter, i) + 1).to_string()), ("m", &p.total().to_string())],
+            ),
+            None => format!("{} / {} · {}%", i + 1, self.pages.len(), (self.progress(i) * 100.0).round() as u32),
+        };
         let y = style.height - style.margin_bottom / 2.0 + size * 0.35;
         out.runs.push(label(typesetter, &foot, Ink::Secondary, size, style.width / 2.0, y, width));
         out

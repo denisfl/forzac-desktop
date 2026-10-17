@@ -18,8 +18,8 @@ use forzac_core::model::LinkTarget;
 use forzac_core::search::Hit;
 use forzac_core::settings::{Setting, Settings, Turning};
 use forzac_core::{
-    Area, Block, Book, ChapterLayout, Ink, Locator, PageContent, PageStyle, Rect, Target, Typesetter, end_page, fonts, layout_note,
-    layout_preview, layout_table, paginate,
+    Area, Block, Book, BookPages, ChapterLayout, CountControl, Ink, Locator, PageContent, PageStyle, Rect, Target, Typesetter, end_page,
+    fonts, layout_note, layout_preview, layout_table, paginate,
 };
 use gtk::subclass::prelude::*;
 use gtk::{gdk, gio, glib, graphene, gsk, prelude::*};
@@ -30,6 +30,8 @@ use crate::fonts::Fonts;
 mod scroll;
 #[path = "selection.rs"]
 mod selection;
+
+pub(crate) use selection::latin;
 
 /// How the reader moves through the text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +70,9 @@ const RULES: [f32; 4] = [0.0, 0.35, 0.6, 0.9];
 
 /// Page turn duration, µs.
 const TURN: i64 = 200_000;
+
+/// The pause after the window or the settings last changed before the book's pages are counted.
+const COUNT_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
 
 /// Places remembered for `Ctrl+O`.
 const BACK_STACK: usize = 50;
@@ -235,6 +240,10 @@ pub struct State {
     mode: Mode,
     /// "Scroll": the column's offset, tiles and movement.
     column: scroll::Column,
+    /// The book's pages, counted in the background for `pages.style()`; the reader's pages while that is `style`.
+    pages: Option<Arc<BookPages>>,
+    /// The style a count was started (or scheduled) for, and what tells it to stop or wait.
+    count: Option<(PageStyle, Arc<CountControl>)>,
 }
 
 mod imp {
@@ -259,6 +268,12 @@ mod imp {
         pub scroll: std::cell::Cell<(f64, bool)>,
         /// When the page last changed, so background work can wait for a pause in reading.
         pub last_move: std::cell::Cell<Option<std::time::Instant>>,
+        /// The pause before a count of the book's pages starts (a resize restarts it).
+        pub count_timer: RefCell<Option<glib::SourceId>>,
+        /// Called on a click in the middle third of the page (the menu).
+        pub on_middle: RefCell<Option<Box<dyn Fn()>>>,
+        /// Called when the book's pages are counted (the menu, the lists).
+        pub on_pages: RefCell<Vec<Box<dyn Fn()>>>,
     }
 
     #[glib::object_subclass]
@@ -276,6 +291,9 @@ mod imp {
             if view.relayout() {
                 view.prefetch();
             }
+            view.schedule_count();
+            // Something on the page changes: a running count waits for a pause.
+            view.with(|s| s.count.as_ref().map(|(_, c)| c.moved()));
             view.draw(snapshot);
             if let Some(callback) = self.on_first_frame.borrow_mut().take() {
                 // After this frame is presented.
@@ -346,6 +364,8 @@ impl PageView {
             turn: None,
             mode: Mode::Slide,
             column: scroll::Column::default(),
+            pages: None,
+            count: None,
         });
         view.set_hexpand(true);
         view.set_vexpand(true);
@@ -568,13 +588,14 @@ impl PageView {
             self.open(t);
         } else if corner {
             self.toggle_bookmark();
-        } else if self.mode() == Mode::Slide {
-            // The side thirds turn the page, as taps do on Android; the middle does nothing.
-            if x < w / 3.0 {
-                self.turn(-1);
-            } else if x > w * 2.0 / 3.0 {
-                self.turn(1);
+        } else if (w / 3.0..=w * 2.0 / 3.0).contains(&x) {
+            // The middle opens the menu (`reader-menu`), in both modes.
+            if let Some(f) = self.imp().on_middle.borrow().as_ref() {
+                f();
             }
+        } else if self.mode() == Mode::Slide {
+            // The side thirds turn the page, as taps do on Android.
+            self.turn(if x < w / 3.0 { -1 } else { 1 });
         }
     }
 
@@ -1065,12 +1086,112 @@ impl PageView {
         });
     }
 
+    /// Counts the book's pages for the current style in the background, `COUNT_DELAY` after it last changed (so a resize
+    /// does not start a count per pixel); a count for another style is stopped.
+    fn schedule_count(&self) {
+        let Some(style) = self.with(|s| {
+            let style = s.style?;
+            let counted = s.pages.as_ref().is_some_and(|p| *p.style() == style);
+            let started = s.count.as_ref().is_some_and(|(c, _)| *c == style);
+            if counted || started {
+                return None;
+            }
+            if let Some((_, control)) = s.count.take() {
+                control.stop();
+            }
+            s.count = Some((style, Arc::default()));
+            Some(style)
+        }) else {
+            return;
+        };
+        if let Some(id) = self.imp().count_timer.borrow_mut().take() {
+            id.remove();
+        }
+        let view = self.downgrade();
+        let id = glib::timeout_add_local_once(COUNT_DELAY, move || {
+            let Some(view) = view.upgrade() else { return };
+            view.imp().count_timer.borrow_mut().take(); // fired: the id is no longer valid
+            view.count(style);
+        });
+        *self.imp().count_timer.borrow_mut() = Some(id);
+    }
+
+    /// Counts the book's pages for `style` on a worker; the result is kept while `style` is the reader's.
+    fn count(&self, style: PageStyle) {
+        let Some((book, hyphenator, control)) = self.with(|s| {
+            s.count.as_ref().filter(|(c, _)| *c == style).map(|(_, control)| (s.book.clone(), s.hyphenator.clone(), control.clone()))
+        }) else {
+            return;
+        };
+        // A thread of its own at the lowest priority: the frames of turns and scrolls go first.
+        let view: glib::SendWeakRef<PageView> = self.downgrade().into();
+        std::thread::spawn(move || {
+            // SAFETY: plain system call; `who` 0 is this thread (Linux priorities are per thread).
+            unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, 19) };
+            let Some(pages) = BookPages::count(&book, style, hyphenator, &control) else { return };
+            glib::MainContext::default().invoke(move || {
+                if let Some(view) = view.upgrade() {
+                    view.install_pages(Arc::new(pages));
+                }
+            });
+        });
+    }
+
+    /// Takes counted pages when they are still the reader's: the pages' feet change, so their nodes are made again —
+    /// after a turn or a ribbon's movement, not during it.
+    fn install_pages(&self, pages: Arc<BookPages>) {
+        let busy = self.with(|s| {
+            if s.style != Some(*pages.style()) {
+                return None;
+            }
+            Some(s.mode == Mode::Slide && (s.turn.is_some() || s.ribbon.is_some()))
+        });
+        match busy {
+            None => {}
+            Some(true) => {
+                let view = self.downgrade();
+                glib::timeout_add_local_once(std::time::Duration::from_millis(50), move || {
+                    if let Some(view) = view.upgrade() {
+                        view.install_pages(pages);
+                    }
+                });
+            }
+            Some(false) => {
+                self.with(|s| {
+                    s.pages = Some(pages);
+                    s.count = None;
+                    s.nodes.clear();
+                    s.areas.clear();
+                });
+                self.queue_draw();
+                for f in self.imp().on_pages.borrow().iter() {
+                    f();
+                }
+            }
+        }
+    }
+
+    /// Calls `f` on a click in the middle third of the page, away from what a click opens.
+    pub fn connect_middle(&self, f: impl Fn() + 'static) {
+        *self.imp().on_middle.borrow_mut() = Some(Box::new(f));
+    }
+
+    /// Calls `f` whenever the book's pages are counted.
+    pub fn connect_pages(&self, f: impl Fn() + 'static) {
+        self.imp().on_pages.borrow_mut().push(Box::new(f));
+    }
+
+    /// The book's pages, when they are counted for the current window and settings.
+    pub fn book_pages(&self) -> Option<Arc<BookPages>> {
+        self.with(|s| s.pages.clone().filter(|p| Some(*p.style()) == s.style))
+    }
+
     fn page_node(s: &mut State, page: usize) -> Option<gsk::RenderNode> {
         if let Some(n) = s.nodes.get(&page) {
             return Some(n.clone());
         }
         let (layout, style, t) = (s.layout.as_ref()?, s.style?, s.typesetter.as_mut()?);
-        let content = layout.render(page, &style, t);
+        let content = layout.render_numbered(page, &style, t, s.pages.as_deref());
         let node = content_node(&content, s.theme, &mut s.fonts, &mut s.textures, &s.book)?;
         // Highlights under the text, and among the page's areas (`Tab`, clicks).
         let layout = s.layout.as_ref()?;

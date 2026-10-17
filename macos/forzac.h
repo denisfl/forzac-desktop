@@ -217,6 +217,25 @@ ForzacSearch *forzac_search(const ForzacBook *book, const char *query);
 const ForzacHit *forzac_search_hits(const ForzacSearch *search, uint32_t *count);
 void forzac_search_free(ForzacSearch *search);
 
+// The book's pages (the menu, the foot, the lists): a count made for the current window and settings on the main
+// thread, run on a background one, installed on the main thread (true: the pages' feet changed, draw them again). Until
+// installed, and after a style change, forzac_book_pages is 0. forzac_page draws "N of M" in the foot once installed.
+typedef struct ForzacCount ForzacCount;
+ForzacCount *forzac_count_new(const ForzacDocument *doc, float width, float height, const ForzacSettings *settings);
+void forzac_count_run(const ForzacCount *count);   // any thread; blocks while typesetting the book
+void forzac_count_stop(const ForzacCount *count);  // any thread
+void forzac_count_moved(const ForzacCount *count); // any thread: the reader moved, the count waits for a quiet 0.5 s
+bool forzac_count_install(ForzacDocument *doc, const ForzacCount *count);
+void forzac_count_free(ForzacCount *count);
+uint32_t forzac_book_pages(const ForzacDocument *doc);
+uint32_t forzac_book_page_of(const ForzacDocument *doc, ForzacLocator at);   // from 0
+ForzacLocator forzac_book_page_start(const ForzacDocument *doc, uint32_t page);
+// The book page of each chapter's first page; valid until the next call.
+const uint32_t *forzac_chapter_starts(ForzacDocument *doc, uint32_t *count);
+// The section `at` is in, else the book's title (valid until the next string); minutes left in its chapter.
+const char *forzac_section(ForzacDocument *doc, ForzacLocator at);
+uint32_t forzac_minutes_left(const ForzacDocument *doc, ForzacLocator at);
+
 // The interface language from the preferred languages, comma separated ("ru-RU,en"); then the catalogue: the Russian
 // of an English string (NULL: keep the English), a count with its noun ("{n} match", "{n} matches"; valid until the
 // next call), the help (platform 0 Linux, 1 macOS).
