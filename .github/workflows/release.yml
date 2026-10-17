@@ -37,6 +37,22 @@ jobs:
           name: linux-${{ matrix.arch }}
           path: ${{ env.ARCHIVE }}
 
+  deb:
+    name: Raspberry Pi OS package (arm64)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+      # Built in Debian 13, the base of Raspberry Pi OS 13, against its GTK and glibc.
+      - name: Package
+        run: |
+          docker build -q -t forzac-debian -f ci/debian.Dockerfile ci
+          docker run --rm -v "$PWD":/src -w /src -e CARGO_TARGET_DIR=/src/target forzac-debian bash -c \
+            "cargo build --release --locked -p forzac-gtk && scripts/package-deb.sh ${GITHUB_REF_NAME#v}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-arm64
+          path: forzac_*_arm64.deb
+
   macos:
     name: macOS app (arm64)
     runs-on: macos-14
@@ -58,7 +74,7 @@ jobs:
 
   release:
     name: Draft release
-    needs: [linux, macos]
+    needs: [linux, deb, macos]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

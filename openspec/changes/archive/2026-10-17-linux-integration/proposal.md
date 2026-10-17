@@ -13,7 +13,7 @@ opens in nvim on Omarchy unless `perl-file-mimeinfo` is present.
 - One process per user: opening another book while Forzac runs opens a new window in the same process.
 - Tiling compositors: no client-side title bar on Hyprland; sensible initial size. Checked on labwc (Pi 5) and headless
   sway; Hyprland itself is unverified (no hardware for it).
-- Icon, help on `?` with the single "support" line.
+- Icon (from the Android app's vector icon), help on `?` with the single "support" line.
 - A Debian package for Raspberry Pi OS (arm64), built by CI.
 
 ## Capabilities
@@ -22,7 +22,7 @@ opens in nvim on Omarchy unless `perl-file-mimeinfo` is present.
 - `linux-integration`: packaging, desktop integration, default-reader behaviour, single instance.
 
 ### Modified Capabilities
-<!-- None. -->
+- `project-infrastructure`: the release artefacts gain the Debian package and the icons.
 
 ## Impact
 

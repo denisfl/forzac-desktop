@@ -37,6 +37,8 @@ cargo run --release -p forzac-core --example bench -- book.fb2.zip
 scripts/measure.sh book.fb2.zip                            # Linux desktop measurements
 scripts/pi-headless.sh target/release/forzac book.fb2.zip  # headless measurements on GPU (Raspberry Pi)
 scripts/package-linux.sh forzac-X.Y.Z-linux-ARCH           # release archive layout
+scripts/package-deb.sh X.Y.Z                               # Raspberry Pi OS .deb (in ci/debian.Dockerfile)
+scripts/icons.py                                           # icons from ../forzac's vector icon (needs rsvg-convert)
 PI=user@host scripts/pi-dev.sh book.fb2.zip [flags]        # build for aarch64, run on the Pi's desktop
 PI=user@host scripts/pi-vnc.sh                             # watch the Pi's desktop from macOS
 ```

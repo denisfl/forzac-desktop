@@ -1,0 +1,28 @@
+# Maintainer: denisfl
+# The release archives (scripts/package-linux.sh) copied to /usr. At publication: updpkgsums, then
+# makepkg --printsrcinfo > .SRCINFO.
+pkgname=forzac-bin
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Offline FB2 and EPUB reader with book-quality typesetting (release build)"
+arch=(x86_64 aarch64)
+url="https://forzac.truenrth.app"
+license=(MPL-2.0 OFL-1.1 LPPL-1.2)
+# perl-file-mimeinfo: see the forzac package.
+depends=(gtk4 fontconfig perl-file-mimeinfo)
+provides=(forzac)
+conflicts=(forzac)
+install=forzac.install
+options=(!debug)
+_release=https://github.com/denisfl/forzac-desktop/releases/download/v$pkgver
+source_x86_64=("$_release/forzac-$pkgver-linux-x86_64.tar.gz")
+source_aarch64=("$_release/forzac-$pkgver-linux-aarch64.tar.gz")
+sha256sums_x86_64=(SKIP)
+sha256sums_aarch64=(SKIP)
+
+package() {
+  install -d "$pkgdir/usr"
+  cp -r "forzac-$pkgver-linux-$CARCH"/{bin,share} "$pkgdir/usr/"
+  # The licences under the package's own name, where pacman looks for them.
+  mv "$pkgdir/usr/share/licenses/forzac" "$pkgdir/usr/share/licenses/$pkgname"
+}

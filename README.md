@@ -18,7 +18,8 @@ core/    Rust: model, parsers, hyphenation, shaping (HarfRust), Knuth–Plass, p
 gtk/     Linux shell: GTK 4 (Rust), pages drawn as GSK text nodes
 macos/   macOS shell: AppKit (Swift), pages drawn with Core Text, turned with Core Animation
 assets/  bundled fonts (PT Serif, Literata, Source Serif 4, PT Sans, PT Mono for code; OFL) and hyphenation patterns (hyph-utf8) with their licences
-data/    .desktop file, MIME type for FB3, AUR PKGBUILD sketch
+data/    .desktop file, MIME type for FB3, icons (made by scripts/icons.py from the Android app's vector icon)
+packaging/aur/  AUR packages: forzac (from source), forzac-bin (release archives)
 ```
 
 ## Build and run
@@ -73,10 +74,18 @@ in Scroll mode the wheel and touchpad scroll smoothly. A link to a short passage
 opens it over the page, like a note. After the last page comes an end page that marks the book as finished.
 Keys work in any keyboard layout. Planned: `b` bookmark.
 
+## Install on Linux
+
+Nothing is published yet. Arch and Omarchy: the AUR packages `forzac` (builds from source) and `forzac-bin` (the
+release build), in `packaging/aur/`; Omarchy is checked in an Arch x86_64 container only, not on hardware. Raspberry Pi
+OS 13 (arm64): `sudo apt install ./forzac_X.Y.Z_arm64.deb`, made by `scripts/package-deb.sh` in Debian 13
+(`ci/debian.Dockerfile`; the release workflow builds it). Forzac runs as one process: books opened while it runs open
+in new windows of that process.
+
 ## Default reader on Linux
 
-Outside GNOME and KDE (Hyprland, sway), `xdg-open` needs `perl-file-mimeinfo` to type books by name; the package
-depends on it. Then:
+Outside GNOME and KDE (Hyprland, labwc, sway), `xdg-open` needs File::MimeInfo (`perl-file-mimeinfo`,
+`libfile-mimeinfo-perl`) to type books by name; the packages depend on it and print this command after installing:
 
 ```bash
 xdg-mime default app.truenrth.forzac.desktop application/epub+zip application/x-fictionbook+xml application/x-zip-compressed-fb2 application/x-fb3

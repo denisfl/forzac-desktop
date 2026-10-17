@@ -1,0 +1,4 @@
+post_install() {
+  echo "To open FB2, FB3 and EPUB books with Forzac (xdg-open, file managers), run as your user:"
+  echo "  xdg-mime default app.truenrth.forzac.desktop application/x-fictionbook+xml application/x-zip-compressed-fb2 application/x-fb3 application/epub+zip"
+}

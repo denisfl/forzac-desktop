@@ -65,6 +65,16 @@ thread_local! {
     static WINDOWS: RefCell<Vec<(PathBuf, glib::WeakRef<gtk::ApplicationWindow>)>> = const { RefCell::new(Vec::new()) };
 }
 
+/// A window's default size, no larger than 85% of the first monitor in either direction: a small screen (the Pi
+/// Connect desktop is 1280 × 673) would otherwise cut the window off. Tiling compositors decide the size themselves.
+fn fitted(width: i32, height: i32) -> (i32, i32) {
+    let monitor = gtk::gdk::Display::default().and_then(|d| d.monitors().item(0)).and_downcast::<gtk::gdk::Monitor>();
+    match monitor {
+        Some(m) => (width.min(m.geometry().width() * 85 / 100), height.min(m.geometry().height() * 85 / 100)),
+        None => (width, height),
+    }
+}
+
 /// A book window still open: closed windows may outlive their closing (references in closures), but they leave the
 /// application.
 fn open_book_window(w: &glib::WeakRef<gtk::ApplicationWindow>) -> Option<gtk::ApplicationWindow> {
@@ -96,6 +106,8 @@ fn main() -> glib::ExitCode {
         flags |= gio::ApplicationFlags::NON_UNIQUE;
     }
     let app = gtk::Application::builder().application_id(APP_ID).flags(flags).build();
+    // Under X11 the window icon comes from the theme by this name; on Wayland the compositor finds it by app id.
+    app.connect_startup(|_| gtk::Window::set_default_icon_name(APP_ID));
     let store: SharedStore = Rc::new(RefCell::new(Store::open(glib::user_data_dir().join("forzac").join("state"))));
     let (opts, st) = (options.clone(), store.clone());
     app.connect_open(move |app, files, _| {
@@ -203,8 +215,14 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
     overlay.set_child(Some(&view));
     overlay.add_overlay(&help);
 
-    let window =
-        gtk::ApplicationWindow::builder().application(app).title(&title).default_width(760).default_height(980).child(&overlay).build();
+    let (width, height) = fitted(760, 980);
+    let window = gtk::ApplicationWindow::builder()
+        .application(app)
+        .title(&title)
+        .default_width(width)
+        .default_height(height)
+        .child(&overlay)
+        .build();
     // Tiling compositors draw no title bars; a client-side one would only take space.
     if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
         window.set_decorated(false);
@@ -592,7 +610,8 @@ fn recent_window(app: &gtk::Application, options: &Options, store: &SharedStore)
             (e.path.clone(), title, detail)
         })
         .collect();
-    let window = gtk::ApplicationWindow::builder().application(app).title("Forzac").default_width(560).default_height(640).build();
+    let (width, height) = fitted(560, 640);
+    let window = gtk::ApplicationWindow::builder().application(app).title("Forzac").default_width(width).default_height(height).build();
     if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
         window.set_decorated(false);
     }
