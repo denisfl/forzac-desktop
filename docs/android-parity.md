@@ -317,4 +317,4 @@ with `--panel … --keys …` and `--png` (computer control of the Mac was not u
   at most 0.8 ms (the corpus test on the Pi's books).
 - Not checked by hand: `B` on the Pi (`wtype` cannot send a shifted key there; `T` does not arrive either), the corner
   click on both (no pointer injection), Go → Bookmark `⌘D` and View → Bookmarks on the Mac (menus are not reachable
-  through `--keys`).
+  through `--keys`). The maintainer accepted the pass as it is (2026-10-17).

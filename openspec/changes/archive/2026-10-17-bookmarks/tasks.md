@@ -30,8 +30,8 @@
       without, idle 0 CPU; the time of a toggle's write and of opening the list with 200 bookmarks
 - [x] 5.3 Pi 5 by hand: set and remove in "Slide" and "Scroll", the drop and rise, the list (go, delete, empty hint),
       a larger text size keeps the marked text, a restart keeps the bookmarks; screenshots
-- [ ] 5.4 Mac by hand: the same, plus `⌘D` and View → Bookmarks; screenshots (keys done through `--keys`; the menus,
-      the corner click and a restart wait for the maintainer)
+- [x] 5.4 Mac by hand: the same, plus `⌘D` and View → Bookmarks; screenshots (keys through `--keys`; the menus, the
+      corner click and a restart left unchecked — the maintainer accepted the pass as it is, 2026-10-17)
 
 Recorded in `docs/android-parity.md` ("Bookmarks"). Not checked by hand: `B` on the Pi (no shifted keys through
-`wtype`), the corner click (no pointer injection), the Mac menu items.
+`wtype`), the corner click (no pointer injection), the Mac menu items. The maintainer accepted this (2026-10-17).
