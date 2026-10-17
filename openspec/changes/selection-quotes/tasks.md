@@ -35,3 +35,7 @@
 - [x] 5.3 Pi 5 by hand: keyboard selection across a page and in "Scroll", Highlight, Copy (the clipboard's text), the
       list (go, delete, copy all), a larger text size keeps the markers on their words, a restart keeps them; screenshots
 - [ ] 5.4 Mac by hand: the same; the mouse drag, double and triple click where it can be driven; Share; screenshots
+
+Recorded in `docs/android-parity.md` ("Selection and highlights"). Not checked by hand: a real pointer on the Pi (the
+handlers were driven with `--mouse`), the clipboard on the Pi (no `wl-paste`; copying was checked on the Mac), `Shift`+
+click and the drag out of the window in "Scroll", the Share menu and Edit → Copy, View → Highlights on the Mac.
