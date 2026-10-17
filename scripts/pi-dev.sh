@@ -26,6 +26,7 @@ args=""
 if [ $# -gt 0 ]; then args=$(printf ' %q' "$@"); fi
 # Separate statements: a trailing `&` after `a && b && c` backgrounds the whole list, and that subshell would keep the
 # SSH channel open.
-ssh_pi "cd ~/forzac-dev; export XDG_RUNTIME_DIR=/run/user/\$(id -u) WAYLAND_DISPLAY=wayland-0; \
+ssh_pi "cd ~/forzac-dev; export XDG_RUNTIME_DIR=/run/user/\$(id -u); \
+  export WAYLAND_DISPLAY=\$(cd \$XDG_RUNTIME_DIR && ls wayland-? | head -1); \
   setsid nohup \$HOME/forzac-dev/bin/forzac books/$(printf %q "$(basename "$book")")$args > forzac.log 2>&1 < /dev/null & sleep 1; cat forzac.log"
 echo "running on $pi; log: ~/forzac-dev/forzac.log"
