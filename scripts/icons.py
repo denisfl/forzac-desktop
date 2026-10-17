@@ -6,7 +6,8 @@
 The Android adaptive icon is 108 x 108 dp, of which a launcher shows the central 72 (as the store and site icons do).
 That square, converted path for path to SVG, is drawn into a desktop shape:
 - Linux: a rounded square with a small margin -> data/icons/hicolor/scalable/apps/app.truenrth.forzac.svg and PNGs
-  from 16 to 512 px in data/icons/hicolor/<n>x<n>/apps/;
+  from 16 to 512 px in data/icons/hicolor/<n>x<n>/apps/; the monochrome layer (an open book in strokes) as the
+  symbolic icon GNOME draws in the foreground colour -> data/icons/hicolor/symbolic/apps/app.truenrth.forzac-symbolic.svg;
 - macOS: the macOS icon grid (an 824 px rounded square with continuous corners centred on a 1024 px canvas, a soft
   shadow below) -> macos/Forzac.icns.
 Needs rsvg-convert (librsvg) and, for the .icns, macOS's iconutil. The outputs are committed; packages and
@@ -60,6 +61,32 @@ def art(res: Path) -> str:
     return "\n".join(out)
 
 
+def symbolic(res: Path) -> str:
+    """The monochrome layer as a 16 px symbolic icon: its strokes in the Android group's transform, the viewBox cut to
+    the book (the drawing spans about 33..76 x 36..72 of the 108 dp viewport)."""
+    root = ET.parse(res / "drawable/ic_launcher_monochrome.xml").getroot()
+    group = root.find("group")
+    names = {"pivotX": 0, "pivotY": 0, "scaleX": 1, "scaleY": 1, "translateX": 0, "translateY": 0}
+    g = {k: float(group.get(A + k, default)) for k, default in names.items()}
+    # Android applies -pivot, scale, then translate + pivot.
+    transform = (
+        f"translate({g['translateX'] + g['pivotX']:g} {g['translateY'] + g['pivotY']:g}) "
+        f"scale({g['scaleX']:g} {g['scaleY']:g}) translate({-g['pivotX']:g} {-g['pivotY']:g})"
+    )
+    paths = []
+    for path in group.iter("path"):
+        cap, join = path.get(A + "strokeLineCap", "butt"), path.get(A + "strokeLineJoin", "miter")
+        paths.append(
+            f'<path d="{path.get(A + "pathData")}" fill="none" stroke="#2e3436" stroke-width="{path.get(A + "strokeWidth")}" '
+            f'stroke-linecap="{cap}" stroke-linejoin="{join}"/>'
+        )
+    body = "\n".join(paths)
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="31 31 46 46">\n'
+        f'<g transform="{transform}">\n{body}\n</g>\n</svg>\n'
+    )
+
+
 def squircle(x: float, y: float, size: float, n: float = 5.0, steps: int = 256) -> str:
     """A superellipse |x|^n + |y|^n = 1: the continuous-corner rounded square of macOS icons."""
     r, c = size / 2, (x + size / 2, y + size / 2)
@@ -110,6 +137,9 @@ def main() -> None:
     linux.write_text(icon(content, 128, 116, rounded, shadow=False))
     for size in LINUX_SIZES:
         render(linux, hicolor / f"{size}x{size}/apps/{APP_ID}.png", size)
+    mono = hicolor / f"symbolic/apps/{APP_ID}-symbolic.svg"
+    mono.parent.mkdir(parents=True, exist_ok=True)
+    mono.write_text(symbolic(res))
 
     # macOS: Apple's 1024 px grid, an 824 px body.
     with tempfile.TemporaryDirectory() as tmp:

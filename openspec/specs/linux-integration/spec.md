@@ -43,8 +43,10 @@ docks tie the windows to the entry and its icon.
 ### Requirement: Icon
 The application icon SHALL be the Android app's launcher icon (the marbled endpaper and the page edge) as a rounded
 square, installed to the hicolor theme as `app.truenrth.forzac` in sizes 16, 22, 24, 32, 48, 64, 128, 256 and 512
-pixels and as a scalable SVG. The icons SHALL be generated from the Android app's vector drawables by a script in the
-repository, and the generated files SHALL be committed, so that packaging needs no image tools.
+pixels and as a scalable SVG, and the Android app's monochrome icon (an open book in strokes) as the symbolic icon
+`app.truenrth.forzac-symbolic` in `hicolor/symbolic/apps`, which GNOME draws in the foreground colour. The icons SHALL
+be generated from the Android app's vector drawables by a script in the repository, and the generated files SHALL be
+committed, so that packaging needs no image tools.
 
 #### Scenario: Regenerating the icons
 - **WHEN** `scripts/icons.py` is run next to a checkout of the Android app
