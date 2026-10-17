@@ -688,8 +688,8 @@ const STATIC_CSS: &str = "
     .forzac-library .card-caption { font-size: 12px; font-weight: 500; letter-spacing: 0.7px; }
     .forzac-library .card-title { font-family: 'Literata'; font-weight: 600; font-size: 21px; }
     .forzac-library .card-authors { font-size: 14px; }
-    .forzac-library progressbar trough, .forzac-library progressbar progress { min-height: 2px; border-radius: 1px; border: none;
-        box-shadow: none; }
+    .forzac-library progressbar trough, .forzac-library progressbar progress { min-height: 2px; min-width: 0; margin: 0;
+        border-radius: 1px; border: none; box-shadow: none; }
     .forzac-library .rule { min-height: 1px; }
     .forzac-library entry.search-field { font-family: 'PT Serif'; font-size: 26px; background: none; border: none; box-shadow: none;
         outline: none; padding: 0; min-height: 44px; }
@@ -1433,7 +1433,8 @@ impl Library {
             let weak = Rc::downgrade(self);
             let action = gtk::CallbackAction::new(move |_, _| {
                 let Some(l) = weak.upgrade() else { return glib::Propagation::Proceed };
-                if typing && l.entry.has_focus() {
+                // The field's text widget, not the entry itself, has the focus while searching.
+                if typing && l.searching.get() {
                     return glib::Propagation::Proceed;
                 }
                 f(&l);

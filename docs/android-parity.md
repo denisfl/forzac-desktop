@@ -27,7 +27,7 @@ modules (`core/typesetting/src/main/kotlin/app/truenrth/forzac/typesetting/…` 
 | F5 | PDF as pages with text layer, search, quotes (`PdfBook.kt`, `PdfReaderScreen.kt`) | None | intended (no PDF) |
 | F6 | Fixed-layout EPUB of picture pages: fit to screen, manga right to left, spreads (`FixedLayoutScreen.kt`, A spec fixed-layout) | Read as ordinary content; a book of images only fails as "no text" (`core/src/epub/mod.rs`) | intended (Not planned for 1.0, confirmed) |
 | F7 | MathML formulas typeset by its own engine, inline and display, shrunk to the column, viewer (`model/Math.kt`, `typesetting/MathLayout.kt`, `FormulaViewer.kt`, A spec math) | MathML read as plain text, annotations dropped (`core/src/epub/xhtml.rs`, skip list) | intended (Not planned for 1.0, confirmed) |
-| F8 | A book is imported into the library (copied, id = content hash) from the file picker, "Open with" and "Share", then opened (`MainActivity.kt` `handleIntent`, `LibraryViewModel.kt`, A spec library) | Opened in place: command line, `xdg-open` and file managers (`gtk/src/main.rs`, `HANDLES_OPEN`), Finder, the Dock, `⌘O` (`macos/main.swift`, `AppDelegate.open`) | intended (no library with import) |
+| F8 | A book is imported into the library (copied, id = content hash) from the file picker, "Open with" and "Share", then opened (`MainActivity.kt` `handleIntent`, `LibraryViewModel.kt`, A spec library) | Opened in place: command line, `xdg-open` and file managers (`gtk/src/main.rs`, `HANDLES_OPEN`), Finder, the Dock, `⌘O` (`macos/main.swift`, `AppDelegate.open`), the library's "Open a book" and a file dropped on it (`gtk/src/library.rs`, `macos/Library.swift`); the library lists the books read, without copying them | intended (no import) |
 
 ## 2. Typesetting
 
@@ -104,7 +104,7 @@ modules (`core/typesetting/src/main/kotlin/app/truenrth/forzac/typesetting/…` 
 | C7 | Spacing 1.45 / 1.62 / 1.85, alignment justified / left | The same | same |
 | C8 | Margins 18 / 28 / 40 dp, the column at most 34 em (tablet-layout) | Margins as the widest column, 38 / 34 / 30 em, and the least side margin, 24 / 48 / 72 px (`core/src/settings.rs` `Margins::column`) | unclear |
 | C9 | Settings global and remembered; an unknown value falls back to the default | The same (`Settings::load`/`save`, spec reader-settings) | same |
-| C10 | The theme colours the page, menu, contents, notes, settings, system bar icons and the library (`MainActivity.kt`) | The page, the panels and the Mac window's appearance; the recent-books window keeps the system look (`gtk/src/main.rs` `recent_window`, `macos/main.swift` `RecentWindow`) | gap |
+| C10 | The theme colours the page, menu, contents, notes, settings, system bar icons and the library (`MainActivity.kt`) | The page, the panels, the Mac window's appearance and the library (`gtk/src/library.rs` `set_theme`, `macos/Library.swift`) | same |
 
 ## 8. Reading position and recent books
 
@@ -113,8 +113,8 @@ modules (`core/typesetting/src/main/kotlin/app/truenrth/forzac/typesetting/…` 
 | P1 | The position is a `Locator`, restored on reopening, kept through re-layout and rotation (A spec reading-position) | The same, kept through resizing and settings (spec reading-state, spec typesetting) | same |
 | P2 | Book identity: hash of the imported file | Size + hash of the first and last 64 KiB, path as a fallback (`core/src/state.rs` `book_id`) | same |
 | P3 | Written on every page shown (`ReaderViewModel.kt` `positions`) | On opening, 1 s after the last move, on closing (`gtk/src/main.rs` `remember_position`, `main.swift` `savePosition`) | same |
-| P4 | Library: "Continue" card, grid of covers with progress, generated covers, add, search, delete, empty state (`LibraryScreen.kt`, A spec library) | Recent books: up to 20, title, authors, percent; `Enter` opens; no covers, no removing (`gtk/src/main.rs` `recent_window`, `main.swift` `RecentWindow`, File → Open Recent on the Mac) | intended (no library screen) |
-| P5 | Back from a book returns to the library | GTK: closing the last book window quits; macOS: shows the recent books (`main.swift` `onClose`) | gap |
+| P4 | Library: "Continue" card, grid of covers with progress, generated covers, add, search, delete, empty state (`LibraryScreen.kt`, A spec library) | The library (`library`, 2026-10-17): the web reader's shelf of covers with Android's "Continue reading" card, the share read, generated covers, search, removing with a question, the web's empty state and dropping files; books open in place; the card has no chapter title or time left (the state keeps neither) (`gtk/src/library.rs`, `macos/Library.swift`) | same (NP3 reversed) |
+| P5 | Back from a book returns to the library | Both shells show the library after the last book window closes (`gtk/src/main.rs` `connect_window_removed`, `main.swift` `onClose`) | same |
 | P6 | A "Continue" shortcut on the app icon (`ContinueShortcut.kt`) | Open Recent on the Mac; nothing on Linux | intended (platform) |
 
 ## 9. Errors
@@ -162,7 +162,7 @@ Found on the way; the by-hand pass would hit them.
 | # | GTK | macOS | Status |
 |---|---|---|---|
 | D1 | Opening a book that is already open opens a second window (`gtk/src/main.rs` `connect_open`) | Brings its window forward (`main.swift` `open`) | gap |
-| D2 | Recent books: `j`/`k`, `Enter`, `q`/`Esc` | Arrows, `Return`, double click; no `j`/`k`, no `Esc` (`main.swift` `RecentWindow`) | gap |
+| D2 | The library: arrows and `h` `j` `k` `l`, `Enter`, `Delete`/`d`, `/`, `q`/`Esc` | The same keys, by key code (`main.swift` `LibraryWindow.key`) | same |
 
 ## 15. Not planned for 1.0 — to confirm or reopen
 
@@ -172,7 +172,7 @@ From [roadmap.md](roadmap.md):
 |---|---|---|
 | NP1 | PDF | F5 |
 | NP2 | Text selection and quotes (highlights, copy, share) — reopened 2026-10-17 | Q2 |
-| NP3 | A library screen with import and covers; recent books are enough | F8, P4, N3, X1 |
+| NP3 | A library screen with import and covers; recent books are enough — reversed 2026-10-17: the library without import | F8, P4, N3, X1 |
 | NP4 | Dictionaries | (Android: draft change `dictionary`, not decided) |
 | NP5 | Formulas (MathML) | F7 |
 | NP6 | Fixed-layout EPUB | F6 |
@@ -218,6 +218,7 @@ Every gap, unclear and "Not planned" row with its proposal. The maintainer accep
 | L1 | Out of scope until the Android app ships it | — |
 | D1, D2 | Make the shells agree: GTK brings an open book forward; the Mac recent list takes `j`/`k`/`Esc` | android-parity |
 | NP1–NP9 | Confirm all | — (roadmap unchanged) |
+| NP3, P4 | Reversed by the maintainer on 2026-10-17, after looking at the Mac build next to the Android app and the web reader ("no library, no reading menu, no visible chapter navigation"): the desktop gets the web reader's library 1:1 with Android's card, covers and search, keeping its keys; books still open in place | `library` (1.0) |
 | NP2, Q2 | Reopened by the maintainer on 2026-10-17: selection and highlights as on Android; the keyboard selects as Vim's visual mode, a drag snaps to words, no "Share" on Linux | `selection-quotes` (1.0) |
 
 ## By-hand pass
@@ -378,3 +379,35 @@ labwc (`wtype`, `grim`), the Mac build with `-AppleLanguages (ru)` and `(en)` an
   follow the language because `Info.plist` lists Russian. Found, not fixed (older than this change): "Enter Full Screen"
   appears twice in View, AppKit's and Forzac's.
 - Not checked by hand: the Mac's alert for a file that cannot be opened (measurement runs show no alerts).
+
+### The library (`library`, NP3 and P4 reversed)
+
+Checked on 2026-10-17 with the build of the change. **The Pi 5 was not used**: it was busy with another change and its
+SSH host key had changed; the maintainer chose to go on without it. So the 200 ms budget for 50 books on the Pi 5 is
+not measured yet. The GTK shell was checked instead in the `ci/debian` container on the M1 (aarch64, software
+rendering) under a headless labwc driven with `wtype` and `grim`, and with `--png` under a headless Weston; the Mac build
+with `--library --png --keys --state` and `-AppleLanguages (ru)`. Test library: 50 entries over the EPUB/FB2 books of
+the local corpus plus 8 small FB2s without covers (58 books).
+
+- Both shells, in English and Russian: the head (brand, search circle, "Open a book" / "Открыть книгу"), the note line,
+  the "Continue reading" / "Продолжить" card with the bar and share, the shelf with the books' own covers and generated
+  ones (cloth and marbled, the paper label with title and authors), "Finished" / "Прочитано" under a finished book;
+  the empty state with the sample page (Austen in English, Pushkin in Russian, hyphenated), side by side and, in a
+  narrow window, one under the other (GTK); the Wave theme (Mac).
+- Keys: `j` from the card to the shelf and down a row, `l`/`→` across, the selection scrolled into view; `/` and typing
+  ("tolst" finds "Война и мир" by Лев Толстой), "No results" / "Ничего не найдено", `Esc` back to the whole library;
+  `d` and `Delete` ask "Remove “Мы” from the library?" / "Убрать «Мы» из библиотеки?", `Esc` keeps the book, `Enter`
+  removes it (the state loses the entry, the thumbnail goes); `Enter` opens the selected book and closes the library;
+  `q` in the only book window brings the library back (GTK); `Ctrl+O` opens the file dialog with the "Books" filter
+  (GTK); `Esc` with no book open closes the library and quits; `forzac k2.png` says "Couldn't open “k2.png”:
+unsupported format — FB2, FB3 or EPUB needed" and the library follows (GTK).
+- Speed in the container (release build, software rendering, not the Pi): the library of 58 books, covers cached,
+  first frame at 178–217 ms from the start (warm); idle 0 CPU ticks in 10 s with the library open. Filling the cover
+  cache for books read before the change ran in the background (one book at a time), the window showing first.
+- Found and fixed on the way: in the GTK search field `l` moved the selection instead of being typed (the field's
+  inner text widget, not the entry, has the focus); the sample page's last line ran into the folio; the Mac window's
+  background was missing from `--png` and the brand showed a folder icon in a development build.
+- Not checked by hand: the Pi 5 (all of it, including the 200 ms measurement), dropping a file on the window and the
+  mouse (hover lift, "×", clicks) in both shells (no pointer injection here), the Mac's "after the last book" and `⌘O`
+  from the library, a Russian keyboard layout in the library (by key code on the Mac, by GTK's Latin fallback, as the
+  reader's keys).
