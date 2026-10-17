@@ -206,11 +206,11 @@ fn tables_for_the_view_are_fast() {
 }
 
 #[test]
-fn bookmarks_list_and_save_quickly() {
+fn bookmarks_and_highlights_list_and_save_quickly() {
     let Some(books) = corpus() else { return };
     let file = std::env::temp_dir().join(format!("forzac-corpus-state-{}", std::process::id()));
-    let mut store = forzac_core::state::Store::open(&file);
     let (mut list, mut save) = ((0, String::new()), (0, String::new()));
+    let (mut quote_list, mut quote_save) = ((0, String::new()), (0, String::new()));
     for path in &books {
         let Ok(book) = forzac_core::open(path) else { continue };
         // 200 bookmarks spread over the book's blocks.
@@ -219,14 +219,30 @@ fn bookmarks_list_and_save_quickly() {
             .collect();
         let marks: Vec<_> = (0..200).map(|i| blocks[i * blocks.len() / 200]).collect();
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        // A state with this book's bookmarks and highlights only: the cost of one book's changes.
+        let _ = std::fs::remove_file(&file);
+        let mut store = forzac_core::state::Store::open(&file);
         let t = std::time::Instant::now();
         assert_eq!(forzac_core::bookmarks::entries(&book, &marks).len(), 200);
         list = list.max((t.elapsed().as_micros(), name.clone()));
         let t = std::time::Instant::now();
         store.set_bookmarks(&book, &marks).unwrap();
-        save = save.max((t.elapsed().as_micros(), name));
+        save = save.max((t.elapsed().as_micros(), name.clone()));
+        // 200 highlights, each a whole paragraph.
+        let quotes: Vec<_> = marks.iter().map(|&at| book.block_range(at)).filter(|(a, b)| a < b).collect();
+        let t = std::time::Instant::now();
+        assert_eq!(forzac_core::quotes::entries(&book, &quotes).len(), quotes.len());
+        quote_list = quote_list.max((t.elapsed().as_micros(), name.clone()));
+        let t = std::time::Instant::now();
+        store.set_quotes(&book, &quotes).unwrap();
+        quote_save = quote_save.max((t.elapsed().as_micros(), name));
     }
     let _ = std::fs::remove_file(&file);
     println!("200 bookmarks: listed in at most {} µs ({}), saved in at most {} µs ({})", list.0, list.1, save.0, save.1);
+    println!(
+        "200 highlights: listed in at most {} µs ({}), saved in at most {} µs ({})",
+        quote_list.0, quote_list.1, quote_save.0, quote_save.1
+    );
     assert!(list.0 <= 50_000 && save.0 <= 10_000, "over 50 ms to list or 10 ms to save");
+    assert!(quote_list.0 <= 50_000 && quote_save.0 <= 10_000, "over 50 ms to list or 10 ms to save highlights");
 }

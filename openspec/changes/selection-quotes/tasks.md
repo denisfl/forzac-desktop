@@ -24,14 +24,14 @@
 
 ## 4. Docs
 
-- [ ] 4.1 README keys; `docs/roadmap.md` (out of "Not planned for 1.0", a row for this change);
+- [x] 4.1 README keys; `docs/roadmap.md` (out of "Not planned for 1.0", a row for this change);
       `docs/android-parity.md` (Q2, NP2)
 
 ## 5. Verification
 
-- [ ] 5.1 fmt, clippy, tests, the corpus test; both shells build
-- [ ] 5.2 Pi 5: `scripts/pi-headless.sh` 0 missed frames and 0 idle CPU as before; paired page turns and scrolls with
+- [x] 5.1 fmt, clippy, tests, the corpus test; both shells build
+- [x] 5.2 Pi 5: `scripts/pi-headless.sh` 0 missed frames and 0 idle CPU as before; paired page turns and scrolls with
       highlights on the pages; the stroke's frames; the time of a save and of the list with 200 highlights
-- [ ] 5.3 Pi 5 by hand: keyboard selection across a page and in "Scroll", Highlight, Copy (the clipboard's text), the
+- [x] 5.3 Pi 5 by hand: keyboard selection across a page and in "Scroll", Highlight, Copy (the clipboard's text), the
       list (go, delete, copy all), a larger text size keeps the markers on their words, a restart keeps them; screenshots
 - [ ] 5.4 Mac by hand: the same; the mouse drag, double and triple click where it can be driven; Share; screenshots

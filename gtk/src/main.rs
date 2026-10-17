@@ -7,8 +7,11 @@
 //! page as rendered by the window's renderer and quits; `--turns N` turns N pages with the animation and prints
 //! frame-interval statistics; `--scrolls N` the same in the "Scroll" mode, a screen at a time; `--chapter N` opens
 //! chapter N; `--page N` goes to page N of it
-//! (for `--png` and `--turns`); `--marked` puts a bookmark at every paragraph, so nearly every page shows the ribbon;
-//! `--toggles N` sets and removes a bookmark N times (the ribbon drops and rises) and prints the same statistics.
+//! (for `--png` and `--turns`); `--marked` puts a bookmark at every paragraph and highlights every second one, so nearly
+//! every page shows the ribbon and highlights; `--toggles N` sets and removes a bookmark N times (the ribbon drops and
+//! rises), `--strokes N` highlights N paragraphs one after another (the marker's stroke), each printing the same
+//! statistics; `--mouse "down X Y; drag X Y; up X Y; click X Y N"` sends those mouse events to the page's handlers after
+//! the first frame, 0.15 s apart, and leaves the window open.
 //! With any of them the reading state is neither read nor written.
 //!
 //! Without a file, the recent books are listed. Reading positions and the settings are remembered in
@@ -43,6 +46,8 @@ struct Options {
     turns: usize,
     scrolls: usize,
     toggles: usize,
+    strokes: usize,
+    mouse: Option<String>,
     chapter: Option<usize>,
     page: usize,
 }
@@ -55,6 +60,8 @@ impl Options {
             || self.turns > 0
             || self.scrolls > 0
             || self.toggles > 0
+            || self.strokes > 0
+            || self.mouse.is_some()
             || self.chapter.is_some()
             || self.page > 0
     }
@@ -104,15 +111,23 @@ fn main() -> glib::ExitCode {
     let scrolls = args.iter().position(|a| a == "--scrolls").and_then(|i| args.get(i + 1)).and_then(|n| n.parse().ok()).unwrap_or(0);
     let page = args.iter().position(|a| a == "--page").and_then(|i| args.get(i + 1)).and_then(|n| n.parse().ok()).unwrap_or(0);
     let toggles = args.iter().position(|a| a == "--toggles").and_then(|i| args.get(i + 1)).and_then(|n| n.parse().ok()).unwrap_or(0);
-    let options = Options { start, measure: args.iter().any(|a| a == "--measure"), png, turns, scrolls, toggles, chapter, page };
+    let strokes = args.iter().position(|a| a == "--strokes").and_then(|i| args.get(i + 1)).and_then(|n| n.parse().ok()).unwrap_or(0);
+    let mouse = args.iter().position(|a| a == "--mouse").and_then(|i| args.get(i + 1)).cloned();
+    let options =
+        Options { start, measure: args.iter().any(|a| a == "--measure"), png, turns, scrolls, toggles, strokes, mouse, chapter, page };
     let files: Vec<&String> = args
         .iter()
         .skip(1)
-        .filter(|a| !a.starts_with("--") && a.parse::<usize>().is_err() && Some(PathBuf::from(a.as_str())) != options.png)
+        .filter(|a| {
+            !a.starts_with("--")
+                && a.parse::<usize>().is_err()
+                && Some(PathBuf::from(a.as_str())) != options.png
+                && Some(*a) != options.mouse.as_ref()
+        })
         .collect();
 
     let mut flags = gio::ApplicationFlags::HANDLES_OPEN;
-    if options.measure || options.png.is_some() || options.turns > 0 || options.scrolls > 0 || options.toggles > 0 {
+    if options.measure || options.png.is_some() || options.turns > 0 || options.scrolls > 0 || options.toggles > 0 || options.strokes > 0 {
         flags |= gio::ApplicationFlags::NON_UNIQUE;
     }
     let app = gtk::Application::builder().application_id(APP_ID).flags(flags).build();
@@ -399,8 +414,10 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             .chapters
             .iter()
             .enumerate()
-            .flat_map(|(c, ch)| (0..ch.blocks.len()).map(move |b| Locator { chapter: c, block: b, offset: 0 }));
-        view.set_bookmarks(starts.collect());
+            .flat_map(|(c, ch)| (0..ch.blocks.len()).map(move |b| Locator { chapter: c, block: b, offset: 0 }))
+            .collect::<Vec<_>>();
+        view.set_highlights(starts.iter().step_by(2).map(|&at| book.block_range(at)).filter(|(a, b)| a < b).collect());
+        view.set_bookmarks(starts);
     }
     if !stateless {
         view.set_highlights(store.borrow().quotes(&view.book()));
@@ -422,7 +439,16 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
         WINDOWS.with(|w| w.borrow_mut().push((canonical, window.downgrade())));
     }
 
-    if options.measure || options.png.is_some() || options.turns > 0 || options.scrolls > 0 || options.toggles > 0 {
+    if let Some(events) = options.mouse.clone() {
+        view.connect_first_frame(move |view| {
+            for (i, e) in events.split(';').map(|e| e.split_whitespace().collect::<Vec<_>>()).filter(|e| e.len() >= 3).enumerate() {
+                let (view, kind, n) = (view.clone(), e[0].to_owned(), e.get(3).and_then(|n| n.parse().ok()).unwrap_or(1));
+                let (x, y) = (e[1].parse().unwrap_or(0.0), e[2].parse().unwrap_or(0.0));
+                glib::timeout_add_local_once(Duration::from_millis(500 + 150 * i as u64), move || view.test_mouse(&kind, x, y, n));
+            }
+        });
+    }
+    if options.measure || options.png.is_some() || options.turns > 0 || options.scrolls > 0 || options.toggles > 0 || options.strokes > 0 {
         let options = options.clone();
         let window = window.clone();
         view.connect_first_frame(move |view| {
@@ -439,18 +465,18 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             if let Some(png) = &options.png {
                 save_png(view, png);
             }
-            if options.turns == 0 && options.scrolls == 0 && options.toggles == 0 {
+            if options.turns == 0 && options.scrolls == 0 && options.toggles == 0 && options.strokes == 0 {
                 window.close();
                 return;
             }
             // One turn (or scroll by a screen) every 400 ms (the animation takes 200 or 150), then the statistics; the
             // first 1.2 s after the first frame, as a reader would, when the neighbouring chapters are laid out.
-            let left = std::cell::Cell::new(options.turns.max(options.scrolls).max(options.toggles));
-            let toggles = options.toggles > 0;
+            let left = std::cell::Cell::new(options.turns.max(options.scrolls).max(options.toggles).max(options.strokes));
+            let (toggles, strokes) = (options.toggles > 0, options.strokes > 0);
             let (view, window) = (view.clone(), window.clone());
             let wait = std::cell::Cell::new(2); // ticks before the first turn
-            // A drop takes 0.6 s: toggles every 0.8 s.
-            glib::timeout_add_local(std::time::Duration::from_millis(if toggles { 800 } else { 400 }), move || {
+            // A drop takes 0.6 s, a stroke at most 0.6 s: every 0.8 s.
+            glib::timeout_add_local(std::time::Duration::from_millis(if toggles || strokes { 800 } else { 400 }), move || {
                 if wait.get() > 0 {
                     wait.set(wait.get() - 1);
                     return glib::ControlFlow::Continue;
@@ -463,6 +489,8 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
                 left.set(left.get() - 1);
                 if toggles {
                     view.toggle_bookmark();
+                } else if strokes {
+                    view.highlight_next();
                 } else {
                     view.turn(1);
                 }

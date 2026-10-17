@@ -82,6 +82,8 @@ pub(super) struct Texts {
     pub selection: Option<Selection>,
     pub pending: Option<Pending>,
     pub drag: Option<Drag>,
+    /// The last press was a drag that selected: its release is not a click (whichever gesture hears it first).
+    pub dragged: bool,
     /// The book's highlights in reading order, and the one drawing in.
     pub highlights: Vec<(Locator, Locator)>,
     pub reveal: Option<((Locator, Locator), Option<i64>)>,
@@ -263,7 +265,10 @@ impl PageView {
 
     /// A press at `(x, y)`: a drag may follow. On a handle, the drag moves that end.
     pub(super) fn drag_begin(&self, x: f32, y: f32) {
-        self.with(|s| s.text.drag = Some(Drag { press: (x, y), at: (x, y), started: false, edge: None, gliding: false }));
+        self.with(|s| {
+            s.text.drag = Some(Drag { press: (x, y), at: (x, y), started: false, edge: None, gliding: false });
+            s.text.dragged = false;
+        });
     }
 
     /// The pointer moved to `(x, y)` while pressed: past a few pixels the drag selects from the pressed word to this one.
@@ -399,6 +404,7 @@ impl PageView {
     pub(super) fn drag_end(&self) -> bool {
         let drag = self.with(|s| s.text.drag.take());
         let Some(mut drag) = drag else { return false };
+        self.with(|s| s.text.dragged = drag.started);
         if let Some((_, id)) = drag.edge.take() {
             id.remove();
         }
@@ -458,6 +464,26 @@ impl PageView {
             self.queue_draw();
         }
         consumed
+    }
+
+    /// `--mouse`: a mouse event as the gestures report it — `down`, `drag`, `up` (a drag's end, else a click) or `click`
+    /// (the `n`th in a row) at `(x, y)`.
+    pub fn test_mouse(&self, kind: &str, x: f32, y: f32, n: i32) {
+        match kind {
+            "down" => self.drag_begin(x, y),
+            "drag" => self.drag_update(x, y),
+            "up" => {
+                if !self.drag_end() {
+                    self.click(n, x, y, false);
+                }
+            }
+            "click" => {
+                self.drag_begin(x, y);
+                self.drag_end();
+                self.click(n, x, y, false);
+            }
+            _ => {}
+        }
     }
 
     /// Shows the bar of the highlight that starts at `start` (a click or `Enter` on it).
@@ -635,8 +661,13 @@ impl PageView {
                     Self::drop_pages(s);
                 });
                 self.saved_highlights();
-                self.add_tick_callback(|view, _| {
+                self.imp().frames.borrow_mut().push(Vec::new());
+                self.add_tick_callback(|view, clock| {
                     view.queue_draw();
+                    // Frame times for `--strokes`, as for page turns.
+                    if let Some(frames) = view.imp().frames.borrow_mut().last_mut() {
+                        frames.push(clock.frame_time());
+                    }
                     if view.with(|s| s.text.reveal.is_some()) { glib::ControlFlow::Continue } else { glib::ControlFlow::Break }
                 });
             }
@@ -646,6 +677,21 @@ impl PageView {
             }
         }
         self.dismiss();
+    }
+
+    /// `--strokes`: highlights the next paragraph shown that has no highlight yet.
+    pub fn highlight_next(&self) {
+        let h = WidgetExt::height(self) as f32;
+        let next = self.with(|s| {
+            let words = Self::shown_words(s, h);
+            let w = words.iter().find(|w| !s.text.highlights.iter().any(|q| q.0 <= w.start && w.start < q.1))?;
+            let (from, to) = s.book.block_range(w.start);
+            s.text.selection = Some(Selection { cursor: (to, to), anchor: Some((from, from)), keyboard: false });
+            Some(())
+        });
+        if next.is_some() {
+            self.act(Action::Highlight);
+        }
     }
 
     /// Ends the selection and closes the bar.

@@ -136,7 +136,7 @@ modules (`core/typesetting/src/main/kotlin/app/truenrth/forzac/typesetting/…` 
 | # | Android | Desktop | Status |
 |---|---|---|---|
 | Q1 | Bookmarks: a tap in the top right corner, a ribbon with cloth physics, a list tab in the contents (A spec bookmarks) | `b` (or a click in the top right corner) sets or removes; the same ribbon drops in and slides with its page, without the swing; a "Bookmarks" tab in the contents (`B`), `d` removes (change `bookmarks`) | same (keys; no swing) |
-| Q2 | Selection by long press, highlights, Copy, Share, export, a Highlights tab (`TextSelection.kt`, A spec quotes) | None — not even copying text | intended (Not planned for 1.0, confirmed) |
+| Q2 | Selection by long press, highlights, Copy, Share, export, a Highlights tab (`TextSelection.kt`, A spec quotes) | A drag by words, a double or triple click, `Shift`+click, handles; from the keyboard Vim's visual mode (`v`, `h l j k`, `v`, `o`); the bar "Highlight · Copy" (+ "Share" on macOS); highlights under the text with the stroke; a "Highlights" tab, copying all in Android's export format (change `selection-quotes`) | same (keyboard; no Share on Linux) |
 
 ## 12. Screen, window and the rest
 
@@ -171,7 +171,7 @@ From [roadmap.md](roadmap.md):
 | # | Item | Rows |
 |---|---|---|
 | NP1 | PDF | F5 |
-| NP2 | Text selection and quotes (highlights, copy, share) | Q2 |
+| NP2 | Text selection and quotes (highlights, copy, share) — reopened 2026-10-17 | Q2 |
 | NP3 | A library screen with import and covers; recent books are enough | F8, P4, N3, X1 |
 | NP4 | Dictionaries | (Android: draft change `dictionary`, not decided) |
 | NP5 | Formulas (MathML) | F7 |
@@ -218,6 +218,7 @@ Every gap, unclear and "Not planned" row with its proposal. The maintainer accep
 | L1 | Out of scope until the Android app ships it | — |
 | D1, D2 | Make the shells agree: GTK brings an open book forward; the Mac recent list takes `j`/`k`/`Esc` | android-parity |
 | NP1–NP9 | Confirm all | — (roadmap unchanged) |
+| NP2, Q2 | Reopened by the maintainer on 2026-10-17: selection and highlights as on Android; the keyboard selects as Vim's visual mode, a drag snaps to words, no "Share" on Linux | `selection-quotes` (1.0) |
 
 ## By-hand pass
 
@@ -318,3 +319,36 @@ with `--panel … --keys …` and `--png` (computer control of the Mac was not u
 - Not checked by hand: `B` on the Pi (`wtype` cannot send a shifted key there; `T` does not arrive either), the corner
   click on both (no pointer injection), Go → Bookmark `⌘D` and View → Bookmarks on the Mac (menus are not reachable
   through `--keys`). The maintainer accepted the pass as it is (2026-10-17).
+
+### Selection and highlights (`selection-quotes`, Q2)
+
+Checked on 2026-10-17 with the build of the change, as for the bookmarks: the Pi in a headless labwc driven with
+`wtype` and watched with `grim` (no pointer injection there), the Mac build with `--keys` and the new `--mouse` (mouse
+events through `NSWindow.sendEvent` to the real handlers); the GTK build's new `--mouse` calls the page's drag and click
+handlers the gestures call. The clipboard was read with `pbpaste` on the Mac.
+
+- Keyboard, both: `v` boxes the first word of the page (in "Scroll" the first wholly shown), `j`/`l` move, `v` anchors,
+  the bar "Highlight · Copy" (macOS "+ Share") shows over the selection or below it near the window's top; `j` past the
+  page's last line turns the page and the selection goes on there; `Return` draws the marker in along its lines and
+  keeps it; `Tab` reaches the highlight and `Return` offers "Delete · Copy", `d` deletes. The Mac: `c` puts
+  "— Вы о ком? —" on the clipboard (the dash a word of its own).
+- Mouse, both: a drag selects by words with both handles; a double click in the middle third selects a word ("отце.",
+  "я."), a triple click its paragraph; a drag held at the right edge turns to the next page and the selection grows
+  there.
+- The list, both: the "Highlights" tab with the ochre rule, the text and "section · N%"; the Mac's share button. The
+  Pi: `Return` goes to the highlight's page with the "← Back" pill. The Mac: `c` copies a highlight of three paragraphs
+  as three lines. The Pi:
+  a highlight across a hyphenated line ("чу-деса") stays on the same words after two larger text sizes and after a
+  restart; it is in the state file.
+- Cost on the Pi 5 (1920×1200, 123 Hz): `scripts/pi-headless.sh` 0 missed frames with the default, `ngl` and `gl`
+  renderers, 2 with `vulkan`, idle 0 CPU ticks. Six paired runs with a highlight on every second paragraph and a bookmark
+  on every one (`--marked`) and without: 0 and 2 late frames in 120 page turns, 1 and 0 in 120 scrolls. Strokes
+  (`--strokes 20`, three runs per mode): 1–2 late frames per run, the first frame after a pause, as page turns have.
+  200 highlights listed in at most 1.0 ms and saved in at most 0.4 ms (the corpus test on the Pi's books; on the Mac,
+  with every corpus book's 200 bookmarks and 200 highlights in one state file, 24 000 lines, a write takes 15–17 ms:
+  the file is re-read and written whole).
+- Found and fixed: the release that ends a drag could reach the click handler after the drag's end (the order of GTK's
+  two gestures), clearing the new selection; the release is now remembered as a drag's.
+- Not checked by hand: a real pointer on the Pi (the gestures themselves), `Shift`+click and the drag out of the window
+  in "Scroll" on both, the clipboard on the Pi (no `wl-paste` there), the Share menu and the menus Edit → Copy and
+  View → Highlights on the Mac.

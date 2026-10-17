@@ -57,9 +57,10 @@ Tests: `cargo test -p forzac-core`. Measurements on a Linux desktop: `scripts/me
 | `m` | Slide (pages) or Scroll (a continuous column), keeping the top line |
 | `]` `[` | next / previous chapter |
 | `g` `G` `Home` `End` | chapter start / end |
-| `o` | contents (`/` filters, `Enter` jumps, `←` `→` switch to the bookmarks) |
+| `o` | contents (`/` filters, `Enter` jumps, `←` `→` switch to the bookmarks and the highlights; in the highlights `d` deletes, `c` copies one, `Ctrl+C`/`⌘C` all) |
 | `b` (macOS also `⌘D`) | bookmark the page (a ribbon marks it); again to remove the bookmark |
 | `B` | bookmarks (`Enter` goes, `d` removes) |
+| `v`, then `h` `l` `j` `k`, `v`, `o` | select text from the keyboard: a word cursor, `v` anchors, `o` moves the other end; `Enter` highlight, `c` (or `Ctrl+C`, macOS `⌘C`) copy, macOS `s` share, `Esc` back |
 | `/` (macOS also `⌘F`) | search in the book: case and ё/е do not matter; `Enter` goes to a match |
 | `n` `N` (macOS also `⌘G` `⇧⌘G`) | next / previous match; `Esc` clears the highlight |
 | `Tab` `Shift+Tab`, then `Enter` | note markers, links, pictures and tables on the page (or click them) |
@@ -74,7 +75,8 @@ Tests: `cargo test -p forzac-core`. Measurements on a Linux desktop: `scripts/me
 
 A wheel step turns a page; one touchpad swipe turns one page; a click in the left or right third of the page turns it
 (a click on a picture at least a third of the column wide or on a table opens it full window instead; a click in the
-top right corner above the text sets or removes a bookmark);
+top right corner above the text sets or removes a bookmark); a drag selects text by words (in Slide a double click in
+the middle third takes a word, a triple click the paragraph), a click on a highlight offers Delete and Copy;
 in Scroll mode the wheel and touchpad scroll smoothly. A link to a short passage (a figure, a table, a paragraph)
 opens it over the page, like a note. After the last page comes an end page that marks the book as finished.
 Keys work in any keyboard layout.

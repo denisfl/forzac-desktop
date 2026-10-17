@@ -547,7 +547,7 @@ impl PageView {
     fn click(&self, n: i32, x: f32, y: f32, shift: bool) {
         let (w, h) = (WidgetExt::width(self) as f32, WidgetExt::height(self) as f32);
         // The release that ends a drag is not a click.
-        if self.with(|s| s.text.drag.as_ref().is_some_and(|d| d.started)) {
+        if self.with(|s| s.text.dragged || s.text.drag.as_ref().is_some_and(|d| d.started)) {
             return;
         }
         if self.with(|s| s.pill_shown && s.pill_rect.is_some_and(|r| r.contains_point(&graphene::Point::new(x, y)))) {
