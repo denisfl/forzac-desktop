@@ -351,4 +351,4 @@ handlers the gestures call. The clipboard was read with `pbpaste` on the Mac.
   two gestures), clearing the new selection; the release is now remembered as a drag's.
 - Not checked by hand: a real pointer on the Pi (the gestures themselves), `Shift`+click and the drag out of the window
   in "Scroll" on both, the clipboard on the Pi (no `wl-paste` there), the Share menu and the menus Edit → Copy and
-  View → Highlights on the Mac.
+  View → Highlights on the Mac. The maintainer accepted the pass as it is (2026-10-17).
