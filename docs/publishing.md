@@ -1,11 +1,12 @@
 # Publishing a release
 
-How a version of Forzac for desktop gets from this repository to readers: the files on forzac.truenrth.app, the
-download page, and the AUR. Nothing here is automatic and nothing has been published yet; each step is run by the
-maintainer. Dry-run for 0.1.0 on 2026-10-17 (an M1 Mac with Docker): every build and checksum command in steps 3–4,
-and in step 7 `updpkgsums`, `.SRCINFO` and `makepkg -si` of `forzac-bin` with the PKGBUILDs pointed at
-`download.forzac.truenrth.app` (makepkg takes a source file lying next to the PKGBUILD instead of downloading it). The
-upload, the site and the AUR push cannot be tried without publishing; they follow the tools' documentation.
+How a version of Forzac for desktop gets from this repository to readers: a public GitHub repository with a release
+per tag, the download links on forzac.truenrth.app, and the AUR. Nothing here is automatic and nothing has been
+published yet; each step is run by the maintainer. Dry-run for 0.1.0 on 2026-10-17 (an M1 Mac with Docker): every
+local build and checksum command in step 4, and in step 7 `updpkgsums`, `.SRCINFO` and `makepkg -si` of `forzac-bin`
+(makepkg takes a source file lying next to the PKGBUILD instead of downloading it, so the URLs did not have to exist).
+The GitHub release, the site and the AUR push cannot be tried without publishing; they follow the tools'
+documentation.
 
 What a release is made of, for version `X.Y.Z`:
 
@@ -15,57 +16,35 @@ What a release is made of, for version `X.Y.Z`:
 | `forzac-X.Y.Z-linux-x86_64.tar.gz` | AUR `forzac-bin`, any x86_64 Linux with GTK 4.14+ | `scripts/package-linux.sh` |
 | `forzac-X.Y.Z-linux-aarch64.tar.gz` | AUR `forzac-bin` on ARM, any aarch64 Linux with GTK 4.14+ | `scripts/package-linux.sh` |
 | `forzac_X.Y.Z_arm64.deb` | Raspberry Pi OS 13 (arm64) | `scripts/package-deb.sh` |
-| `forzac-desktop-X.Y.Z.tar.gz` | the source (MPL-2.0), the AUR `forzac` package | `git archive` |
+| `forzac-desktop-X.Y.Z.tar.gz` | the source (MPL-2.0), the AUR `forzac` package | GitHub's tag archive (`git archive` locally) |
 | `SHA256SUMS` | checking any of the above | `shasum -a 256` |
 
 Sizes for 0.1.0: DMG 9.0 MB, archives 6.3 and 6.4 MB, `.deb` 3.7 MB, source 5.0 MB.
 
-## 1. Decisions before the first release
+## 1. Decided
 
-Two decisions belong to the maintainer; the rest of this document works with either answer.
+- **The source is a public GitHub repository, `denisfl/forzac-desktop`, with a release per tag `vX.Y.Z`** (the
+  maintainer, 2026-10-17). MPL-2.0 (section 3.2) asks that whoever receives the program in executable form is told how
+  to get its source: the repository and the tag's source archive do that, and the binaries carry `LICENSE`.
+- **The files are the GitHub release's assets.** The release workflow (`.github/workflows/release.yml`) builds them on
+  the tag (free runners for a public repository, macOS included) and drafts the release; the AUR packages already
+  point at GitHub (`packaging/aur/`). The site only links to them, so site deploys never touch the downloads.
+  Cloudflare would allow the files as site assets too (25 MiB per file; the biggest, the DMG, is 9 MB), but a deploy
+  uploads exactly what is in `site/public/` and the binaries would have to live outside the Android repository's git.
+- **The download links are on the site's main page**, under "Get it on Google Play" (section 6).
 
-### Where the source lives
+Below, `$REL` is `https://github.com/denisfl/forzac-desktop/releases/download/vX.Y.Z`.
 
-MPL-2.0 (section 3.2) asks that whoever receives the program in executable form is told how to get its source. A
-source archive next to every release on the site satisfies this on its own; the binaries carry `LICENSE`, and the
-download page links the archive.
+Before the repository goes public, once:
 
-**Source A. A public git repository (GitHub, `denisfl/forzac-desktop`).**
-- For: history, issues and pull requests; the release workflow (`.github/workflows/release.yml`) builds every
-  artefact on a tag for free (public repositories get free macOS and Linux runners), so step 4 becomes "download the
-  draft release"; the AUR `forzac` package can take the tag's archive from GitHub, as AUR users expect; readers can
-  see what they run.
-- Against: issues and pull requests have to be answered or closed; the whole history becomes public (check it first:
-  the commits carry the author's e-mail address; books were never committed); an Omarchy user will expect a quick
-  fix on hardware we do not have.
-
-**Source B. Only source archives on the site.**
-- For: no community upkeep, nothing public but the releases; the licence is met by `forzac-desktop-X.Y.Z.tar.gz`.
-- Against: no history for readers or packagers; contributions only by e-mail; CI does not run unless the code is on
-  GitHub anyway (a private repository works, but its free minutes are limited and macOS minutes count ten times), so
-  releases are built locally as in step 3; some AUR users frown on sources that are not in a public repository.
-
-A middle way: a private GitHub repository for CI, archives on the site, and the decision to open it later.
-
-### Where the files live
-
-The site is a Cloudflare Worker that serves only static assets: `~/dev/forzac/site/public` is uploaded by
-`npm run deploy` (`wrangler.jsonc`, no Worker code). Cloudflare allows 25 MiB per asset file (20,000 files on the free
-plan), so every release file fits. But a deploy uploads exactly what is in `public/` at that moment, and the site is
-deployed often from the Android repository.
-
-**Files A. R2 bucket on a subdomain (recommended).** A bucket `forzac-downloads` with the custom domain
-`download.forzac.truenrth.app`; files at `https://download.forzac.truenrth.app/desktop/X.Y.Z/<file>`. Site deploys
-never touch them, old versions stay, no file-size worry (wrangler uploads up to 315 MB per object), egress is free, the
-free tier holds 10 GB. The download page on the site links there.
-
-**Files B. Site assets.** Files in `site/public/download/desktop/X.Y.Z/`, URLs
-`https://forzac.truenrth.app/download/desktop/X.Y.Z/<file>`. No new service, but binaries must not go into the Android
-repository's git, so the folder is ignored and lives only on the machine that deploys: a deploy from another checkout
-deletes the downloads, and every release adds ~30 MB to each deploy.
-
-Below, `$BASE` is `https://download.forzac.truenrth.app/desktop` (Files A) or
-`https://forzac.truenrth.app/download/desktop` (Files B).
+- Look through the history: it becomes public with every commit's author name and e-mail address. Books were never
+  committed (`.gitignore`, `FORZAC_CORPUS`), but check for anything personal in docs and notes
+  (`git log --all --stat`, `git grep -i` for names, paths, e-mail addresses).
+- Create the empty repository `denisfl/forzac-desktop` on GitHub (public, no README or licence: both are here), then
+  `git remote add origin git@github.com:denisfl/forzac-desktop.git && git push -u origin main`. CI runs on that push
+  (`.github/workflows/ci.yml`); it has to be green before the first tag.
+- On GitHub: Settings › General — Issues on, Discussions and Wiki off unless wanted. The default read-only workflow
+  token is enough: the release job asks for `contents: write` itself.
 
 ## 2. Before the release
 
@@ -82,14 +61,14 @@ The checklist; every item is done on hardware, not in containers (`CLAUDE.md`, `
 - [ ] By hand on the Pi 5 (over `scripts/pi-vnc.sh` or Raspberry Pi Connect) and on the Mac: open an FB2, an
       `.fb2.zip`, an EPUB and an FB3; both page modes; contents, notes, search, settings, the image and table view,
       reopening at the same line; `?` shows the help with the support line.
-- [ ] The packages from step 3 installed as a reader would: the `.deb` on the Pi 5 (`sudo apt install
+- [ ] The packages from step 4 installed as a reader would: the `.deb` on the Pi 5 (`sudo apt install
       ./forzac_X.Y.Z_arm64.deb`, then `xdg-open book.fb2` from the desktop session); both AUR packages in the Arch
       container (`ci/arch-check.sh`, ~10 min under emulation); the DMG on the Mac.
-- [ ] Mac, before the first public DMG (moved here from `macos-release`): the DMG downloaded from its real URL on a
+- [ ] Mac, before the first public DMG (moved here from `macos-release`): the DMG downloaded from the draft release on a
       **fresh macOS user account**, opened by following the download page (the Gatekeeper step), on macOS 14 and on a
       macOS 15 Mac; screenshots of both for the page.
-- [ ] Release notes (`docs/releases/X.Y.Z.md` or the page itself): what is new, what is not checked (Hyprland and
-      x86_64 hardware: built and installed in a container only), known issues.
+- [ ] Release notes (`docs/releases/X.Y.Z.md`, used as the GitHub release's text): what is new, what is not checked
+      (Hyprland and x86_64 hardware: built and installed in a container only), known issues.
 
 ## 3. Version and tag
 
@@ -104,26 +83,32 @@ git commit -am "Release X.Y.Z"
 git tag -a vX.Y.Z -m "Forzac X.Y.Z"
 ```
 
-Build from a clean checkout of the tag, not from the working directory: other sessions may have uncommitted work in
-it.
+Push the tag: the release workflow builds the two Linux archives (on Ubuntu 24.04, so they run on glibc 2.39 and
+newer), the `.deb` (in Debian 13) and the DMG, and drafts a release with them; GitHub adds the tag's source archive
+itself.
+
+```bash
+git push origin main vX.Y.Z
+gh run watch                               # or the Actions tab
+```
+
+Then fetch the draft's files for checking (step 4 builds them locally instead when CI is not available). Build and
+check from a clean checkout of the tag, not from the working directory: other sessions may have uncommitted work in it.
 
 ```bash
 git worktree add --detach ../forzac-release vX.Y.Z
 cd ../forzac-release
 mkdir -p dist
+gh release download vX.Y.Z --dir dist     # the draft's assets
 ```
 
-With the code on GitHub (Source A, or a private repository) pushing the tag runs the release workflow, which drafts a
-release with the archives, the `.deb` and the DMG; download them into `dist/` and go to step 5. Otherwise build
-locally (step 4).
+## 4. Build the files locally (without CI) and the checksums
 
-## 4. Build the files
-
-All commands run in `../forzac-release`. Docker builds the Linux files in Debian 13 (the base of Raspberry Pi OS 13,
-so the `.deb` links its GTK and glibc; the archives then need glibc 2.41: Debian 13, Ubuntu 25.04, Fedora 42, Arch and
-newer, not Ubuntu 24.04 — the GitHub workflow builds them on Ubuntu 24.04 instead, which reaches further back). Use
-the `stable` Rust toolchain for macOS (`rust-toolchain.toml`); if Homebrew's older `cargo` comes first in `PATH`, put
-`~/.rustup/toolchains/stable-aarch64-apple-darwin/bin` before it.
+Only when the workflow cannot run; otherwise skip to the checksums at the end of this step. All commands run in
+`../forzac-release`. Docker builds the Linux files in Debian 13 (the base of Raspberry Pi OS 13, so the `.deb` links
+its GTK and glibc; the archives then need glibc 2.41: Debian 13, Ubuntu 25.04, Fedora 42, Arch and newer, not Ubuntu
+24.04 as the workflow's archives do). Use the `stable` Rust toolchain for macOS (`rust-toolchain.toml`); if Homebrew's
+older `cargo` comes first in `PATH`, put `~/.rustup/toolchains/stable-aarch64-apple-darwin/bin` before it.
 
 ```bash
 V=X.Y.Z
@@ -147,86 +132,88 @@ macos/build.sh
 (cd dist && ../scripts/package-macos.sh $V)
 ```
 
-Checksums of everything, one file the page links, checked right away:
+Checksums of the release files, one file the page links, checked right away (the workflow does not make it yet):
 
 ```bash
 cd dist
-shasum -a 256 forzac-desktop-$V.tar.gz forzac-$V-linux-*.tar.gz forzac_${V}_arm64.deb Forzac-$V-macos-arm64.dmg \
-  > SHA256SUMS
+shasum -a 256 forzac-$V-linux-*.tar.gz forzac_${V}_arm64.deb Forzac-$V-macos-arm64.dmg > SHA256SUMS
 shasum -a 256 -c SHA256SUMS
 ```
 
-`dist/` now holds the six release files, the DMG's own `.sha256` (the Mac page links it, `docs/macos-first-open.md`)
-and `SHA256SUMS`. Install them as in the checklist (step 2) before uploading.
+`dist/` now holds the release files, the DMG's own `.sha256` (`docs/macos-first-open.md` links it) and `SHA256SUMS`
+(and, after a local build, `forzac-desktop-$V.tar.gz`). Install them as in the checklist (step 2) before publishing.
 
-## 5. Upload the files
-
-**R2 (Files A)**, once:
+## 5. Publish the release
 
 ```bash
-cd ~/dev/forzac/site                       # wrangler is installed there and logged in to the Cloudflare account
-npx wrangler r2 bucket create forzac-downloads
-npx wrangler r2 bucket domain add forzac-downloads --domain download.forzac.truenrth.app \
-  --zone-id <the truenrth.app zone id from the dashboard> --min-tls 1.2
+gh release upload vX.Y.Z dist/SHA256SUMS
+# after a local build (step 4) the files go up the same way:
+# gh release upload vX.Y.Z dist/*.dmg dist/*.dmg.sha256 dist/*.tar.gz dist/*.deb dist/SHA256SUMS
+gh release edit vX.Y.Z --notes-file docs/releases/X.Y.Z.md --draft=false --latest
 ```
-
-Each release (`--remote`: without it wrangler writes to a local simulation):
-
-```bash
-for f in ~/dev/forzac-release/dist/*; do
-  npx wrangler r2 object put "forzac-downloads/desktop/$V/$(basename "$f")" --file "$f" --remote
-done
-```
-
-Content types are guessed from the extensions; `.sha256` and `SHA256SUMS` are served as `application/octet-stream`
-(a browser downloads them instead of showing them), which does not matter for `shasum -c`; add
-`--content-type text/plain` to those two uploads to make them readable in the browser.
-
-**Site assets (Files B):** copy `dist/*` to `~/dev/forzac/site/public/download/desktop/$V/`, add `public/download/`
-to `site/.gitignore`, and deploy with the page (step 6).
 
 Then check every URL and checksum from outside:
 
 ```bash
 mkdir -p /tmp/forzac-check && cd /tmp/forzac-check
-for f in $(awk '{print $2}' ~/dev/forzac-release/dist/SHA256SUMS) SHA256SUMS; do curl -fsSLO "$BASE/$V/$f"; done
+curl -fsSLO "$REL/SHA256SUMS"
+for f in $(awk '{print $2}' SHA256SUMS); do curl -fsSLO "$REL/$f"; done
 shasum -a 256 -c SHA256SUMS
 ```
 
-## 6. The download page
+## 6. The download links on the site
 
-The site (`~/dev/forzac/site`, in the Android repository) has one page, `public/index.html`, in English and Russian
-(a `lang` switch). Changes for the desktop release, to be made in that repository:
+The site (`~/dev/forzac/site`, in the Android repository) is one page, `public/index.html`, in English and Russian (a
+`lang` switch, every text in a `data-lang="en"` and a `data-lang="ru"` span). Changes for the desktop release, made
+and deployed from that repository:
 
-- A page `public/desktop/index.html` (served at `/desktop/`) in the same style and with the same language switch, or
-  a section in `index.html` if it stays short; a "Desktop: Linux and Mac" link next to the Google Play link.
-- **Mac:** the download button (the DMG), its SHA-256 link, and the first-open text from
-  [docs/macos-first-open.md](macos-first-open.md) (translated for the Russian half), with the screenshots from the
-  checklist. Requirements: Apple Silicon, macOS 14 or newer.
-- **Arch, Omarchy:** `yay -S forzac-bin` (or `paru -S forzac-bin`; `forzac` builds from source), then the default
-  reader command:
+**Main page, under "Get it on Google Play".** The hero's `<p class="cta ui">` holds the Google Play pill (`.play`) and
+the quiet "or read in your browser" link (`.read`). Below it, a second row of three small links with an icon each:
+**macOS**, **Linux**, **Raspberry Pi**, introduced by "Also for computers:" / "Также для компьютеров:". Quieter than
+the pill (it stays the main action for phones): outline pills in `var(--line)` with `var(--muted)` text and the icon
+in `currentColor`, the same `Golos Text` 15 px as `.read`, wrapping under each other on a phone. They lead to the
+desktop page's sections, `/desktop/#mac`, `/desktop/#linux`, `/desktop/#pi`, not straight to files: the Mac needs the
+first-open steps and Linux needs a command.
+
+Icons, monochrome inline SVG: Apple does not allow its logo on third-party downloads, so macOS gets a neutral glyph (a
+laptop) and the word; Tux is free to use for Linux; check Raspberry Pi's trademark rules before using its logo, or use
+a neutral board glyph and the name.
+
+**A page `public/desktop/index.html`** (served at `/desktop/`), in the main page's style, header and language switch:
+
+- **`#mac` — Mac:** the button "Download for Mac" (`$REL/Forzac-X.Y.Z-macos-arm64.dmg`), its SHA-256 link
+  (`$REL/Forzac-X.Y.Z-macos-arm64.dmg.sha256`), "Apple Silicon (M1 and later), macOS 14 or newer", and the first-open
+  text from [docs/macos-first-open.md](macos-first-open.md) (translated for the Russian half), with the screenshots
+  from the checklist.
+- **`#linux` — Arch, Omarchy:** `yay -S forzac-bin` (or `paru -S forzac-bin`; `forzac` builds from source), then the
+  default reader command:
 
   ```bash
   xdg-mime default app.truenrth.forzac.desktop application/x-fictionbook+xml application/x-zip-compressed-fb2 application/x-fb3 application/epub+zip
   ```
 
-  and the note that Omarchy is built and installed in CI only, so reports are welcome.
-- **Raspberry Pi OS (Pi 4/5, 64-bit):**
+  and the note that Omarchy is built and installed in CI only, so reports are welcome (a link to the GitHub issues).
+  **Other Linux (x86_64, aarch64, GTK 4.14+):** the archives, which run where they are unpacked:
+  `tar xzf forzac-X.Y.Z-linux-x86_64.tar.gz && forzac-X.Y.Z-linux-x86_64/bin/forzac book.fb2`.
+- **`#pi` — Raspberry Pi OS (Pi 4 and 5, 64-bit):**
 
   ```bash
-  wget $BASE/X.Y.Z/forzac_X.Y.Z_arm64.deb
+  wget https://github.com/denisfl/forzac-desktop/releases/download/vX.Y.Z/forzac_X.Y.Z_arm64.deb
   sudo apt install ./forzac_X.Y.Z_arm64.deb
   ```
 
   then the same `xdg-mime default` command (the package prints it).
-- **Other Linux (x86_64, aarch64, GTK 4.14+):** the archive runs where it is unpacked:
-  `tar xzf forzac-X.Y.Z-linux-x86_64.tar.gz && forzac-X.Y.Z-linux-x86_64/bin/forzac book.fb2`.
-- **Source and licence:** the source archive, "MPL-2.0", the `SHA256SUMS` link with
-  `shasum -a 256 -c SHA256SUMS`, and the repository link with Source A.
-- The support line stays the one the site already has; the release notes on the page or linked from it.
+- **Source and licence:** the GitHub repository, "MPL-2.0", the release notes, `SHA256SUMS` with
+  `shasum -a 256 -c SHA256SUMS`.
+
+The file names carry the version, so the links change with every release (GitHub's `releases/latest/download/` only
+works for names without one): one search and replace of `X.Y.Z` in `desktop/index.html`.
+
+**Privacy policy** (`#privacy`, both languages): a line that the desktop apps work offline and send nothing anywhere,
+and that downloads come from GitHub under GitHub's privacy statement.
 
 Deploy as the site's `wrangler.jsonc` says (the reader's WebAssembly first if it changed, then `npm run deploy` in
-`site/`), and open `/desktop/` in both languages on a phone and a desktop browser.
+`site/`), and open `/` and `/desktop/` in both languages on a phone and a desktop browser.
 
 ## 7. AUR
 
@@ -242,12 +229,9 @@ Host aur.archlinux.org
 EOF
 ```
 
-Point both PKGBUILDs at the published files (a commit in this repository):
-
-- `packaging/aur/forzac/PKGBUILD`: `source=("forzac-desktop-$pkgver.tar.gz::$BASE/$pkgver/forzac-desktop-$pkgver.tar.gz")`
-  (or the GitHub tag archive with Source A: `https://github.com/denisfl/forzac-desktop/archive/v$pkgver.tar.gz`
-  unpacks to the same `forzac-desktop-$pkgver/`).
-- `packaging/aur/forzac-bin/PKGBUILD`: `_release=$BASE/$pkgver`.
+The PKGBUILDs already point at GitHub: `forzac` takes the tag's source archive
+(`https://github.com/denisfl/forzac-desktop/archive/v$pkgver.tar.gz`, which unpacks to `forzac-desktop-$pkgver/`), and
+`forzac-bin` the release's two Linux archives. What they still need are the checksums and `.SRCINFO`.
 
 `.SRCINFO` and checksums need Arch tools; the Arch container has them (`ci/arch.Dockerfile`; `updpkgsums` is in
 `pacman-contrib`):
@@ -286,15 +270,16 @@ Check from a clean Arch (the container has no `yay`): `git clone https://aur.arc
 
 ## 8. Order of steps
 
-1. Decisions (section 1) — once.
+1. The repository on GitHub (section 1) — once.
 2. Checklist (section 2) on the release candidate built from `main`.
-3. Version, commit, tag (section 3); push the tag if the code is on GitHub.
-4. Build or download the files, checksums (section 4); install them as a reader would.
-5. Upload (section 5) and check the URLs and checksums from outside.
-6. Download page (section 6), deploy, check both languages.
+3. Version, commit, tag, push (section 3); the workflow drafts the release.
+4. Download the draft's files (or build them locally), checksums (section 4); install them as a reader would.
+5. Publish the release (section 5) and check the URLs and checksums from outside.
+6. Download links on the main page and the desktop page (section 6), deploy, check both languages.
 7. AUR (section 7), install from the AUR in the container.
 8. Mark the release done: the release notes linked from the page, `docs/roadmap.md` updated, the worktree removed
    (`git worktree remove ../forzac-release`).
 
-Withdrawing a broken release: remove the page's links first (deploy), then the files; on the AUR, bump `pkgrel` with
-the previous version's files rather than deleting the package.
+Withdrawing a broken release: point the page's links back to the previous version (deploy), then mark the GitHub
+release as a draft again or delete it; on the AUR, bump `pkgrel` with the previous version's files rather than
+deleting the package.
