@@ -1,7 +1,7 @@
 # reading-state Specification
 
 ## Purpose
-What Forzac remembers between launches — the reading position of every book, the recent books and the reader
+What Forzac remembers between launches — the reading position of every book (the library's books) and the reader
 settings — where it is kept and when it is written.
 
 ## Requirements
@@ -22,29 +22,15 @@ fall back to the nearest valid place.
 - **THEN** it opens where it was left
 
 ### Requirement: When the state is written
-The position SHALL be written when a book is opened (so it is a recent book even if closed at once), 1 s after the
+The position SHALL be written when a book is opened (so it is in the library even if closed at once), 1 s after the
 last change and when the window closes; never while a page-turn animation runs. A write SHALL replace the file atomically and SHALL keep what other Forzac processes wrote (it re-reads the file
 and changes only its own entries). The measurement flags (`--measure`, `--png`, `--turns`, `--chapter`, `--page`) SHALL
-neither read nor write the state, so measurements do not move the reader's place.
+neither read nor write the state of a book, so measurements do not move the reader's place; without a book they show
+the library from the state without writing it.
 
 #### Scenario: Turning several pages
 - **WHEN** the reader turns ten pages in quick succession and stops
 - **THEN** the state is written once, a second after the last turn
-
-### Requirement: Recent books
-Running Forzac without a file, and closing the last book (`reader-window`), SHALL show the recent books: up to 20
-books whose files still exist, the last opened first, each with its title, authors and how far it has been read (in
-percent; a finished book reads 100 %), in the reader's theme and interface font. In both shells `j`/`k` or `↓`/`↑`
-move the selection, `Enter` (or a double click) opens the selected book where it was left, `q` or `Esc` closes the
-list. With no books yet, the list says how to open one.
-
-#### Scenario: Continue reading
-- **WHEN** Forzac is started without arguments after reading two books
-- **THEN** the last book read is selected first, and `Enter` opens it at its remembered page
-
-#### Scenario: A dark evening
-- **WHEN** the reader's theme is Wave and the recent books are shown
-- **THEN** the list is drawn in Wave's paper, ink and secondary colours
 
 ### Requirement: Reader settings
 The theme and the text size SHALL be remembered globally and applied to every book opened later. Settings chosen in
@@ -63,3 +49,12 @@ most 10 ms on a Raspberry Pi 5.
 #### Scenario: A damaged state file
 - **WHEN** the state file contains garbage lines
 - **THEN** books open normally, the valid entries are kept and the garbage is dropped at the next write
+
+### Requirement: Forgetting a book
+The state SHALL forget a book on request (removing it from the library): its entry with the reading position goes at
+the next write, its bookmarks and highlights stay, so opening the file again brings them back. Every remembered book
+whose file exists SHALL be listed for the library, the last opened first.
+
+#### Scenario: Forgetting and reopening
+- **WHEN** a book with two bookmarks is removed from the library and its file is opened again
+- **THEN** it opens at its start, with both bookmarks
