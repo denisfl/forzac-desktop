@@ -41,7 +41,7 @@ class SheetView: LayerView {
     init(spacing: CGFloat, insets: NSEdgeInsets) {
         super.init()
         layer!.cornerRadius = 22
-        layer!.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner] // the top corners (layers are y up)
+        layer!.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner] // the top corners (the view is flipped)
         layer!.shadowOpacity = 1
         layer!.shadowRadius = 16
         layer!.shadowOffset = CGSize(width: 0, height: 6)
