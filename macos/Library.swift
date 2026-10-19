@@ -1105,7 +1105,7 @@ final class QuestionView: NSView {
         sheet.translatesAutoresizingMaskIntoConstraints = true
         sheet.layer!.backgroundColor = color(palette.sheet)
         sheet.layer!.cornerRadius = 22
-        sheet.layer!.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+        sheet.layer!.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner] // the top corners (the view is flipped)
         addSubview(sheet)
         let t = wrapping(title, bookFont("PT Serif", 19, bold: true), palette.ink)
         let b = label(body, interfaceFont(14), palette.muted)
