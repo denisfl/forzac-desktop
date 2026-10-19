@@ -48,8 +48,17 @@ with a SHA-256 checksum (`scripts/package-macos.sh X.Y.Z`); a downloaded copy ne
 described for the download page in [docs/macos-first-open.md](docs/macos-first-open.md).
 
 A book reopens where it was left; the settings are remembered. Until a theme is chosen, the theme follows the
-system's light or dark appearance. Without a file, Forzac shows the library: the books read, with their covers, the last one to continue first (`Enter`
-opens one, `/` searches, `d` removes one from the list; the file stays). The state is kept in
+system's light or dark appearance.
+
+Books live in one folder, `~/Books` (`~/Книги` if the interface was Russian when the folder was made). A book opened
+from anywhere else is copied there as `Author — Title.ext` (the original stays where it was; the same book is not
+copied twice), and books put into the folder by hand or by a sync service join the library. An existing folder of that
+name is used as it is: nothing in it is renamed or moved, subfolders and other formats are left alone. The first start
+of a version with the folder copies the books read before into it.
+
+Without a file, Forzac shows the library: the folder's books with their covers, the last one to continue first
+(`Enter` opens one, `/` searches, `F` shows the Books folder, `d` removes a book: its file goes to the Trash, its
+bookmarks and highlights stay for when it is put back). The state is kept in
 `$XDG_DATA_HOME/forzac/state` on Linux and `~/Library/Application Support/Forzac/state` on macOS, cover thumbnails in
 `$XDG_CACHE_HOME/forzac/covers` and `~/Library/Caches/Forzac/covers`.
 

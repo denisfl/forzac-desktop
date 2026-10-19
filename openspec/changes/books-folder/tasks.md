@@ -45,7 +45,7 @@
 
 ## 4. Docs
 
-- [ ] 4.1 README (where books live, removing goes to the Trash), `docs/roadmap.md`, the release-notes draft for the next
+- [x] 4.1 README (where books live, removing goes to the Trash), `docs/roadmap.md`, the release-notes draft for the next
       version (the folder, the one-time move, **BREAKING** remove), the site's `/desktop/` page only if it says books
       open in place
 

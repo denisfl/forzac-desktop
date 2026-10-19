@@ -12,6 +12,10 @@ on Linux, so the shared core API is settled before the second shell catches up.
 `release-1-0` (proposals only). Nothing is published yet; the 0.1.0 release was dry-run on 2026-10-17
 ([publishing.md](publishing.md)).
 
+**After 0.9.0 (released 2026-10-19).** The maintainer's direction is a Calibre-like library: first the Books folder
+(`books-folder`, done), then the library over it, sending books to a Kindle (FB2 → EPUB and Send to Kindle) and,
+later, syncing with the Android app through Dropbox-like services. `update-check` is done too.
+
 ## Test hardware
 
 Plans count only on what is at hand:
@@ -84,7 +88,8 @@ Total: about 18–22 weeks.
 ## Not planned for 1.0
 
 Confirmed with the maintainer in `android-parity` (2026-10-16). Text selection and quotes left the list on 2026-10-17,
-when the maintainer asked for them (`selection-quotes`), and so did the library screen (`library`): only importing stays.
+when the maintainer asked for them (`selection-quotes`), and so did the library screen (`library`); importing books
+left it on 2026-10-19 (`books-folder`).
 
-PDF; importing books into the library (books open in place; the library lists them); dictionaries; formulas (MathML); fixed-layout EPUB; Flatpak (AUR and
+PDF; dictionaries; formulas (MathML); fixed-layout EPUB; Flatpak (AUR and
 the `.deb` first); a Developer ID, notarisation, Homebrew and the App Store; following the Omarchy theme colours (a possible later change).
