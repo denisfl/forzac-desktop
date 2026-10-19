@@ -7,6 +7,11 @@ and get refined in each change's design.
 Linux comes first: Omarchy and the Raspberry Pi 5 are the primary audience. macOS follows once the reader is complete
 on Linux, so the shared core API is settled before the second shell catches up.
 
+**Status (2026-10-19).** Milestones 0.2–0.4 are done and archived (2026-10-16–17), and so are `localization`,
+`bookmarks`, `selection-quotes`, `library`, `reader-menu` and `help-card` from 1.0. Left for 1.0: `two-page-spread` and
+`release-1-0` (proposals only). Nothing is published yet; the 0.1.0 release was dry-run on 2026-10-17
+([publishing.md](publishing.md)).
+
 ## Test hardware
 
 Plans count only on what is at hand:
