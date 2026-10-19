@@ -7,7 +7,11 @@
 //! book<TAB>id<TAB>chapter<TAB>block<TAB>offset<TAB>progress<TAB>opened<TAB>path<TAB>title<TAB>authors
 //! bookmark<TAB>id<TAB>chapter<TAB>block<TAB>offset
 //! quote<TAB>id<TAB>chapter<TAB>block<TAB>offset<TAB>chapter<TAB>block<TAB>offset
+//! file<TAB>name<TAB>size<TAB>mtime<TAB>id<TAB>title<TAB>authors
 //! ```
+//!
+//! `file` lines cache what the Books folder's files hold (`library::scan`), keyed by name, size and mtime (nanoseconds);
+//! an empty id marks a file that is not a readable book.
 //!
 //! Tabs, line breaks and backslashes inside fields are escaped. Unreadable lines are skipped. Every write re-reads
 //! the file and changes only its own entries, then replaces the file atomically, so other processes' writes survive.
@@ -37,6 +41,18 @@ pub struct Entry {
     pub opened: u64,
 }
 
+/// What a file in the Books folder holds, as last read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cached {
+    pub name: String,
+    pub size: u64,
+    pub mtime: u64,
+    /// Empty when the file is not a readable book.
+    pub id: String,
+    pub title: String,
+    pub authors: String,
+}
+
 #[derive(Debug, Default)]
 pub struct Store {
     path: PathBuf,
@@ -52,6 +68,8 @@ struct Saved {
     bookmarks: BTreeMap<String, Vec<Locator>>,
     /// Highlights by book id: their `[start, end)`, in reading order.
     quotes: BTreeMap<String, Vec<(Locator, Locator)>>,
+    /// The Books folder's files, by name.
+    files: Vec<Cached>,
 }
 
 impl Store {
@@ -60,6 +78,16 @@ impl Store {
         let path = path.into();
         let saved = read(&path);
         Store { path, saved }
+    }
+
+    /// Reads the file again: another `Store` on the same file (a background import) has written it.
+    pub fn reload(&mut self) {
+        self.saved = read(&self.path);
+    }
+
+    /// The state file's path.
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     /// Where `book` (opened from `path`) was left: by its content, else by its path; clamped to the book.
@@ -155,6 +183,30 @@ impl Store {
         books
     }
 
+    /// Every remembered book, whether its file exists or not, in the file's order.
+    pub fn entries(&self) -> &[Entry] {
+        &self.saved.books
+    }
+
+    /// Points the remembered book `id` at `path` (its copy in the Books folder).
+    pub fn set_path(&mut self, id: &str, path: &Path) -> io::Result<()> {
+        self.write(|saved| {
+            for e in saved.books.iter_mut().filter(|e| e.id == id) {
+                e.path = path.to_owned();
+            }
+        })
+    }
+
+    /// The Books folder's files as last read.
+    pub fn files(&self) -> &[Cached] {
+        &self.saved.files
+    }
+
+    /// Replaces what is known of the Books folder's files.
+    pub fn set_files(&mut self, files: Vec<Cached>) -> io::Result<()> {
+        self.write(|saved| saved.files = files)
+    }
+
     /// Forgets the book `id` (removed from the library): its entry and reading position. Its bookmarks and highlights
     /// stay, so opening the file again brings them back.
     pub fn forget(&mut self, id: &str) -> io::Result<()> {
@@ -195,6 +247,10 @@ impl Store {
                     b.offset
                 );
             }
+        }
+        for f in &saved.files {
+            let (name, id, title, authors) = (escape(&f.name), escape(&f.id), escape(&f.title), escape(&f.authors));
+            let _ = writeln!(text, "file\t{name}\t{}\t{}\t{id}\t{title}\t{authors}", f.size, f.mtime);
         }
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir)?;
@@ -255,6 +311,11 @@ fn read(path: &Path) -> Saved {
                     progress,
                     opened,
                 });
+            }
+            Some("file") if f.len() == 7 => {
+                let (Ok(size), Ok(mtime)) = (f[2].parse::<u64>(), f[3].parse::<u64>()) else { continue };
+                saved.files.retain(|c| c.name != f[1]);
+                saved.files.push(Cached { name: f[1].clone(), size, mtime, id: f[4].clone(), title: f[5].clone(), authors: f[6].clone() });
             }
             _ => {} // unknown or damaged: dropped at the next write
         }

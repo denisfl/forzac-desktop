@@ -328,6 +328,17 @@ unsafe fn str<'a>(s: *const c_char) -> std::borrow::Cow<'a, str> {
     unsafe { CStr::from_ptr(s) }.to_string_lossy()
 }
 
+/// The code of `e` in `*error`.
+fn error_code(e: crate::Error) -> u32 {
+    match e {
+        crate::Error::NotABook => 1,
+        crate::Error::NoText => 2,
+        crate::Error::Protected => 3,
+        crate::Error::Damaged => 4,
+        crate::Error::Unavailable => 5,
+    }
+}
+
 /// Opens a book; null when the file is not a readable book, with the reason in `*error` (when not null): 1 not a
 /// book, 2 no text, 3 protected (DRM), 4 a damaged archive, 5 the file cannot be read.
 ///
@@ -337,14 +348,7 @@ unsafe fn str<'a>(s: *const c_char) -> std::borrow::Cow<'a, str> {
 pub unsafe extern "C" fn forzac_open(path: *const c_char, error: *mut u32) -> *mut Document {
     let fail = |e: crate::Error| {
         if !error.is_null() {
-            let code = match e {
-                crate::Error::NotABook => 1,
-                crate::Error::NoText => 2,
-                crate::Error::Protected => 3,
-                crate::Error::Damaged => 4,
-                crate::Error::Unavailable => 5,
-            };
-            unsafe { *error = code };
+            unsafe { *error = error_code(e) };
         }
         std::ptr::null_mut()
     };
@@ -1550,6 +1554,8 @@ pub struct State {
     recent: Vec<ForzacRecent>,
     recent_strings: Vec<CString>,
     notice: CString,
+    /// The Books folder or an imported book's path, as last returned.
+    path: CString,
 }
 
 /// A book of the library.
@@ -1560,6 +1566,32 @@ pub struct ForzacRecent {
     pub authors: *const c_char,
     pub progress: f32,
     pub id: *const c_char,
+    /// False for a book in the Books folder that was never opened.
+    pub opened: bool,
+}
+
+impl State {
+    /// Publishes `books` for the shell until the next call.
+    fn publish(&mut self, books: Vec<crate::state::Entry>, count: *mut u32) -> *const ForzacRecent {
+        self.recent_strings = books
+            .iter()
+            .flat_map(|e| [cstring(&e.path.to_string_lossy()), cstring(&e.title), cstring(&e.authors), cstring(&e.id)])
+            .collect();
+        self.recent = books
+            .iter()
+            .zip(self.recent_strings.chunks(4))
+            .map(|(e, s)| ForzacRecent {
+                path: s[0].as_ptr(),
+                title: s[1].as_ptr(),
+                authors: s[2].as_ptr(),
+                progress: e.progress,
+                id: s[3].as_ptr(),
+                opened: e.opened > 0,
+            })
+            .collect();
+        unsafe { *count = self.recent.len() as u32 };
+        self.recent.as_ptr()
+    }
 }
 
 /// Opens the state file at `path` (it need not exist yet).
@@ -1574,6 +1606,7 @@ pub unsafe extern "C" fn forzac_state_open(path: *const c_char) -> *mut State {
         recent: Vec::new(),
         recent_strings: Vec::new(),
         notice: CString::default(),
+        path: CString::default(),
     }))
 }
 
@@ -1606,22 +1639,77 @@ pub unsafe extern "C" fn forzac_state_save_position(state: *mut State, doc: *con
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn forzac_state_recent(state: *mut State, n: u32, count: *mut u32) -> *const ForzacRecent {
     let state = unsafe { &mut *state };
-    let books = state.store.recent(n as usize);
-    state.recent_strings =
-        books.iter().flat_map(|e| [cstring(&e.path.to_string_lossy()), cstring(&e.title), cstring(&e.authors), cstring(&e.id)]).collect();
-    state.recent = books
-        .iter()
-        .zip(state.recent_strings.chunks(4))
-        .map(|(e, s)| ForzacRecent {
-            path: s[0].as_ptr(),
-            title: s[1].as_ptr(),
-            authors: s[2].as_ptr(),
-            progress: e.progress,
-            id: s[3].as_ptr(),
-        })
-        .collect();
-    unsafe { *count = state.recent.len() as u32 };
-    state.recent.as_ptr()
+    let books = state.store.recent(n as usize).into_iter().cloned().collect();
+    state.publish(books, count)
+}
+
+/// Reads the state file again, after another handle (a background import) wrote it.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_state_reload(state: *mut State) {
+    unsafe { &mut *state }.store.reload();
+}
+
+/// The Books folder (`library::books_folder`) in `home`, made when missing; the first time, the remembered books are
+/// copied into it, which may take a while: call it off the main thread. Null when it cannot be made; valid until the
+/// next call on `state`.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`]; `home` a valid NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_books_folder(state: *mut State, home: *const c_char) -> *const c_char {
+    let state = unsafe { &mut *state };
+    let home = PathBuf::from(unsafe { str(home) }.into_owned());
+    let Ok(folder) = crate::library::books_folder(&home, crate::i18n::language(), &mut state.store) else { return std::ptr::null() };
+    state.path = cstring(&folder.to_string_lossy());
+    state.path.as_ptr()
+}
+
+/// Copies the book at `path` into the Books folder (`library::import`; [`forzac_books_folder`] first) and returns the
+/// path to open: the copy, the copy already there, or `path` itself inside the folder. Null when it cannot be read or
+/// copied, with the reason in `*error` as [`forzac_open`] gives it. Off the main thread; valid until the next call on
+/// `state`.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`]; `path` a valid NUL-terminated string; `error` null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_import(state: *mut State, path: *const c_char, error: *mut u32) -> *const c_char {
+    let state = unsafe { &mut *state };
+    let src = PathBuf::from(unsafe { str(path) }.into_owned());
+    let result = match crate::library::remembered_folder(&state.store) {
+        Some(folder) => crate::library::import(&src, &folder, &mut state.store),
+        None => Err(crate::Error::Unavailable),
+    };
+    match result {
+        Ok(copy) => {
+            state.path = cstring(&copy.to_string_lossy());
+            state.path.as_ptr()
+        }
+        Err(e) => {
+            if !error.is_null() {
+                unsafe { *error = error_code(e) };
+            }
+            std::ptr::null()
+        }
+    }
+}
+
+/// The library (`library::scan`): the remembered books whose files exist, the last opened first, then the Books
+/// folder's books never opened; valid until the next call on `state`. Reads the folder: off the main thread when it
+/// may hold new files.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`]; `count` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_library_books(state: *mut State, count: *mut u32) -> *const ForzacRecent {
+    let state = unsafe { &mut *state };
+    let books = match crate::library::remembered_folder(&state.store) {
+        Some(folder) => crate::library::scan(&folder, &mut state.store),
+        None => state.store.books().into_iter().cloned().collect(),
+    };
+    state.publish(books, count)
 }
 
 /// Forgets the book `id` (removed from the library); false when the file cannot be written.

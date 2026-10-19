@@ -1,19 +1,27 @@
 //! The library's rules, shared by both shells (`library`): the "Continue reading" book, the share read under a cover,
 //! search by title or author (the Android app's `LibrarySearch.kt`), generated covers (its `Covers.kt`) and the empty
-//! state's sample page (the web reader's).
+//! state's sample page (the web reader's). The Books folder is in `folder.rs`.
 
 use crate::i18n::{Language, language, tr};
+
+mod folder;
+pub use folder::*;
 
 /// A book counts as finished from this share on: its last page starts just before the end (Android's `FINISHED`).
 pub const FINISHED: f32 = 0.999;
 
-/// The "Continue reading" book among `progress` (the library's books, last opened first): the first not finished.
-pub fn continue_book(progress: impl IntoIterator<Item = f32>) -> Option<usize> {
-    progress.into_iter().position(|p| p < FINISHED)
+/// The "Continue reading" book among the library's books (`(progress, opened)`, last opened first): the first opened
+/// and not finished.
+pub fn continue_book(books: impl IntoIterator<Item = (f32, bool)>) -> Option<usize> {
+    books.into_iter().position(|(p, opened)| opened && p < FINISHED)
 }
 
-/// The share read under a cover: "Finished", else "N%" — at least 1 %, since an opened book has been started.
-pub fn share_label(progress: f32) -> String {
+/// The share read under a cover: "New" for a book never opened, "Finished", else "N%" — at least 1 %, since an
+/// opened book has been started.
+pub fn share_label(progress: f32, opened: bool) -> String {
+    if !opened {
+        return tr("New").to_owned();
+    }
     if progress >= FINISHED {
         return tr("Finished").to_owned();
     }

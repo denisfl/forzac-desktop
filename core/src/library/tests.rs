@@ -18,12 +18,14 @@ fn search_by_title_or_author_in_either_alphabet() {
 
 #[test]
 fn continue_reading_is_the_first_unfinished_book() {
-    assert_eq!(continue_book([1.0, 0.5, 0.2]), Some(1));
-    assert_eq!(continue_book([0.9995, 1.0]), None);
+    assert_eq!(continue_book([(1.0, true), (0.5, true), (0.2, true)]), Some(1));
+    assert_eq!(continue_book([(0.9995, true), (1.0, true)]), None);
+    assert_eq!(continue_book([(1.0, true), (0.0, false)]), None, "a book never opened is not continued");
     assert_eq!(continue_book([]), None);
-    assert_eq!(share_label(0.0), "1%");
-    assert_eq!(share_label(0.376), "37%");
-    assert_eq!(share_label(0.9991), tr("Finished"));
+    assert_eq!(share_label(0.0, true), "1%");
+    assert_eq!(share_label(0.376, true), "37%");
+    assert_eq!(share_label(0.9991, true), tr("Finished"));
+    assert_eq!(share_label(0.0, false), tr("New"));
 }
 
 #[test]

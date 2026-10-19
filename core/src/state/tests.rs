@@ -238,3 +238,58 @@ fn a_finished_book_reads_100_percent() {
     assert_eq!(store.position(&b, Path::new("/books/a.fb2")), Some(at(1, 3, 0)), "the last page's start");
     assert_eq!(store.saved.books[0].progress, 1.0);
 }
+
+fn cached(name: &str, id: &str) -> Cached {
+    Cached {
+        name: name.into(),
+        size: 1234,
+        mtime: 1_760_000_000_123_456_789,
+        id: id.into(),
+        title: "Война\tи мир".into(),
+        authors: "Лев Толстой".into(),
+    }
+}
+
+#[test]
+fn file_lines_survive_a_restart_and_other_writes() {
+    let file = dir().join("state");
+    let mut store = Store::open(&file);
+    let files = vec![cached("Лев Толстой — Война и мир.fb2", "aaaa"), cached("broken.epub", "")];
+    store.set_files(files.clone()).unwrap();
+    let mut other = Store::open(&file);
+    other.save_position(&book("bbbb", &[2]), Path::new("/b"), at(0, 1, 0), false).unwrap();
+    other.set_setting("theme", "Dark").unwrap();
+    let store = Store::open(&file);
+    assert_eq!(store.files(), files);
+    assert_eq!(store.entries().len(), 1);
+}
+
+#[test]
+fn a_state_without_file_lines_and_damaged_file_lines() {
+    let file = dir().join("state");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, format!("{HEADER}\nbook\tid1\t0\t1\t2\t0.5\t100\t/a\tT\tA\n")).unwrap();
+    let store = Store::open(&file);
+    assert!(store.files().is_empty());
+    assert_eq!(store.entries().len(), 1, "a 0.9.0 state reads as before");
+    let good = "file\ta.fb2\t10\t20\tid\tT\tA";
+    std::fs::write(&file, format!("{HEADER}\nfile\tb.fb2\tten\t20\tid\tT\tA\nfile\tc.fb2\t10\n{good}\n")).unwrap();
+    let mut store = Store::open(&file);
+    assert_eq!(store.files().iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["a.fb2"]);
+    store.set_setting("theme", "Dark").unwrap();
+    assert_eq!(std::fs::read_to_string(&file).unwrap().matches("file\t").count(), 1, "damaged lines dropped at the write");
+}
+
+#[test]
+fn a_book_is_pointed_at_its_copy() {
+    let file = dir().join("state");
+    let mut store = Store::open(&file);
+    let b = book("aaaa", &[4]);
+    store.save_position(&b, Path::new("/downloads/a.fb2"), at(0, 3, 1), false).unwrap();
+    store.set_bookmarks(&b, &[at(0, 2, 0)]).unwrap();
+    store.set_path("aaaa", Path::new("/books/a.fb2")).unwrap();
+    let store = Store::open(&file);
+    assert_eq!(store.entries()[0].path, Path::new("/books/a.fb2"));
+    assert_eq!(store.position(&b, Path::new("/books/a.fb2")), Some(at(0, 3, 1)));
+    assert_eq!(store.bookmarks(&b), [at(0, 2, 0)]);
+}

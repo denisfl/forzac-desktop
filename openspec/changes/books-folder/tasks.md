@@ -2,25 +2,25 @@
 
 ## 1. Core
 
-- [ ] 1.1 `library::books_folder(home, language, store)`: `~/Книги` / `~/Books`, remembered as the setting
+- [x] 1.1 `library::books_folder(home, language, store)`: `~/Книги` / `~/Books`, remembered as the setting
       `books.folder`, made when missing; tests (Russian and English, an existing folder kept, the remembered path wins
       after a language switch, a deleted folder made again)
-- [ ] 1.2 `library::file_name(title, authors, original, taken)`: `Author — Title.ext`, `.fb2.zip` kept whole, forbidden
+- [x] 1.2 `library::file_name(title, authors, original, taken)`: `Author — Title.ext`, `.fb2.zip` kept whole, forbidden
       characters and a leading dot replaced, 120 characters at a character boundary, ` (2)`… for a taken name; tests
       (no author, no title, Cyrillic, a 300-character title, `/` and `:` in a title, three books with one name)
-- [ ] 1.3 `state`: the `file` line kind (name, size, mtime, id, title, authors) read, written and kept by other writes;
+- [x] 1.3 `state`: the `file` line kind (name, size, mtime, id, title, authors) read, written and kept by other writes;
       tests (round trip, a 0.9.0 state without `file` lines, damaged lines dropped)
-- [ ] 1.4 `library::scan(folder, store)`: supported files at the top level only, the cache reused on name/size/mtime,
+- [x] 1.4 `library::scan(folder, store)`: supported files at the top level only, the cache reused on name/size/mtime,
       gone files dropped, one write when something changed; merged with the remembered entries by id, one entry per
       id; tests in a temp folder (a new file, a changed file, a removed file, a PDF ignored, two files with one id,
       a damaged EPUB ignored) and a timing test: 500 cached files under 50 ms on the Mac (the Pi in 5.3)
-- [ ] 1.5 `library::import(src, folder, store)`: a file inside the folder returned as it is, a known id returns its
+- [x] 1.5 `library::import(src, folder, store)`: a file inside the folder returned as it is, a known id returns its
       copy, else `.name.part` + rename, remembered; the original untouched; tests (copy, duplicate under another name,
       a file already inside, no space or no permission → an error and no `.part` left)
-- [ ] 1.6 The one-time move of the remembered books (decision 6): runs when `books.folder` is unset, entries pointed at
+- [x] 1.6 The one-time move of the remembered books (decision 6): runs when `books.folder` is unset, entries pointed at
       the copies with positions, bookmarks and highlights kept, failures skipped; tests (three books, one missing,
       one unreadable)
-- [ ] 1.7 C ABI: `forzac_books_folder`, `forzac_import`, `forzac_library_books` (with "never opened"), the move;
+- [x] 1.7 C ABI: `forzac_books_folder`, `forzac_import`, `forzac_library_books` (with "never opened"), the move;
       `macos/forzac.h`; tests through the C ABI
 
 ## 2. GTK shell

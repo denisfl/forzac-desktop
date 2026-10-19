@@ -320,6 +320,7 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("{n}% read", "прочитано {n}%"),
     // The page.
     ("Finished", "Прочитано"),
+    ("New", "Новая"),
     ("Chapter {n}", "Глава {n}"),
     ("← Back · Ctrl+O", "← Вернуться · Ctrl+O"),
     ("← Back · ⌃O", "← Вернуться · ⌃O"),

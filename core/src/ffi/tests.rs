@@ -397,3 +397,48 @@ fn the_update_check_through_the_c_functions() {
         forzac_state_close(state);
     }
 }
+
+#[test]
+fn the_books_folder_through_the_c_functions() {
+    let path = book_file();
+    let home = path.parent().unwrap().join("home");
+    let state_path = path.with_file_name("state");
+    unsafe {
+        let state = forzac_state_open(c(state_path.to_str().unwrap()).as_ptr());
+        let doc = forzac_open(c(path.to_str().unwrap()).as_ptr(), std::ptr::null_mut());
+        assert!(forzac_state_save_position(state, doc, ForzacLocator { chapter: 1, block: 0, offset: 0 }, false));
+        forzac_close(doc);
+
+        // The first call makes the folder and moves the remembered book in.
+        let mut error = 0;
+        assert!(forzac_import(state, c(path.to_str().unwrap()).as_ptr(), &mut error).is_null(), "no folder yet");
+        assert_eq!(error, 5);
+        let folder = string(forzac_books_folder(state, c(home.to_str().unwrap()).as_ptr())).unwrap();
+        assert_eq!(folder, home.join("Books").to_str().unwrap());
+        let copy = home.join("Books/Антон Чехов — Рассказы.fb2");
+        assert!(copy.is_file());
+
+        // A second handle (the shell's background queue) imports; the main one reloads.
+        let worker = forzac_state_open(c(state_path.to_str().unwrap()).as_ptr());
+        let opened = string(forzac_import(worker, c(path.to_str().unwrap()).as_ptr(), &mut error)).unwrap();
+        assert_eq!(opened, copy.to_str().unwrap(), "the copy already there");
+        let mut other = std::fs::read(&path).unwrap();
+        other.push(b' ');
+        std::fs::write(home.join("Books/new.fb2"), other).unwrap();
+        let photo = path.with_file_name("photo.jpg");
+        std::fs::write(&photo, b"\xff\xd8 not a book").unwrap();
+        assert!(forzac_import(worker, c(photo.to_str().unwrap()).as_ptr(), &mut error).is_null());
+        assert_eq!(error, 1);
+        let mut n = 0;
+        let books = std::slice::from_raw_parts(forzac_library_books(worker, &mut n), n as usize);
+        assert_eq!(books.len(), 2);
+        assert_eq!(string(books[0].path).as_deref(), copy.to_str());
+        assert!(books[0].opened && !books[1].opened, "the book from the folder was never opened");
+        forzac_state_close(worker);
+
+        forzac_state_reload(state);
+        let books = std::slice::from_raw_parts(forzac_library_books(state, &mut n), n as usize);
+        assert_eq!(books.len(), 2);
+        forzac_state_close(state);
+    }
+}

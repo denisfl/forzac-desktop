@@ -87,6 +87,7 @@ typedef struct {
     const char *authors;
     float progress;
     const char *id;
+    bool opened;            // false: in the Books folder, never opened
 } ForzacRecent;
 
 // A generated cover: cloth or marbled paper (forzac_marble with `seed`) under `cloth`, a spine, the title's size
@@ -285,6 +286,17 @@ bool forzac_state_save_position(ForzacState *state, const ForzacDocument *doc, F
 const ForzacRecent *forzac_state_recent(ForzacState *state, uint32_t n, uint32_t *count);
 // Removes the book from the library (its bookmarks and highlights stay).
 bool forzac_state_forget(ForzacState *state, const char *id);
+// Reads the file again after another handle wrote it.
+void forzac_state_reload(ForzacState *state);
+
+// The Books folder (books-folder). forzac_books_folder makes it in `home` when missing and, the first time, copies the
+// remembered books in; forzac_import copies a book in and returns the path to open (null on failure, `error` as
+// forzac_open's); forzac_library_books reads the folder: the remembered books, the last opened first, then the
+// folder's books never opened. All three may take a while: call them on a background queue with a state handle of
+// its own, then forzac_state_reload the main one. Strings and the list are valid until the next call on `state`.
+const char *forzac_books_folder(ForzacState *state, const char *home);
+const char *forzac_import(ForzacState *state, const char *path, uint32_t *error);
+const ForzacRecent *forzac_library_books(ForzacState *state, uint32_t *count);
 
 // The library: search rank (lower first, -1 no match), generated covers, the empty state's sample page (lines: head,
 // title, subtitle, folio, paragraphs; valid for good).
