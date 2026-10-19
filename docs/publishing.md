@@ -170,42 +170,25 @@ shasum -a 256 -c SHA256SUMS
 
 ## 6. The download links on the site
 
-The site (`~/dev/forzac/site`, in the Android repository) is one page, `public/index.html`, in English and Russian (a
-`lang` switch, every text in a `data-lang="en"` and a `data-lang="ru"` span). No separate download page (decided
-2026-10-19): Google Play, then the desktop links, then the web reader.
+The site (`~/dev/forzac/site`, in the Android repository) is in English and Russian (a `lang` switch, every text in a
+`data-lang="en"` and a `data-lang="ru"` span). Decided 2026-10-19 (variant A):
 
-**Main page, under "Get it on Google Play".** The hero's `<p class="cta ui">` holds the Google Play pill (`.play`) and
-the quiet "or read in your browser" link (`.read`). Below it, a row of two small links with an icon each, introduced by
-"Also for computers:" / "Также для компьютеров:": outline pills in `var(--line)` with `var(--muted)` text and the icon
-in `currentColor`, the same `Golos Text` 15 px as `.read`, wrapping under each other on a phone. Quieter than the
-Google Play pill, which stays the main action for phones.
+**Main page, under "Get it on Google Play".** The Google Play pill stays the one main action. Below it, one quiet row,
+"Also:" / "Также:", of three outline pills with Lucide icons (ISC, inline SVG in `currentColor`): **Browser** (`globe`,
+`/read/`), **macOS** (`laptop`, `/desktop/#mac`; no Apple logo on third-party downloads) and **Linux**
+(`square-terminal`, `/desktop/#linux`). Centred under the button on narrow screens.
 
-- **macOS** downloads the disk image straight away:
-  `https://github.com/denisfl/forzac-desktop/releases/latest/download/Forzac-macos-arm64.dmg`. Under the row, one line
-  in the muted 13 px text: "Apple Silicon, macOS 14+. First open: System Settings → Privacy & Security → Open Anyway" /
-  "Apple Silicon, macOS 14+. При первом запуске: Системные настройки → Конфиденциальность и безопасность → Все равно
-  открыть" (the app is not notarised; [docs/macos-first-open.md](macos-first-open.md) has the full steps for the
-  release notes).
-- **Linux** opens the latest release: `https://github.com/denisfl/forzac-desktop/releases/latest`. There is no single
-  file for every Linux; the release notes say which to take: the archives (`tar xzf forzac-linux-x86_64.tar.gz`, then
-  `forzac-X.Y.Z-linux-x86_64/bin/forzac book.fb2`), the `.deb` for Debian 13 and Raspberry Pi OS
-  (`sudo apt install ./forzac-linux-arm64.deb`), and for Arch and Omarchy the AUR (section 7) or, until the AUR
-  account exists, the PKGBUILD from this repository:
+**The page `public/desktop/index.html`** (`/desktop/`): the Mac section with "Download for Mac" and the first-open
+steps for macOS 14 and 15 ([docs/macos-first-open.md](macos-first-open.md)); Linux by architecture (`uname -m`):
+x86_64 — Arch and Omarchy, any distribution's archive; arm64 — the `.deb` for Debian 13 and Raspberry Pi OS, Arch
+Linux ARM, the archive; then the default reader command and `SHA256SUMS`. Every file link is
+`https://github.com/denisfl/forzac-desktop/releases/latest/download/<name>`, and the archives' commands use
+`forzac-*-linux-<arch>/bin/forzac`, so nothing on the site changes when a version comes out. Arch is installed with the
+PKGBUILD from this repository until the AUR account exists (section 7):
 
-  ```bash
-  git clone --depth 1 https://github.com/denisfl/forzac-desktop && cd forzac-desktop/packaging/aur/forzac-bin && makepkg -si
-  ```
-
-  then the default reader command (the packages print it):
-
-  ```bash
-  xdg-mime default app.truenrth.forzac.desktop application/x-fictionbook+xml application/x-zip-compressed-fb2 application/x-fb3 application/epub+zip
-  ```
-
-  Icons, inline SVG in `currentColor` from Lucide (ISC): `laptop` for macOS (Apple does not allow its logo on
-  third-party downloads) and `square-terminal` for Linux, one stroke style.
-
-The links never change between releases; nothing on the site is touched when a version comes out.
+```bash
+git clone --depth 1 https://github.com/denisfl/forzac-desktop && cd forzac-desktop/packaging/aur/forzac-bin && makepkg -si
+```
 
 Deploy as the site's `wrangler.jsonc` says (the reader's WebAssembly first if it changed, then `npm run deploy` in
 `site/`), and open `/` in both languages on a phone and a desktop browser; both download links work.
