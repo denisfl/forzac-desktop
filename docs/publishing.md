@@ -183,7 +183,7 @@ Google Play pill, which stays the main action for phones.
 - **macOS** downloads the disk image straight away:
   `https://github.com/denisfl/forzac-desktop/releases/latest/download/Forzac-macos-arm64.dmg`. Under the row, one line
   in the muted 13 px text: "Apple Silicon, macOS 14+. First open: System Settings → Privacy & Security → Open Anyway" /
-  "Apple Silicon, macOS 14+. При первом запуске: Системные настройки → Конфиденциальность и безопасность → Всё равно
+  "Apple Silicon, macOS 14+. При первом запуске: Системные настройки → Конфиденциальность и безопасность → Все равно
   открыть" (the app is not notarised; [docs/macos-first-open.md](macos-first-open.md) has the full steps for the
   release notes).
 - **Linux** opens the latest release: `https://github.com/denisfl/forzac-desktop/releases/latest`. There is no single
@@ -202,8 +202,8 @@ Google Play pill, which stays the main action for phones.
   xdg-mime default app.truenrth.forzac.desktop application/x-fictionbook+xml application/x-zip-compressed-fb2 application/x-fb3 application/epub+zip
   ```
 
-  Icons, monochrome inline SVG: Apple does not allow its logo on third-party downloads, so macOS gets a neutral glyph
-  (a laptop) and the word; Tux is free to use for Linux.
+  Icons, inline SVG in `currentColor` from Lucide (ISC): `laptop` for macOS (Apple does not allow its logo on
+  third-party downloads) and `square-terminal` for Linux, one stroke style.
 
 The links never change between releases; nothing on the site is touched when a version comes out.
 

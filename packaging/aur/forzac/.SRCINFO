@@ -1,0 +1,19 @@
+pkgbase = forzac
+	pkgdesc = Offline FB2 and EPUB reader with book-quality typesetting
+	pkgver = 0.9.0
+	pkgrel = 1
+	url = https://forzac.truenrth.app
+	install = forzac.install
+	arch = x86_64
+	arch = aarch64
+	license = MPL-2.0
+	license = OFL-1.1
+	license = LPPL-1.2
+	makedepends = cargo
+	depends = gtk4
+	depends = fontconfig
+	depends = perl-file-mimeinfo
+	source = forzac-0.9.0.tar.gz::https://github.com/denisfl/forzac-desktop/archive/v0.9.0.tar.gz
+	sha256sums = ea91f5fe039383039ccdbabb6efd61823abbae80bd3729078dabdbb1f13db665
+
+pkgname = forzac
