@@ -168,16 +168,15 @@ The site (`~/dev/forzac/site`, in the Android repository) is one page, `public/i
 and deployed from that repository:
 
 **Main page, under "Get it on Google Play".** The hero's `<p class="cta ui">` holds the Google Play pill (`.play`) and
-the quiet "or read in your browser" link (`.read`). Below it, a second row of three small links with an icon each:
-**macOS**, **Linux**, **Raspberry Pi**, introduced by "Also for computers:" / "Также для компьютеров:". Quieter than
+the quiet "or read in your browser" link (`.read`). Below it, a second row of two small links with an icon each:
+**macOS** and **Linux** (no separate Raspberry Pi link: the Pi is covered under Linux; decided 2026-10-19), introduced by "Also for computers:" / "Также для компьютеров:". Quieter than
 the pill (it stays the main action for phones): outline pills in `var(--line)` with `var(--muted)` text and the icon
 in `currentColor`, the same `Golos Text` 15 px as `.read`, wrapping under each other on a phone. They lead to the
-desktop page's sections, `/desktop/#mac`, `/desktop/#linux`, `/desktop/#pi`, not straight to files: the Mac needs the
+desktop page's sections, `/desktop/#mac` and `/desktop/#linux`, not straight to files: the Mac needs the
 first-open steps and Linux needs a command.
 
 Icons, monochrome inline SVG: Apple does not allow its logo on third-party downloads, so macOS gets a neutral glyph (a
-laptop) and the word; Tux is free to use for Linux; check Raspberry Pi's trademark rules before using its logo, or use
-a neutral board glyph and the name.
+laptop) and the word; Tux is free to use for Linux.
 
 **A page `public/desktop/index.html`** (served at `/desktop/`), in the main page's style, header and language switch:
 
@@ -185,8 +184,14 @@ a neutral board glyph and the name.
   (`$REL/Forzac-X.Y.Z-macos-arm64.dmg.sha256`), "Apple Silicon (M1 and later), macOS 14 or newer", and the first-open
   text from [docs/macos-first-open.md](macos-first-open.md) (translated for the Russian half), with the screenshots
   from the checklist.
-- **`#linux` — Arch, Omarchy:** `yay -S forzac-bin` (or `paru -S forzac-bin`; `forzac` builds from source), then the
-  default reader command:
+- **`#linux` — Arch, Omarchy:** `yay -S forzac-bin` (or `paru -S forzac-bin`; `forzac` builds from source) once the
+  packages are on the AUR (section 7). Until then, the same PKGBUILD straight from this repository:
+
+  ```bash
+  git clone --depth 1 https://github.com/denisfl/forzac-desktop && cd forzac-desktop/packaging/aur/forzac-bin && makepkg -si
+  ```
+
+  Then the default reader command:
 
   ```bash
   xdg-mime default app.truenrth.forzac.desktop application/x-fictionbook+xml application/x-zip-compressed-fb2 application/x-fb3 application/epub+zip
@@ -195,14 +200,8 @@ a neutral board glyph and the name.
   and the note that Omarchy is built and installed in CI only, so reports are welcome (a link to the GitHub issues).
   **Other Linux (x86_64, aarch64, GTK 4.14+):** the archives, which run where they are unpacked:
   `tar xzf forzac-X.Y.Z-linux-x86_64.tar.gz && forzac-X.Y.Z-linux-x86_64/bin/forzac book.fb2`.
-- **`#pi` — Raspberry Pi OS (Pi 4 and 5, 64-bit):**
-
-  ```bash
-  wget https://github.com/denisfl/forzac-desktop/releases/download/vX.Y.Z/forzac_X.Y.Z_arm64.deb
-  sudo apt install ./forzac_X.Y.Z_arm64.deb
-  ```
-
-  then the same `xdg-mime default` command (the package prints it).
+  **Debian 13 and Raspberry Pi OS (arm64), in the same section:** `sudo apt install ./forzac_X.Y.Z_arm64.deb` after
+  downloading it, then the same `xdg-mime default` command (the package prints it).
 - **Source and licence:** the GitHub repository, "MPL-2.0", the release notes, `SHA256SUMS` with
   `shasum -a 256 -c SHA256SUMS`.
 
@@ -216,6 +215,10 @@ Deploy as the site's `wrangler.jsonc` says (the reader's WebAssembly first if it
 `site/`), and open `/` and `/desktop/` in both languages on a phone and a desktop browser.
 
 ## 7. AUR
+
+**On 2026-10-19 AUR account registration was closed** ("temporarily", because of automated sign-ups; no manual queue).
+Watch aur-general and the Arch news for it to reopen; until then the site points Arch users at `makepkg -si` in
+`packaging/aur/forzac-bin` of this repository (section 6), and the steps below wait.
 
 Once: an account on <https://aur.archlinux.org> (register, confirm the e-mail), an SSH key for it:
 
