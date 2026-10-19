@@ -9,7 +9,9 @@ for syncing through Dropbox or a similar service.
 ## What Changes
 
 - A **"Books" folder** in the home folder (`~/Books`, or `~/Книги` when the interface is Russian), created on the
-  first start of this version. Its place is fixed and remembered in the state.
+  first start of this version. Its place is fixed and remembered in the state. A folder of that name that already
+  exists is used as it is: its books join the library, nothing in it is renamed or moved, subfolders and other formats
+  are left alone.
 - **Opening a book from anywhere** (the file dialog, a drop on the library, Finder or the file manager, `xdg-open`)
   **copies it into the folder** as `Author — Title.ext` and opens the copy; a book already in the folder (the same
   file content) is not copied again, it opens. The original file is never moved or changed.

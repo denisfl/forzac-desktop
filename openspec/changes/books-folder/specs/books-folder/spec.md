@@ -5,11 +5,21 @@ Forzac SHALL keep its books in one folder in the home folder: `~/Книги` whe
 time the folder is made, `~/Books` otherwise. The folder SHALL be made on the first start of a version with this
 capability, and its path SHALL be remembered in the state, so a later change of the interface language does not move
 or rename it. When the remembered folder is missing (deleted by hand), Forzac SHALL make it again at the same path. A
-folder of that name that already exists SHALL be used as it is, with the books already in it.
+folder of that name that already exists SHALL be used as it is (decided 2026-10-19; choosing another folder is left to
+a later settings change): its FB2, FB2.ZIP, FB3 and EPUB files at the top level join the library, and Forzac SHALL NOT
+rename, move or change any file already there, nor touch its subfolders or files of other formats; it only adds its
+own copies beside them. The only change Forzac makes to a file it did not put there is moving it to the Trash when the
+reader removes that book from the library and confirms.
 
 #### Scenario: The first start in Russian
 - **WHEN** Forzac with a Russian interface starts for the first time on a Mac with no `~/Книги`
 - **THEN** `~/Книги` exists afterwards, and the next starts use it even after the interface switches to English
+
+#### Scenario: A Books folder that already exists
+- **WHEN** Forzac with an English interface starts for the first time and `~/Books` already holds `dune.epub`,
+  `notes.pdf` and a subfolder `Comics/`
+- **THEN** "Dune" is in the library, `notes.pdf` and `Comics/` stay as they were and are not shown, and no file in
+  `~/Books` is renamed or moved
 
 ### Requirement: Opening a book copies it into the folder
 Opening a book that is not in the folder — from the file dialog, a drop on the library, Finder or the file manager,
