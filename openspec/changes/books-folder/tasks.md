@@ -31,6 +31,8 @@
       cover cache
 - [ ] 2.3 Remove: the dialog text, `gio::File::trash`, forget only after the trash worked, the error message
 - [ ] 2.4 "Show the Books folder": the head button, `F`, the empty state's line; `gtk::FileLauncher`; help text
+- [ ] 2.5 The library's note line under the head removed; the empty state keeps only "FB2, FB2.ZIP, FB3 and EPUB are
+      supported." under its rule
 
 ## 3. macOS shell
 
@@ -39,6 +41,7 @@
 - [ ] 3.2 The library from `forzac_library_books`, folder-only books not started
 - [ ] 3.3 Remove: dialog text, `FileManager.trashItem`, forget after it worked, the error message
 - [ ] 3.4 "Show the Books folder": head button, `F`, the empty state, `NSWorkspace`; the menu item; help text
+- [ ] 3.5 The note line removed as in 2.5
 
 ## 4. Docs
 

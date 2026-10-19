@@ -6,8 +6,8 @@ Books folder (`books-folder`) together with the remembered books whose files sti
 library, in the reader's theme (paper, ink, secondary colour, lines) and the interface font (Golos Text; the brand, the
 headings and the generated covers in the book serifs). Its head SHALL hold the brand (the app icon and "Forzac") on the
 left and, while there are books, a search button, a "Show the Books folder" button and an "Open a book" button on the
-right; under it, a note line in the secondary colour ("We don’t store or send any data to a server. Everything runs on
-your computer. FB2, FB2.ZIP, FB3 and EPUB are supported."). Books SHALL be read from the Books folder: opening a book
+right; there is no note line under it (removed 2026-10-19: the app now asks GitHub for updates, so "we don’t send any
+data" is no longer the whole truth). Books SHALL be read from the Books folder: opening a book
 from elsewhere copies it there first. Only one library window SHALL exist at a time.
 
 #### Scenario: Starting without a book
@@ -66,7 +66,8 @@ opened book is selected when the library opens.
 ### Requirement: The empty library
 With no books, the library SHALL show the web reader's empty state: "Read books right on your computer", "Open a book
 file — a copy goes into your Books folder, the original stays where it is.", the "Open a book" button, "or drop a file
-into this window", "Show the Books folder", the note line under a rule, and beside them an illustrated book page (a
+into this window", "Show the Books folder" and, under a rule, "FB2, FB2.ZIP, FB3 and EPUB are supported.", and beside
+them an illustrated book page (a
 page of "Pride and Prejudice" in English, of "Капитанская дочка" in Russian, over a second page turned slightly). On a
 narrow window the page goes under the text.
 

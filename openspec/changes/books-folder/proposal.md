@@ -23,6 +23,8 @@ for syncing through Dropbox or a similar service.
 - **Moving the existing library in:** on the first start of this version, every remembered book whose file still
   exists is copied into the folder and remembered there; the originals stay where they are.
 - The library gets **"Show the Books folder"**, which opens it in Finder or the file manager.
+- The library's note line "We don’t store or send any data to a server. Everything runs on your computer." goes:
+  with the update check the app asks GitHub for the latest release, so the claim is no longer the whole truth.
 
 ## Non-goals
 
