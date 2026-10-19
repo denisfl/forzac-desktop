@@ -207,9 +207,6 @@ Google Play pill, which stays the main action for phones.
 
 The links never change between releases; nothing on the site is touched when a version comes out.
 
-**Privacy policy** (`#privacy`, both languages): a line that the desktop apps work offline and send nothing anywhere,
-and that downloads come from GitHub under GitHub's privacy statement.
-
 Deploy as the site's `wrangler.jsonc` says (the reader's WebAssembly first if it changed, then `npm run deploy` in
 `site/`), and open `/` in both languages on a phone and a desktop browser; both download links work.
 
