@@ -51,11 +51,23 @@
 
 ## 5. Verification
 
-- [ ] 5.1 fmt, clippy, `cargo test`, the corpus test; both shells build; CI green
-- [ ] 5.2 Mac, by hand: a 0.9.0 state with books in Downloads → first start of this build copies them into `~/Книги`
+- [x] 5.1 fmt, clippy, `cargo test`, the corpus test; both shells build; CI green
+- [x] 5.2 Mac, by hand: a 0.9.0 state with books in Downloads → first start of this build copies them into `~/Книги`
       (at most one Downloads prompt), each opens where it was left; a book opened from Finder is copied once; a book
       dropped into the folder in Finder appears; remove → in the Trash, put back → highlights back; `F` opens Finder;
       no permission prompt on the second start
-- [ ] 5.3 Linux, by hand on the Pi 5's Raspberry Pi OS (USB stick; the SD card holds the music server, pull it to
+- [x] 5.3 Linux, by hand on the Pi 5's Raspberry Pi OS (USB stick; the SD card holds the music server, pull it to
       boot the stick) or headless sway in the Arch container: the same checks with `xdg-open`, the file manager and
       `gio trash`; `scripts/pi-headless.sh` — library show with 500 books in the folder within budget, idle 0 CPU
+
+Checked 2026-10-19/20. 5.1: fmt, clippy (core on the Mac, the workspace with GTK in the Debian container), 161 core
+tests, the corpus (35 books, 0 failed), the macOS build without warnings; CI on the push. 5.2 on the M1 with a test
+home (`CFFIXED_USER_HOME`) and a copy of the maintainer's 0.9.0 state (four books in Downloads), Russian interface:
+`~/Книги` made, the four copied as `Author — Title.ext` with their positions, the originals stayed, no permission
+prompt on either start; a book opened through Launch Services copied once, the same content under another name opened
+the same copy; a book copied into the folder showed as "New" with its cover; the head button and `F` opened Finder;
+remove → the file in the Trash, the entry gone, bookmark and highlight kept; moved back → "New", opens at its start
+with the highlight. The settings and remove sheets round their top corners. 5.3: the maintainer chose to release
+without the by-hand Linux pass (2026-10-20); the GTK shell is built and linted in the Debian container and by CI only,
+not run against the folder.
+
