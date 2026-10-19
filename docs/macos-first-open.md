@@ -8,7 +8,7 @@ a check on a macOS 15 Mac before publishing.
 
 **Forzac for Mac** — version X.Y.Z, for Apple Silicon (M1 and later), macOS 14 or newer.
 
-[Download Forzac-X.Y.Z-macos-arm64.dmg](…) · [SHA-256](…)
+[Download Forzac-macos-arm64.dmg](https://github.com/denisfl/forzac-desktop/releases/latest/download/Forzac-macos-arm64.dmg) · [SHA256SUMS](https://github.com/denisfl/forzac-desktop/releases/latest/download/SHA256SUMS)
 
 1. Open the downloaded `.dmg` and drag **Forzac** onto **Applications**.
 2. Open Forzac from Applications. The first time, macOS stops it: Forzac is free and is not registered with Apple
@@ -30,10 +30,10 @@ in the dialog.
 xattr -dr com.apple.quarantine /Applications/Forzac.app
 ```
 
-**Checking the download.** In Terminal, in the folder with the `.dmg` and the `.sha256` file:
+**Checking the download.** In Terminal, in the folder with the `.dmg` and `SHA256SUMS`:
 
 ```bash
-shasum -a 256 -c Forzac-X.Y.Z-macos-arm64.dmg.sha256
+shasum -a 256 -c --ignore-missing SHA256SUMS
 ```
 
 It prints `OK` when the file is the one published here.

@@ -8,16 +8,21 @@ local build and checksum command in step 4, and in step 7 `updpkgsums`, `.SRCINF
 The GitHub release, the site and the AUR push cannot be tried without publishing; they follow the tools'
 documentation.
 
-What a release is made of, for version `X.Y.Z`:
+What a release is made of. The asset names carry no version (decided 2026-10-19), so
+`https://github.com/denisfl/forzac-desktop/releases/latest/download/<name>` always gives the newest one and the site's
+links never change; the version stays inside (the DMG's volume, the archives' top directory, the package):
 
 | File | For | Made by |
 |---|---|---|
-| `Forzac-X.Y.Z-macos-arm64.dmg` | Mac, Apple Silicon, macOS 14+ | `macos/build.sh`, `scripts/package-macos.sh` |
-| `forzac-X.Y.Z-linux-x86_64.tar.gz` | AUR `forzac-bin`, any x86_64 Linux with GTK 4.14+ | `scripts/package-linux.sh` |
-| `forzac-X.Y.Z-linux-aarch64.tar.gz` | AUR `forzac-bin` on ARM, any aarch64 Linux with GTK 4.14+ | `scripts/package-linux.sh` |
-| `forzac_X.Y.Z_arm64.deb` | Raspberry Pi OS 13 (arm64) | `scripts/package-deb.sh` |
+| `Forzac-macos-arm64.dmg` | Mac, Apple Silicon, macOS 14+ | `macos/build.sh`, `scripts/package-macos.sh` |
+| `forzac-linux-x86_64.tar.gz` | AUR `forzac-bin`, any x86_64 Linux with GTK 4.14+ | `scripts/package-linux.sh` |
+| `forzac-linux-aarch64.tar.gz` | AUR `forzac-bin` on ARM, any aarch64 Linux with GTK 4.14+ | `scripts/package-linux.sh` |
+| `forzac-linux-arm64.deb` | Debian 13, Raspberry Pi OS 13 (arm64) | `scripts/package-deb.sh` |
 | `forzac-desktop-X.Y.Z.tar.gz` | the source (MPL-2.0), the AUR `forzac` package | GitHub's tag archive (`git archive` locally) |
-| `SHA256SUMS` | checking any of the above | `shasum -a 256` |
+| `SHA256SUMS` | checking any of the above | the release workflow (`sha256sum`) |
+
+The scripts name their files with the version (`Forzac-X.Y.Z-macos-arm64.dmg`, …); the release workflow renames them
+and writes `SHA256SUMS` before it drafts the release.
 
 Sizes for 0.1.0: DMG 9.0 MB, archives 6.3 and 6.4 MB, `.deb` 3.7 MB, source 5.0 MB.
 
@@ -62,11 +67,11 @@ The checklist; every item is done on hardware, not in containers (`CLAUDE.md`, `
       `.fb2.zip`, an EPUB and an FB3; both page modes; contents, notes, search, settings, the image and table view,
       reopening at the same line; `?` shows the help with the support line.
 - [ ] The packages from step 4 installed as a reader would: the `.deb` on the Pi 5 (`sudo apt install
-      ./forzac_X.Y.Z_arm64.deb`, then `xdg-open book.fb2` from the desktop session); both AUR packages in the Arch
+      ./forzac-linux-arm64.deb`, then `xdg-open book.fb2` from the desktop session); both AUR packages in the Arch
       container (`ci/arch-check.sh`, ~10 min under emulation); the DMG on the Mac.
 - [ ] Mac, before the first public DMG (moved here from `macos-release`): the DMG downloaded from the draft release on a
-      **fresh macOS user account**, opened by following the download page (the Gatekeeper step), on macOS 14 and on a
-      macOS 15 Mac; screenshots of both for the page.
+      **fresh macOS user account**, opened by following the line under the site's macOS link (the Gatekeeper step), on
+      macOS 14 and on a macOS 15 Mac.
 - [ ] Release notes (`docs/releases/X.Y.Z.md`, used as the GitHub release's text): what is new, what is not checked
       (Hyprland and x86_64 hardware: built and installed in a container only), known issues.
 
@@ -132,23 +137,25 @@ macos/build.sh
 (cd dist && ../scripts/package-macos.sh $V)
 ```
 
-Checksums of the release files, one file the page links, checked right away (the workflow does not make it yet):
+The release names and the checksums, as the workflow makes them, checked right away:
 
 ```bash
 cd dist
-shasum -a 256 forzac-$V-linux-*.tar.gz forzac_${V}_arm64.deb Forzac-$V-macos-arm64.dmg > SHA256SUMS
+mv Forzac-$V-macos-arm64.dmg Forzac-macos-arm64.dmg && rm -f Forzac-$V-macos-arm64.dmg.sha256
+for a in x86_64 aarch64; do mv forzac-$V-linux-$a.tar.gz forzac-linux-$a.tar.gz; done
+mv forzac_${V}_arm64.deb forzac-linux-arm64.deb
+shasum -a 256 Forzac-macos-arm64.dmg forzac-linux-*.tar.gz forzac-linux-arm64.deb > SHA256SUMS
 shasum -a 256 -c SHA256SUMS
 ```
 
-`dist/` now holds the release files, the DMG's own `.sha256` (`docs/macos-first-open.md` links it) and `SHA256SUMS`
-(and, after a local build, `forzac-desktop-$V.tar.gz`). Install them as in the checklist (step 2) before publishing.
+`dist/` now holds the release files and `SHA256SUMS` (and, after a local build, `forzac-desktop-$V.tar.gz`). Install
+them as in the checklist (step 2) before publishing.
 
 ## 5. Publish the release
 
 ```bash
-gh release upload vX.Y.Z dist/SHA256SUMS
-# after a local build (step 4) the files go up the same way:
-# gh release upload vX.Y.Z dist/*.dmg dist/*.dmg.sha256 dist/*.tar.gz dist/*.deb dist/SHA256SUMS
+# after a local build (step 4) only; the workflow's draft has the files already:
+# gh release upload vX.Y.Z dist/*.dmg dist/forzac-linux-*.tar.gz dist/*.deb dist/SHA256SUMS
 gh release edit vX.Y.Z --notes-file docs/releases/X.Y.Z.md --draft=false --latest
 ```
 
@@ -164,55 +171,47 @@ shasum -a 256 -c SHA256SUMS
 ## 6. The download links on the site
 
 The site (`~/dev/forzac/site`, in the Android repository) is one page, `public/index.html`, in English and Russian (a
-`lang` switch, every text in a `data-lang="en"` and a `data-lang="ru"` span). Changes for the desktop release, made
-and deployed from that repository:
+`lang` switch, every text in a `data-lang="en"` and a `data-lang="ru"` span). No separate download page (decided
+2026-10-19): Google Play, then the desktop links, then the web reader.
 
 **Main page, under "Get it on Google Play".** The hero's `<p class="cta ui">` holds the Google Play pill (`.play`) and
-the quiet "or read in your browser" link (`.read`). Below it, a second row of two small links with an icon each:
-**macOS** and **Linux** (no separate Raspberry Pi link: the Pi is covered under Linux; decided 2026-10-19), introduced by "Also for computers:" / "Также для компьютеров:". Quieter than
-the pill (it stays the main action for phones): outline pills in `var(--line)` with `var(--muted)` text and the icon
-in `currentColor`, the same `Golos Text` 15 px as `.read`, wrapping under each other on a phone. They lead to the
-desktop page's sections, `/desktop/#mac` and `/desktop/#linux`, not straight to files: the Mac needs the
-first-open steps and Linux needs a command.
+the quiet "or read in your browser" link (`.read`). Below it, a row of two small links with an icon each, introduced by
+"Also for computers:" / "Также для компьютеров:": outline pills in `var(--line)` with `var(--muted)` text and the icon
+in `currentColor`, the same `Golos Text` 15 px as `.read`, wrapping under each other on a phone. Quieter than the
+Google Play pill, which stays the main action for phones.
 
-Icons, monochrome inline SVG: Apple does not allow its logo on third-party downloads, so macOS gets a neutral glyph (a
-laptop) and the word; Tux is free to use for Linux.
-
-**A page `public/desktop/index.html`** (served at `/desktop/`), in the main page's style, header and language switch:
-
-- **`#mac` — Mac:** the button "Download for Mac" (`$REL/Forzac-X.Y.Z-macos-arm64.dmg`), its SHA-256 link
-  (`$REL/Forzac-X.Y.Z-macos-arm64.dmg.sha256`), "Apple Silicon (M1 and later), macOS 14 or newer", and the first-open
-  text from [docs/macos-first-open.md](macos-first-open.md) (translated for the Russian half), with the screenshots
-  from the checklist.
-- **`#linux` — Arch, Omarchy:** `yay -S forzac-bin` (or `paru -S forzac-bin`; `forzac` builds from source) once the
-  packages are on the AUR (section 7). Until then, the same PKGBUILD straight from this repository:
+- **macOS** downloads the disk image straight away:
+  `https://github.com/denisfl/forzac-desktop/releases/latest/download/Forzac-macos-arm64.dmg`. Under the row, one line
+  in the muted 13 px text: "Apple Silicon, macOS 14+. First open: System Settings → Privacy & Security → Open Anyway" /
+  "Apple Silicon, macOS 14+. При первом запуске: Системные настройки → Конфиденциальность и безопасность → Всё равно
+  открыть" (the app is not notarised; [docs/macos-first-open.md](macos-first-open.md) has the full steps for the
+  release notes).
+- **Linux** opens the latest release: `https://github.com/denisfl/forzac-desktop/releases/latest`. There is no single
+  file for every Linux; the release notes say which to take: the archives (`tar xzf forzac-linux-x86_64.tar.gz`, then
+  `forzac-X.Y.Z-linux-x86_64/bin/forzac book.fb2`), the `.deb` for Debian 13 and Raspberry Pi OS
+  (`sudo apt install ./forzac-linux-arm64.deb`), and for Arch and Omarchy the AUR (section 7) or, until the AUR
+  account exists, the PKGBUILD from this repository:
 
   ```bash
   git clone --depth 1 https://github.com/denisfl/forzac-desktop && cd forzac-desktop/packaging/aur/forzac-bin && makepkg -si
   ```
 
-  Then the default reader command:
+  then the default reader command (the packages print it):
 
   ```bash
   xdg-mime default app.truenrth.forzac.desktop application/x-fictionbook+xml application/x-zip-compressed-fb2 application/x-fb3 application/epub+zip
   ```
 
-  and the note that Omarchy is built and installed in CI only, so reports are welcome (a link to the GitHub issues).
-  **Other Linux (x86_64, aarch64, GTK 4.14+):** the archives, which run where they are unpacked:
-  `tar xzf forzac-X.Y.Z-linux-x86_64.tar.gz && forzac-X.Y.Z-linux-x86_64/bin/forzac book.fb2`.
-  **Debian 13 and Raspberry Pi OS (arm64), in the same section:** `sudo apt install ./forzac_X.Y.Z_arm64.deb` after
-  downloading it, then the same `xdg-mime default` command (the package prints it).
-- **Source and licence:** the GitHub repository, "MPL-2.0", the release notes, `SHA256SUMS` with
-  `shasum -a 256 -c SHA256SUMS`.
+  Icons, monochrome inline SVG: Apple does not allow its logo on third-party downloads, so macOS gets a neutral glyph
+  (a laptop) and the word; Tux is free to use for Linux.
 
-The file names carry the version, so the links change with every release (GitHub's `releases/latest/download/` only
-works for names without one): one search and replace of `X.Y.Z` in `desktop/index.html`.
+The links never change between releases; nothing on the site is touched when a version comes out.
 
 **Privacy policy** (`#privacy`, both languages): a line that the desktop apps work offline and send nothing anywhere,
 and that downloads come from GitHub under GitHub's privacy statement.
 
 Deploy as the site's `wrangler.jsonc` says (the reader's WebAssembly first if it changed, then `npm run deploy` in
-`site/`), and open `/` and `/desktop/` in both languages on a phone and a desktop browser.
+`site/`), and open `/` in both languages on a phone and a desktop browser; both download links work.
 
 ## 7. AUR
 

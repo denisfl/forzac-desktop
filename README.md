@@ -95,7 +95,7 @@ Keys work in any keyboard layout. The interface is in English or Russian, as the
 
 Nothing is published yet. Arch and Omarchy: the AUR packages `forzac` (builds from source) and `forzac-bin` (the
 release build), in `packaging/aur/`; Omarchy is checked in an Arch x86_64 container only, not on hardware. Raspberry Pi
-OS 13 (arm64): `sudo apt install ./forzac_X.Y.Z_arm64.deb`, made by `scripts/package-deb.sh` in Debian 13
+OS 13 (arm64): `sudo apt install ./forzac-linux-arm64.deb`, made by `scripts/package-deb.sh` in Debian 13
 (`ci/debian.Dockerfile`; the release workflow builds it). Forzac runs as one process: books opened while it runs open
 in new windows of that process.
 

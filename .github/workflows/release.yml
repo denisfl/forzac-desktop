@@ -80,6 +80,15 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      # Names without the version, so the site can link releases/latest/download/<name> once and for all.
+      - name: Stable names and checksums
+        working-directory: dist
+        run: |
+          mv Forzac-*-macos-arm64.dmg Forzac-macos-arm64.dmg
+          rm -f Forzac-*-macos-arm64.dmg.sha256
+          for a in x86_64 aarch64; do mv forzac-*-linux-$a.tar.gz forzac-linux-$a.tar.gz; done
+          mv forzac_*_arm64.deb forzac-linux-arm64.deb
+          sha256sum * > SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           draft: true
