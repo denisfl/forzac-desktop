@@ -292,6 +292,17 @@ int32_t forzac_library_rank(const char *query, const char *title, const char *au
 ForzacCoverStyle forzac_cover_style(const char *id, const char *title);
 void forzac_marble(int32_t seed, uint32_t width, uint32_t height, uint8_t *out);
 const char *forzac_sample_page(void);
+
+// Whether a newer version is out (update-check): the shell fetches forzac_update_releases() when forzac_update_due,
+// hands the answer to forzac_update_record; forzac_update_notice is the version to offer (null when none; valid until
+// the next call on `state`), forzac_update_dismiss hides it until a newer one; forzac_update_page is where to download.
+const char *forzac_update_releases(void);
+const char *forzac_update_page(void);
+bool forzac_update_due(const ForzacState *state);
+bool forzac_update_record(ForzacState *state, const char *answer);
+const char *forzac_update_notice(ForzacState *state);
+bool forzac_update_dismiss(ForzacState *state);
+
 void forzac_state_load_bookmarks(const ForzacState *state, ForzacDocument *doc);
 bool forzac_state_save_bookmarks(ForzacState *state, const ForzacDocument *doc);
 void forzac_state_load_quotes(const ForzacState *state, ForzacDocument *doc);

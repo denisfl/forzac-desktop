@@ -99,6 +99,10 @@ OS 13 (arm64): `sudo apt install ./forzac-linux-arm64.deb`, made by `scripts/pac
 (`ci/debian.Dockerfile`; the release workflow builds it). Forzac runs as one process: books opened while it runs open
 in new windows of that process.
 
+The release archives and the macOS app look for a newer release on GitHub at most once a day, when the library
+opens, and offer it in one line there. Packages leave updates to their package manager: a build whose
+`share/forzac` holds a file named `packaged` (the AUR packages and the `.deb` install it) never asks.
+
 ## Default reader on Linux
 
 Outside GNOME and KDE (Hyprland, labwc, sway), `xdg-open` needs File::MimeInfo (`perl-file-mimeinfo`,

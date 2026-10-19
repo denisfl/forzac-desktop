@@ -24,6 +24,8 @@ sha256sums_aarch64=('46bcdb5a239466fc2f8b0ed81263e5d51d71d332b7ecc3bfd87abc7ce42
 package() {
   install -d "$pkgdir/usr"
   cp -r "forzac-$pkgver-linux-$CARCH"/{bin,share} "$pkgdir/usr/"
+  # pacman updates it: the app does not check GitHub for a newer release.
+  install -Dm644 /dev/null "$pkgdir/usr/share/forzac/packaged"
   # The licences under the package's own name, where pacman looks for them.
   mv "$pkgdir/usr/share/licenses/forzac" "$pkgdir/usr/share/licenses/$pkgname"
 }

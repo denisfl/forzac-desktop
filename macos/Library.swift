@@ -458,6 +458,10 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     private let searchButton = FlatButton(IconView(Icons.search, size: 20))
     private let closeButton = FlatButton(IconView(Icons.x, size: 20))
     private let openButton: PillButton
+    /// "Version N is out — download ×" (`update-check`), in the head when it fits.
+    private let updateText = ClickLabel()
+    private let updateClose = ClickLabel()
+    private var hasUpdate = false
     private var body: [NSView] = []
     private var bodyLayout: ((CGFloat, CGFloat) -> CGFloat)?
 
@@ -513,7 +517,16 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         searchButton.onClick = { [weak self] in self?.setSearching(true) }
         closeButton.onClick = { [weak self] in self?.setSearching(false) }
         openButton.onClick = { [weak self] in self?.chooseFile() }
-        for v in [brandIcon, brandName, searchField, searchButton, closeButton, openButton] as [NSView] {
+        updateText.onClick = { NSWorkspace.shared.open(URL(string: String(cString: forzac_update_page()))!) }
+        updateClose.attributedStringValue = NSAttributedString(string: "×", attributes: [.font: interfaceFont(18), .foregroundColor: nsColor(palette.muted)])
+        updateClose.sizeToFit()
+        updateClose.onClick = { [weak self] in
+            guard let self else { return }
+            _ = forzac_update_dismiss(self.state)
+            self.showUpdate()
+        }
+        updateNotice()
+        for v in [brandIcon, brandName, searchField, searchButton, closeButton, openButton, updateText, updateClose] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = true
             content.addSubview(v)
         }
@@ -832,6 +845,14 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             right -= 54
         }
         searchField.frame = CGRect(x: x, y: headY + 5, width: max(right - x, 100), height: 38)
+        // The update line next to the buttons, unless it would reach the brand.
+        let fits = hasUpdate && !searching && right - 4 - updateClose.frame.width - 6 - updateText.frame.width >= brandName.frame.maxX + 24
+        updateText.isHidden = !fits
+        updateClose.isHidden = !fits
+        if fits {
+            updateClose.frame.origin = CGPoint(x: right - 4 - updateClose.frame.width, y: headY + (48 - updateClose.frame.height) / 2)
+            updateText.frame.origin = CGPoint(x: updateClose.frame.minX - 6 - updateText.frame.width, y: headY + (48 - updateText.frame.height) / 2)
+        }
         let height = bodyLayout?(x, inner) ?? 0
         content.frame = CGRect(x: 0, y: 0, width: width, height: max(height, scroll.contentSize.height))
         asking?.view.frame = container.bounds
@@ -873,6 +894,22 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     }
 
     private func chooseFile() { (NSApp.delegate as? AppDelegate)?.openDocument(nil) }
+
+    /// Shows the update line for the version the core offers, or hides it.
+    func showUpdate() {
+        updateNotice()
+        relayout()
+    }
+
+    private func updateNotice() {
+        guard let version = forzac_update_notice(state) else { hasUpdate = false; return }
+        let text = NSMutableAttributedString(string: fill(tr("Version {version} is out"), ["version": String(cString: version)]) + " — ",
+                                             attributes: [.font: interfaceFont(13), .foregroundColor: nsColor(palette.muted)])
+        text.append(NSAttributedString(string: tr("download"), attributes: [.font: interfaceFont(13), .foregroundColor: nsColor(palette.link)]))
+        updateText.attributedStringValue = text
+        updateText.sizeToFit()
+        hasUpdate = true
+    }
 
     private func setSearching(_ on: Bool) {
         guard searching != on else { return }
@@ -1102,6 +1139,21 @@ final class QuestionView: NSView {
 }
 
 /// A label that wraps, at most `lines` lines (0: any), the rest truncated.
+/// A label that runs `onClick` when clicked, with the pointing hand over it.
+final class ClickLabel: NSTextField {
+    var onClick: (() -> Void)?
+
+    convenience init() {
+        self.init(labelWithString: "")
+    }
+
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+    override func mouseDown(with e: NSEvent) {}
+    override func mouseUp(with e: NSEvent) {
+        if bounds.contains(convert(e.locationInWindow, from: nil)) { onClick?() }
+    }
+}
+
 func wrapping(_ text: String, _ font: NSFont, _ rgb: UInt32, lines: Int = 0) -> NSTextField {
     let l = label(text, font, rgb)
     l.cell?.wraps = true

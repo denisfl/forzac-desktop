@@ -12,6 +12,8 @@ tar -C "$work" -xzf "$(cd "$work" && "$root/scripts/package-linux.sh" "forzac-$v
 pkg=$work/pkg
 mkdir -p "$pkg/usr" "$pkg/DEBIAN"
 cp -r "$work/forzac-$version"/{bin,share} "$pkg/usr/"
+# apt updates it: the app does not check GitHub for a newer release.
+: > "$pkg/usr/share/forzac/packaged"
 # Debian keeps licences in the copyright file and /usr/share/doc, not /usr/share/licenses.
 mkdir -p "$pkg/usr/share/doc/forzac"
 mv "$pkg/usr/share/licenses/forzac" "$pkg/usr/share/doc/forzac/licenses"

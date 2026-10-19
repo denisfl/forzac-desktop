@@ -776,6 +776,9 @@ fn library_window(app: &gtk::Application, options: &Options, store: &SharedStore
     };
     let library = library::Library::show(app, store, theme, fitted(1040, 760), open)?;
     *window.borrow_mut() = Some(library.window.downgrade());
+    if !options.stateless() {
+        library.check_update();
+    }
     Some(library)
 }
 

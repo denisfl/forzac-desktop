@@ -21,6 +21,7 @@ pub mod selection;
 pub mod settings;
 pub mod state;
 mod typography;
+pub mod update;
 mod xml;
 
 pub use fonts::Face;

@@ -1549,6 +1549,7 @@ pub struct State {
     store: crate::state::Store,
     recent: Vec<ForzacRecent>,
     recent_strings: Vec<CString>,
+    notice: CString,
 }
 
 /// A book of the library.
@@ -1568,7 +1569,12 @@ pub struct ForzacRecent {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn forzac_state_open(path: *const c_char) -> *mut State {
     let path = unsafe { str(path) }.into_owned();
-    Box::into_raw(Box::new(State { store: crate::state::Store::open(path), recent: Vec::new(), recent_strings: Vec::new() }))
+    Box::into_raw(Box::new(State {
+        store: crate::state::Store::open(path),
+        recent: Vec::new(),
+        recent_strings: Vec::new(),
+        notice: CString::default(),
+    }))
 }
 
 /// Where the document's book was left; false when it is not remembered.
@@ -1626,6 +1632,57 @@ pub unsafe extern "C" fn forzac_state_recent(state: *mut State, n: u32, count: *
 pub unsafe extern "C" fn forzac_state_forget(state: *mut State, id: *const c_char) -> bool {
     let state = unsafe { &mut *state };
     state.store.forget(&unsafe { str(id) }).is_ok()
+}
+
+/// Where the latest release is asked for (`update::RELEASES`); valid for good.
+#[unsafe(no_mangle)]
+pub extern "C" fn forzac_update_releases() -> *const c_char {
+    c_static(crate::update::RELEASES)
+}
+
+/// Where a newer version is downloaded (`update::PAGE`); valid for good.
+#[unsafe(no_mangle)]
+pub extern "C" fn forzac_update_page() -> *const c_char {
+    c_static(crate::update::PAGE)
+}
+
+/// Whether the library should ask for the latest release now.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_update_due(state: *const State) -> bool {
+    crate::update::due(&unsafe { &*state }.store)
+}
+
+/// Remembers the releases URL's `answer`; false when it names no release version.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`]; `answer` a valid NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_update_record(state: *mut State, answer: *const c_char) -> bool {
+    crate::update::record(&mut unsafe { &mut *state }.store, &unsafe { str(answer) })
+}
+
+/// The newer version the library offers, null when none; valid until the next call on `state`.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_update_notice(state: *mut State) -> *const c_char {
+    let state = unsafe { &mut *state };
+    let Some(version) = crate::update::notice(&state.store) else { return std::ptr::null() };
+    state.notice = cstring(version);
+    state.notice.as_ptr()
+}
+
+/// Hides the offered version until a newer one is released; false when the file cannot be written.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_update_dismiss(state: *mut State) -> bool {
+    crate::update::dismiss(&mut unsafe { &mut *state }.store).is_ok()
 }
 
 /// How a book matches the library's search `query` (lower first); -1 when it does not.

@@ -298,6 +298,8 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Мы не\u{a0}храним и\u{a0}не\u{a0}отправляем никакие данные на\u{a0}сервер. Всё работает у\u{a0}вас на\u{a0}компьютере. \
          Поддерживаются FB2, FB2.ZIP, FB3 и\u{a0}EPUB.",
     ),
+    ("Version {version} is out", "Вышла версия {version}"),
+    ("download", "скачать"),
     ("Read books right on your computer", "Читайте книги прямо на\u{a0}компьютере"),
     (
         "Open a book file — it stays where it is, the library only remembers it.",

@@ -379,3 +379,21 @@ fn words_and_highlights_through_the_c_functions() {
         forzac_state_close(state);
     }
 }
+
+#[test]
+fn the_update_check_through_the_c_functions() {
+    let state_path = book_file().with_file_name("state");
+    unsafe {
+        let state = forzac_state_open(c(state_path.to_str().unwrap()).as_ptr());
+        assert_eq!(string(forzac_update_releases()).as_deref(), Some(crate::update::RELEASES));
+        assert!(forzac_update_due(state));
+        assert!(forzac_update_notice(state).is_null());
+        assert!(!forzac_update_record(state, c("not json").as_ptr()));
+        assert!(forzac_update_record(state, c(r#"{"tag_name":"v99.1"}"#).as_ptr()));
+        assert!(!forzac_update_due(state));
+        assert_eq!(string(forzac_update_notice(state)).as_deref(), Some("99.1"));
+        assert!(forzac_update_dismiss(state));
+        assert!(forzac_update_notice(state).is_null());
+        forzac_state_close(state);
+    }
+}

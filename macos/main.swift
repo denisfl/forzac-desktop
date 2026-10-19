@@ -328,6 +328,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var state: OpaquePointer?
     var readers: [Reader] = []
     var library: LibraryWindow?
+    private var checkingUpdate = false
     private var appearance: NSKeyValueObservation?
 
     func value(after flag: String) -> String? {
@@ -429,11 +430,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let shown = LibraryWindow(state: state) { [weak self] path in self?.open(path) }
         library = shown
+        if !measuring { checkUpdate(state) }
         // Closing the library with no book open quits (the app stays after its last book window: the library follows).
         NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: shown.window, queue: .main) { [weak self] _ in
             if self?.library === shown { self?.library = nil }
             if self?.readers.isEmpty == true { NSApp.terminate(nil) }
         }
+    }
+
+    /// Asks GitHub for the latest release when a check is due (`update-check`), in the background, with nothing about
+    /// the reader, the books or the app's version; the library's line follows the answer.
+    private func checkUpdate(_ state: OpaquePointer) {
+        guard !checkingUpdate, forzac_update_due(state), let url = URL(string: String(cString: forzac_update_releases())) else { return }
+        checkingUpdate = true
+        var request = URLRequest(url: url, timeoutInterval: 10)
+        request.setValue("Forzac", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        let session = URLSession(configuration: .ephemeral)
+        session.dataTask(with: request) { data, response, _ in
+            let answer = (response as? HTTPURLResponse)?.statusCode == 200 ? data.flatMap { String(data: $0, encoding: .utf8) } : nil
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.checkingUpdate = false
+                if let answer, let state = self.state, forzac_update_record(state, answer) { self.library?.showUpdate() }
+            }
+        }.resume()
+        session.finishTasksAndInvalidate()
     }
 
     /// `--library --png`: once the covers have arrived, the `--keys` 0.3 s apart, then the window saved, then quit.

@@ -11,6 +11,7 @@ use std::time::Instant;
 use forzac_core::i18n::{fill, tr};
 use forzac_core::library::{self, CoverStyle};
 use forzac_core::state::Store;
+use forzac_core::update;
 use gtk::subclass::prelude::*;
 use gtk::{gdk, gio, glib, graphene, gsk, pango, prelude::*};
 
@@ -649,13 +650,15 @@ thread_local! {
 /// The library's colours in the reader's theme; its layout (the web's `reader.css`).
 fn set_theme(p: Palette) {
     let hex = |c: u32| format!("#{c:06x}");
-    let (paper, ink, muted, line, sheet) = (hex(p.paper), hex(p.ink), hex(p.muted), hex(p.line), hex(p.sheet));
+    let (paper, ink, muted, line, sheet, link) = (hex(p.paper), hex(p.ink), hex(p.muted), hex(p.line), hex(p.sheet), hex(p.link));
     PROVIDER.with(|provider| {
         provider.load_from_string(&format!(
             "window.forzac-library {{ background-color: {paper}; color: {ink}; }}
              .forzac-library .muted, .forzac-library .note, .forzac-library .shelf-author, .forzac-library .shelf-share,
                  .forzac-library .card-caption, .forzac-library .card-authors, .forzac-library .hint, .forzac-library .privacy,
-                 .forzac-library .no-results, .forzac-library .question-body, .forzac-library button.remove {{ color: {muted}; }}
+                 .forzac-library .no-results, .forzac-library .question-body, .forzac-library button.remove,
+                 .forzac-library .update {{ color: {muted}; }}
+             .forzac-library .update link {{ color: {link}; text-decoration-line: none; }}
              .forzac-library button.pill {{ background-color: {ink}; color: {paper}; }}
              .forzac-library button.circle {{ border: 1px solid {line}; }}
              .forzac-library button.circle:hover {{ background-color: alpha({ink}, 0.06); }}
@@ -685,6 +688,8 @@ const STATIC_CSS: &str = "
     .forzac-library .shelf-author { font-size: 13px; }
     .forzac-library .shelf-share { font-size: 12px; font-feature-settings: 'tnum'; }
     .forzac-library button.remove { font-size: 18px; padding: 0 2px 4px 8px; }
+    .forzac-library .update { font-size: 13px; }
+    .forzac-library button.remove.update-close { margin-right: 14px; padding: 0 2px 0 8px; }
     .forzac-library .card-caption { font-size: 12px; font-weight: 500; letter-spacing: 0.7px; }
     .forzac-library .card-title { font-family: 'Literata'; font-weight: 600; font-size: 21px; }
     .forzac-library .card-authors { font-size: 14px; }
@@ -728,6 +733,8 @@ pub struct Library {
     overlay: gtk::Overlay,
     body: gtk::Box,
     brand: gtk::Box,
+    /// "Version N is out — download ×" (`update-check`), in the head.
+    update: (gtk::Box, gtk::Label),
     entry: gtk::Entry,
     buttons: (gtk::Button, gtk::Button, gtk::Button),
     question: RefCell<Option<(gtk::Widget, usize)>>,
@@ -795,6 +802,23 @@ impl Library {
         let name = gtk::Label::new(Some(tr("Forzac")));
         name.add_css_class("brand-name");
         brand.append(&name);
+        let update_label = gtk::Label::new(None);
+        update_label.add_css_class("update");
+        update_label.set_ellipsize(pango::EllipsizeMode::End);
+        update_label.connect_activate_link(|label, uri| {
+            let window = label.root().and_downcast::<gtk::Window>();
+            gtk::UriLauncher::new(uri).launch(window.as_ref(), gio::Cancellable::NONE, |_| {});
+            glib::Propagation::Stop
+        });
+        let dismiss = gtk::Button::builder().label("×").focusable(false).build();
+        dismiss.add_css_class("remove");
+        dismiss.add_css_class("update-close");
+        let update_line = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        update_line.append(&update_label);
+        update_line.append(&dismiss);
+        update_line.set_valign(gtk::Align::Center);
+        dismiss.set_valign(gtk::Align::Center);
+        update_line.set_visible(false);
         let head = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         head.set_size_request(-1, 48);
         let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -803,6 +827,7 @@ impl Library {
             brand.upcast_ref::<gtk::Widget>(),
             entry.upcast_ref(),
             spacer.upcast_ref(),
+            update_line.upcast_ref(),
             search.upcast_ref(),
             close.upcast_ref(),
             open_button.upcast_ref(),
@@ -838,6 +863,7 @@ impl Library {
             overlay,
             body,
             brand,
+            update: (update_line, update_label),
             entry,
             buttons: (search, close, open_button),
             question: RefCell::default(),
@@ -845,12 +871,57 @@ impl Library {
             first_frame: Cell::new(None),
             settled: RefCell::default(),
         });
+        let weak = Rc::downgrade(&library);
+        dismiss.connect_clicked(move |_| {
+            if let Some(l) = weak.upgrade() {
+                let _ = update::dismiss(&mut l.store.borrow_mut());
+                l.show_update();
+            }
+        });
         library.load_covers();
         library.rebuild();
         library.connect();
         library.watch_first_frame();
         library.window.present();
         Some(library)
+    }
+
+    /// Asks GitHub for the latest release when a check is due, through `curl` in the background; the line follows the
+    /// answer. Not for builds from a package manager (`share/forzac/packaged`), which it updates.
+    pub fn check_update(self: &Rc<Self>) {
+        thread_local!(static CHECKING: Cell<bool> = const { Cell::new(false) });
+        if CHECKING.get() || crate::fonts::assets().join("packaged").exists() || !update::due(&self.store.borrow()) {
+            return;
+        }
+        let args = ["curl", "-fsSL", "--max-time", "10", "-H", "Accept: application/vnd.github+json", update::RELEASES];
+        let flags = gio::SubprocessFlags::STDOUT_PIPE | gio::SubprocessFlags::STDERR_SILENCE;
+        // No curl: no check.
+        let Ok(curl) = gio::Subprocess::newv(&args.map(std::ffi::OsStr::new), flags) else { return };
+        CHECKING.set(true);
+        let weak = Rc::downgrade(self);
+        let store = self.store.clone();
+        glib::spawn_future_local(async move {
+            let answer = curl.communicate_utf8_future(None).await;
+            CHECKING.set(false);
+            let Ok((Some(answer), _)) = answer else { return };
+            if update::record(&mut store.borrow_mut(), &answer)
+                && let Some(l) = weak.upgrade()
+            {
+                l.show_update();
+            }
+        });
+    }
+
+    /// The update line: the offered version, out of the way while searching.
+    fn show_update(&self) {
+        let (line, label) = &self.update;
+        let notice = update::notice(&self.store.borrow()).map(str::to_owned);
+        line.set_visible(notice.is_some() && !self.searching.get());
+        if let Some(version) = notice {
+            let text = glib::markup_escape_text(&fill(tr("Version {version} is out"), &[("version", &version)]));
+            let link = glib::markup_escape_text(tr("download"));
+            label.set_markup(&format!("{text} — <a href=\"{}\">{link}</a>", update::PAGE));
+        }
     }
 
     /// Runs `f` once the first frame is shown and every cover being loaded has arrived (`--measure`, `--png`).
@@ -1029,6 +1100,7 @@ impl Library {
         close.set_visible(searching);
         open.set_visible(!empty && !searching);
         self.brand.set_visible(!searching);
+        self.show_update();
         if empty {
             self.body.append(&self.empty_state());
             return;
