@@ -1,6 +1,6 @@
-//! The library (`library`): the reading state's books as the web reader's shelf of covers, with the Android app's
-//! "Continue reading" card, generated covers, search and a question before a book is removed. Books open in place;
-//! cover thumbnails are cached in `$XDG_CACHE_HOME/forzac/covers`, one file per book id (empty: the book has none).
+//! The library (`library`): the Books folder's books and the reading state's as the web reader's shelf of covers, with
+//! the Android app's "Continue reading" card, generated covers, search and a question before a book (its file) goes to
+//! the Trash; cover thumbnails are cached in `$XDG_CACHE_HOME/forzac/covers`, one file per book id (empty: the book has none).
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use forzac_core::i18n::{fill, tr};
 use forzac_core::library::{self, CoverStyle};
-use forzac_core::state::Store;
+use forzac_core::state::{Entry, Store};
 use forzac_core::update;
 use gtk::subclass::prelude::*;
 use gtk::{gdk, gio, glib, graphene, gsk, pango, prelude::*};
@@ -618,7 +618,7 @@ impl Sample {
 
 // endregion
 
-/// A book of the library, from the reading state.
+/// A book of the library, from the Books folder and the reading state.
 #[derive(Clone)]
 struct Book {
     id: String,
@@ -626,6 +626,8 @@ struct Book {
     title: String,
     authors: String,
     progress: f32,
+    /// False for a book in the folder never opened.
+    opened: bool,
 }
 
 /// A selectable book on the window: the card or a shelf item.
@@ -654,7 +656,7 @@ fn set_theme(p: Palette) {
     PROVIDER.with(|provider| {
         provider.load_from_string(&format!(
             "window.forzac-library {{ background-color: {paper}; color: {ink}; }}
-             .forzac-library .muted, .forzac-library .note, .forzac-library .shelf-author, .forzac-library .shelf-share,
+             .forzac-library .muted, .forzac-library button.folder-link, .forzac-library .shelf-author, .forzac-library .shelf-share,
                  .forzac-library .card-caption, .forzac-library .card-authors, .forzac-library .hint, .forzac-library .privacy,
                  .forzac-library .no-results, .forzac-library .question-body, .forzac-library button.remove,
                  .forzac-library .update {{ color: {muted}; }}
@@ -683,7 +685,6 @@ const STATIC_CSS: &str = "
     .forzac-library button.pill:hover { opacity: 0.88; }
     .forzac-library button.pill.big { padding: 16px 30px; font-size: 17px; }
     .forzac-library button.circle { min-width: 42px; min-height: 42px; border-radius: 22px; }
-    .forzac-library .note { font-size: 14px; }
     .forzac-library .shelf-title { font-weight: 500; font-size: 14px; }
     .forzac-library .shelf-author { font-size: 13px; }
     .forzac-library .shelf-share { font-size: 12px; font-feature-settings: 'tnum'; }
@@ -702,6 +703,8 @@ const STATIC_CSS: &str = "
         line-height: 1.08; }
     .forzac-library .empty-lead { font-family: 'Literata'; font-size: 19px; line-height: 1.55; }
     .forzac-library .hint { font-size: 15px; }
+    .forzac-library button.folder-link { font-size: 15px; padding: 4px 0; background: none; border: none; box-shadow: none;
+        text-decoration-line: underline; }
     .forzac-library .privacy { font-size: 14px; line-height: 1.55; padding-top: 18px; }
     .forzac-library .no-results { font-size: 15px; }
     .forzac-library .drop { border-radius: 20px; margin: 16px; }
@@ -717,8 +720,10 @@ const STATIC_CSS: &str = "
 pub struct Library {
     pub window: gtk::ApplicationWindow,
     store: Rc<RefCell<Store>>,
-    /// Opens a book in its window; false when it cannot be read.
-    open: Rc<dyn Fn(&Path) -> bool>,
+    /// Opens a book in its window (copied into the Books folder first).
+    open: Rc<dyn Fn(&Path)>,
+    /// The Books folder, when it could be made.
+    folder: Option<PathBuf>,
     palette: Palette,
     books: RefCell<Vec<Book>>,
     thumbs: RefCell<HashMap<String, Thumb>>,
@@ -736,7 +741,8 @@ pub struct Library {
     /// "Version N is out — download ×" (`update-check`), in the head.
     update: (gtk::Box, gtk::Label),
     entry: gtk::Entry,
-    buttons: (gtk::Button, gtk::Button, gtk::Button),
+    /// Search, close the search, show the Books folder, open a book.
+    buttons: (gtk::Button, gtk::Button, gtk::Button, gtk::Button),
     question: RefCell<Option<(gtk::Widget, usize)>>,
     /// Covers being loaded or made; `settled` runs when none is left after the first frame.
     pending: Cell<usize>,
@@ -745,13 +751,15 @@ pub struct Library {
 }
 
 impl Library {
-    /// The library window, or the open one brought forward.
+    /// The library window for `books` (`library::scan`), or the open one brought forward.
     pub fn show(
         app: &gtk::Application,
         store: &Rc<RefCell<Store>>,
         theme: usize,
         size: (i32, i32),
-        open: Rc<dyn Fn(&Path) -> bool>,
+        open: Rc<dyn Fn(&Path)>,
+        books: Vec<Entry>,
+        folder: Option<PathBuf>,
     ) -> Option<Rc<Library>> {
         if let Some(window) = OPEN.with(|o| o.borrow().as_ref().and_then(|w| w.upgrade())).filter(|w| w.application().is_some()) {
             window.present();
@@ -760,9 +768,7 @@ impl Library {
         crate::fonts::add_interface_fonts();
         let palette = THEMES[theme];
         set_theme(palette);
-        let books: Vec<Book> = store
-            .borrow()
-            .books()
+        let books: Vec<Book> = books
             .iter()
             .map(|e| Book {
                 id: e.id.clone(),
@@ -774,6 +780,7 @@ impl Library {
                 },
                 authors: e.authors.clone(),
                 progress: e.progress,
+                opened: e.opened > 0,
             })
             .collect();
         let window =
@@ -794,6 +801,7 @@ impl Library {
             b
         };
         let search = circle(icons::SEARCH, tr("Search"));
+        let show_folder = circle(icons::FOLDER, tr("Show the Books folder"));
         let close = circle(icons::X, tr("Close"));
         close.set_visible(false);
         let open_button = pill(tr("Open a book"), false);
@@ -830,6 +838,7 @@ impl Library {
             update_line.upcast_ref(),
             search.upcast_ref(),
             close.upcast_ref(),
+            show_folder.upcast_ref(),
             open_button.upcast_ref(),
         ] {
             head.append(w);
@@ -850,6 +859,7 @@ impl Library {
             window,
             store: store.clone(),
             open,
+            folder,
             palette,
             books: RefCell::new(books),
             thumbs: RefCell::default(),
@@ -865,7 +875,7 @@ impl Library {
             brand,
             update: (update_line, update_label),
             entry,
-            buttons: (search, close, open_button),
+            buttons: (search, close, show_folder, open_button),
             question: RefCell::default(),
             pending: Cell::new(0),
             first_frame: Cell::new(None),
@@ -1086,7 +1096,7 @@ impl Library {
 
     // region building
 
-    /// Fills the window for the books and the search: the empty state, or the note, the card and the shelf.
+    /// Fills the window for the books and the search: the empty state, or the card and the shelf.
     fn rebuild(self: &Rc<Self>) {
         while let Some(child) = self.body.first_child() {
             self.body.remove(&child);
@@ -1095,9 +1105,10 @@ impl Library {
         *self.shelf.borrow_mut() = None;
         let searching = self.searching.get();
         let empty = self.books.borrow().is_empty();
-        let (search, close, open) = &self.buttons;
+        let (search, close, folder, open) = &self.buttons;
         search.set_visible(!empty && !searching);
         close.set_visible(searching);
+        folder.set_visible(!empty && !searching && self.folder.is_some());
         open.set_visible(!empty && !searching);
         self.brand.set_visible(!searching);
         self.show_update();
@@ -1113,19 +1124,10 @@ impl Library {
             ranked.sort_by_key(|&(r, _)| r);
             (None, ranked.into_iter().map(|(_, i)| i).collect())
         } else {
-            let card = library::continue_book(books.iter().map(|b| b.progress));
+            let card = library::continue_book(books.iter().map(|b| (b.progress, b.opened)));
             (card, (0..books.len()).filter(|&i| Some(i) != card).collect())
         };
-        if !searching {
-            let note = label(tr(NOTE), "note");
-            note.set_margin_top(12);
-            note.set_margin_bottom(36);
-            note.set_max_width_chars(80);
-            note.set_halign(gtk::Align::Start);
-            self.body.append(&note);
-        } else {
-            self.body.append(&spacing(24));
-        }
+        self.body.append(&spacing(24));
         let mut items = Vec::new();
         if let Some(c) = card {
             let (widget, cover) = self.card_widget(c);
@@ -1184,7 +1186,7 @@ impl Library {
         bar.set_fraction(b.progress.clamp(0.0, 1.0) as f64);
         bar.set_margin_top(4);
         text.append(&bar);
-        text.append(&label(&library::share_label(b.progress), "shelf-share"));
+        text.append(&label(&library::share_label(b.progress, b.opened), "shelf-share"));
         row.append(&text);
         self.connect_item(&row, &cover, &remove, book);
         (row.upcast(), cover)
@@ -1210,7 +1212,7 @@ impl Library {
             authors.set_margin_top(2);
             item.append(&authors);
         }
-        let share = label(&library::share_label(b.progress), "shelf-share");
+        let share = label(&library::share_label(b.progress, b.opened), "shelf-share");
         share.set_margin_top(4);
         item.append(&share);
         self.connect_item(&item, &cover, &remove, book);
@@ -1258,13 +1260,14 @@ impl Library {
         item.set_cursor_from_name(Some("pointer"));
     }
 
-    /// The web's empty library: the invitation, the button, the hint and the note beside the sample page.
+    /// The web's empty library: the invitation, the button, the hint, the Books folder and the formats beside the
+    /// sample page.
     fn empty_state(self: &Rc<Self>) -> gtk::Widget {
         let text = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let heading = label(tr("Read books right on your computer"), "empty-heading");
         heading.set_max_width_chars(16);
         text.append(&heading);
-        let lead = label(tr("Open a book file — it stays where it is, the library only remembers it."), "empty-lead");
+        let lead = label(tr("Open a book file — a copy goes into your Books folder, the original stays where it is."), "empty-lead");
         lead.set_max_width_chars(34);
         lead.set_margin_top(24);
         lead.set_margin_bottom(36);
@@ -1281,10 +1284,22 @@ impl Library {
         let hint = label(tr("or drop a file into this window"), "hint");
         hint.set_margin_top(14);
         text.append(&hint);
-        let privacy = label(tr(NOTE), "privacy");
-        privacy.set_max_width_chars(48);
-        privacy.set_margin_top(48);
-        text.append(&privacy);
+        if self.folder.is_some() {
+            let show = gtk::Button::builder().label(tr("Show the Books folder")).focusable(false).halign(gtk::Align::Start).build();
+            show.add_css_class("folder-link");
+            show.set_margin_top(6);
+            let weak = Rc::downgrade(self);
+            show.connect_clicked(move |_| {
+                if let Some(l) = weak.upgrade() {
+                    l.show_folder();
+                }
+            });
+            text.append(&show);
+        }
+        let formats = label(tr("FB2, FB2.ZIP, FB3 and EPUB are supported."), "privacy");
+        formats.set_max_width_chars(48);
+        formats.set_margin_top(42);
+        text.append(&formats);
         let split = Layout::new(Kind::Split);
         split.add(&text);
         split.add(&Sample::new(self.palette));
@@ -1359,6 +1374,16 @@ impl Library {
         }
     }
 
+    /// Opens the Books folder in the file manager.
+    fn show_folder(&self) {
+        let Some(folder) = &self.folder else { return };
+        gtk::FileLauncher::new(Some(&gio::File::for_path(folder))).launch(Some(&self.window), gio::Cancellable::NONE, |r| {
+            if let Err(e) = r {
+                eprintln!("cannot show the Books folder: {e}");
+            }
+        });
+    }
+
     fn choose_file(self: &Rc<Self>) {
         let filter = gtk::FileFilter::new();
         filter.set_name(Some(tr("Books")));
@@ -1393,7 +1418,7 @@ impl Library {
         let title = label(&fill(tr("Remove “{title}” from the library?"), &[("title", &b.title)]), "question-title");
         title.set_max_width_chars(40);
         sheet.append(&title);
-        sheet.append(&label(tr("The book file stays where it is."), "question-body"));
+        sheet.append(&label(tr("The book file goes to the Trash."), "question-body"));
         let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         buttons.set_homogeneous(true);
         buttons.set_margin_top(8);
@@ -1440,7 +1465,26 @@ impl Library {
         if !remove {
             return;
         }
-        let id = self.books.borrow()[book].id.clone();
+        let b = self.books.borrow()[book].clone();
+        // The file goes to the Trash first; the book stays when it cannot. A file outside the folder (one the move
+        // could not copy) is left alone.
+        if self.folder.as_ref().is_some_and(|f| b.path.starts_with(f))
+            && b.path.exists()
+            && let Err(e) = gio::File::for_path(&b.path).trash(gio::Cancellable::NONE)
+        {
+            eprintln!("cannot move {} to the Trash: {e}", b.path.display());
+            let message = fill(tr("Couldn't move “{title}” to the Trash"), &[("title", &b.title)]);
+            gtk::AlertDialog::builder()
+                .message(message)
+                .detail(e.message())
+                .buttons([tr("Close")])
+                .cancel_button(0)
+                .modal(true)
+                .build()
+                .show(Some(&self.window));
+            return;
+        }
+        let id = b.id;
         if let Err(e) = self.store.borrow_mut().forget(&id) {
             eprintln!("cannot save the reading state: {e}");
             return;
@@ -1470,7 +1514,13 @@ impl Library {
 
     /// Keys, the head's buttons, the search field and dropping files.
     fn connect(self: &Rc<Self>) {
-        let (search, close, open) = &self.buttons;
+        let (search, close, folder, open) = &self.buttons;
+        let weak = Rc::downgrade(self);
+        folder.connect_clicked(move |_| {
+            if let Some(l) = weak.upgrade() {
+                l.show_folder();
+            }
+        });
         let weak = Rc::downgrade(self);
         search.connect_clicked(move |_| {
             if let Some(l) = weak.upgrade() {
@@ -1627,6 +1677,15 @@ impl Library {
         );
         add("<Control>o", false, Box::new(move |l| l.choose_file()));
         add(
+            "<Shift>f",
+            true,
+            Box::new(move |l| {
+                if !asking(l) {
+                    l.show_folder()
+                }
+            }),
+        );
+        add(
             "Escape",
             false,
             Box::new(move |l| {
@@ -1715,10 +1774,6 @@ impl Library {
 
 /// What a key does in the library.
 type KeyAction = Box<dyn Fn(&Rc<Library>)>;
-
-/// The web's note line.
-const NOTE: &str =
-    "We don’t store or send any data to a server. Everything runs on your computer. FB2, FB2.ZIP, FB3 and EPUB are supported.";
 
 fn label(text: &str, class: &str) -> gtk::Label {
     let l = gtk::Label::new(Some(text));

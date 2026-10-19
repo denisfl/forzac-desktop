@@ -21,6 +21,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::model::{Block, Book, Locator};
@@ -255,9 +256,15 @@ impl Store {
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let tmp = self.path.with_extension("tmp");
-        std::fs::write(&tmp, text)?;
-        std::fs::rename(&tmp, &self.path)?;
+        // A name of its own per write: a background import writes the same file from another thread.
+        static WRITES: AtomicUsize = AtomicUsize::new(0);
+        let name = self.path.file_name().unwrap_or_default().to_string_lossy();
+        let tmp = self.path.with_file_name(format!(".{name}.{}.{}.tmp", std::process::id(), WRITES.fetch_add(1, Ordering::Relaxed)));
+        let written = std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, &self.path));
+        if written.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        written?;
         self.saved = saved;
         Ok(())
     }

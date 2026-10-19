@@ -293,19 +293,16 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("the file is unavailable", "файл недоступен"),
     // The library.
     ("Open a book", "Открыть книгу"),
-    (
-        "We don’t store or send any data to a server. Everything runs on your computer. FB2, FB2.ZIP, FB3 and EPUB are supported.",
-        "Мы не\u{a0}храним и\u{a0}не\u{a0}отправляем никакие данные на\u{a0}сервер. Всё работает у\u{a0}вас на\u{a0}компьютере. \
-         Поддерживаются FB2, FB2.ZIP, FB3 и\u{a0}EPUB.",
-    ),
     ("Version {version} is out", "Вышла версия {version}"),
     ("download", "скачать"),
     ("Read books right on your computer", "Читайте книги прямо на\u{a0}компьютере"),
     (
-        "Open a book file — it stays where it is, the library only remembers it.",
-        "Откройте файл книги — он останется на\u{a0}своём месте, библиотека его только запомнит.",
+        "Open a book file — a copy goes into your Books folder, the original stays where it is.",
+        "Откройте файл книги — копия ляжет в\u{a0}папку «Книги», оригинал останется на\u{a0}месте.",
     ),
     ("or drop a file into this window", "или перетащите файл в\u{a0}это окно"),
+    ("Show the Books folder", "Показать папку «Книги»"),
+    ("FB2, FB2.ZIP, FB3 and EPUB are supported.", "Поддерживаются FB2, FB2.ZIP, FB3 и\u{a0}EPUB."),
     ("Release the file to open it", "Отпустите файл, чтобы открыть"),
     ("Continue reading", "Продолжить"),
     ("Search", "Поиск"),
@@ -313,7 +310,8 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("No results", "Ничего не найдено"),
     ("Remove from library", "Убрать из библиотеки"),
     ("Remove “{title}” from the library?", "Убрать «{title}» из библиотеки?"),
-    ("The book file stays where it is.", "Файл книги останется на\u{a0}месте."),
+    ("The book file goes to the Trash.", "Файл книги отправится в\u{a0}корзину."),
+    ("Couldn't move “{title}” to the Trash", "Не удалось переместить «{title}» в\u{a0}корзину"),
     ("Cancel", "Отмена"),
     ("Remove", "Убрать"),
     ("Books", "Книги"),

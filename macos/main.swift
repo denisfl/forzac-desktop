@@ -1,7 +1,8 @@
 // Forzac for macOS: an AppKit shell over forzac-core.
 //
 // One window per book; books open from Finder ("Open With", double-click, the Dock icon), `⌘O`, the library or the
-// command line. Started without a book, the library shows (`Library.swift`). Positions, the library's books and settings
+// command line, from the Books folder (~/Books, ~/Книги): a book from elsewhere is copied there first (`books-folder`).
+// Started without a book, the library shows (`Library.swift`). Positions, the library's books and settings
 // are remembered in ~/Library/Application Support/Forzac/state (`--state PATH`: another file), cover thumbnails in
 // ~/Library/Caches/Forzac/covers.
 //
@@ -326,6 +327,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let args = CommandLine.arguments
     /// The reading state; nil for measurement runs, which neither read nor write it.
     var state: OpaquePointer?
+    /// The same file for the background queue that copies books in and reads the Books folder; the main handle
+    /// reloads after it.
+    private var worker: OpaquePointer?
+    private let importQueue = DispatchQueue(label: "forzac.import", qos: .userInitiated)
+    /// Files being copied in: opening one again meanwhile does nothing.
+    private var importing: Set<String> = []
+    private var showingLibrary = false
     var readers: [Reader] = []
     var library: LibraryWindow?
     private var checkingUpdate = false
@@ -341,7 +349,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationWillFinishLaunching(_ note: Notification) {
         if !measuring || args.contains("--library") {
             let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            state = forzac_state_open(value(after: "--state") ?? support.appendingPathComponent("Forzac/state").path)
+            let path = value(after: "--state") ?? support.appendingPathComponent("Forzac/state").path
+            state = forzac_state_open(path)
+            worker = forzac_state_open(path)
         }
         buildMenu()
     }
@@ -358,30 +368,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Values of the flags that take one are not books.
         let values = Set(["--png", "--chapter", "--page", "--panel", "--theme", "--keys", "--mouse", "--state", "--size", "-AppleLanguages"].compactMap { value(after: $0) })
         if let path = args.dropFirst().first(where: { !$0.hasPrefix("-") && !values.contains($0) && UInt32($0) == nil }) {
-            guard let reader = open(path, chapter: value(after: "--chapter").flatMap { UInt32($0) }) else {
-                fputs("\(path): not a readable book\n", stderr)
-                exit(2)
+            if measuring {
+                guard let reader = open(path, chapter: value(after: "--chapter").flatMap { UInt32($0) }) else {
+                    fputs("\(path): not a readable book\n", stderr)
+                    exit(2)
+                }
+                if args.contains("--measure") || png != nil { measure(reader, png: png) }
+            } else {
+                openBook(path)
             }
-            if args.contains("--measure") || png != nil { measure(reader, png: png) }
         }
         appearance = NSApp.observe(\.effectiveAppearance) { [weak self] _, _ in
             let dark = systemIsDark()
             self?.readers.forEach { $0.view.setSystemDark(dark) }
         }
         if args.contains("--library"), let state {
-            showLibrary(state)
-            if let png, let library { measureLibrary(library, png: png) }
+            showLibrary(state) { [weak self] library in
+                if let png { self?.measureLibrary(library, png: png) }
+            }
         }
         // Books from Finder arrive through `application(_:open:)`; without any, the library.
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.readers.isEmpty, self.library == nil, let state = self.state else { return }
+            guard let self, self.readers.isEmpty, self.importing.isEmpty, self.library == nil, let state = self.state else { return }
             self.showLibrary(state)
         }
         NSApp.activate(ignoringOtherApps: true)
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls { _ = open(url.path) }
+        for url in urls { openBook(url.path) }
+    }
+
+    /// Opens the book at `path`, wherever it is: copied into the Books folder first, on the background queue
+    /// (`books-folder`). Measurement runs open the file where it is.
+    func openBook(_ path: String) {
+        guard worker != nil else { open(path); return }
+        guard !importing.contains(path) else { return }
+        importing.insert(path)
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        importQueue.async { [weak self] in
+            guard let worker = self?.worker else { return }
+            var error: UInt32 = 5
+            var copy: String?
+            if forzac_books_folder(worker, home) != nil, let p = forzac_import(worker, path, &error) { copy = String(cString: p) }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.importing.remove(path)
+                if let state = self.state { forzac_state_reload(state) }
+                if let copy { self.open(copy) } else { self.cannotOpen(path, error) }
+            }
+        }
     }
 
     @discardableResult
@@ -391,20 +427,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return reader
         }
         guard let reader = Reader(path: path, state: state, chapter: chapter) else {
-            // In the Android app's words, without PDF.
-            let reason = [1: tr("unsupported format — FB2, FB3 or EPUB needed"), 2: tr("the book has no text"),
-                          3: tr("the book is DRM-protected and can't be opened"), 4: tr("the file is damaged"), 5: tr("the file is unavailable")][Reader.openError] ?? tr("the file is damaged")
-            let message = fill(tr("Couldn't open “{name}”: {reason}"), ["name": URL(fileURLWithPath: path).lastPathComponent, "reason": reason])
-            fputs(message + "\n", stderr)
-            // Also for a book that arrives with the launch (Finder, the Dock): after it, so the alert has an app to show in.
-            if !measuring {
-                DispatchQueue.main.async { [weak self] in
-                    let alert = NSAlert()
-                    alert.messageText = message
-                    alert.runModal()
-                    if let self, self.readers.isEmpty, let state = self.state { self.showLibrary(state) }
-                }
-            }
+            cannotOpen(path, Reader.openError)
             return nil
         }
         reader.onClose = { [weak self] r in
@@ -422,19 +445,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return reader
     }
 
-    /// The library, or the open one brought forward.
-    func showLibrary(_ state: OpaquePointer) {
+    /// Says why `path` cannot be opened (`code` as `forzac_open` gives it); then, when no book is open, the library.
+    private func cannotOpen(_ path: String, _ code: UInt32) {
+        // In the Android app's words, without PDF.
+        let reason = [1: tr("unsupported format — FB2, FB3 or EPUB needed"), 2: tr("the book has no text"),
+                      3: tr("the book is DRM-protected and can't be opened"), 4: tr("the file is damaged"), 5: tr("the file is unavailable")][code] ?? tr("the file is damaged")
+        let message = fill(tr("Couldn't open “{name}”: {reason}"), ["name": URL(fileURLWithPath: path).lastPathComponent, "reason": reason])
+        fputs(message + "\n", stderr)
+        // Also for a book that arrives with the launch (Finder, the Dock): after it, so the alert has an app to show in.
+        if !measuring {
+            DispatchQueue.main.async { [weak self] in
+                let alert = NSAlert()
+                alert.messageText = message
+                alert.runModal()
+                if let self, self.readers.isEmpty, let state = self.state { self.showLibrary(state) }
+            }
+        }
+    }
+
+    /// The library, or the open one brought forward (then `shown` is not called). The Books folder is read first, on
+    /// the background queue; the first time, it is made and the remembered books are copied in. Measurement runs read
+    /// the folder only if it was made.
+    func showLibrary(_ state: OpaquePointer, then shown: ((LibraryWindow) -> Void)? = nil) {
         if let library {
             library.window.makeKeyAndOrderFront(nil)
             return
         }
-        let shown = LibraryWindow(state: state) { [weak self] path in self?.open(path) }
-        library = shown
-        if !measuring { checkUpdate(state) }
-        // Closing the library with no book open quits (the app stays after its last book window: the library follows).
-        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: shown.window, queue: .main) { [weak self] _ in
-            if self?.library === shown { self?.library = nil }
-            if self?.readers.isEmpty == true { NSApp.terminate(nil) }
+        guard !showingLibrary, worker != nil else { return }
+        showingLibrary = true
+        let (home, measuring) = (FileManager.default.homeDirectoryForCurrentUser.path, measuring)
+        importQueue.async { [weak self] in
+            guard let worker = self?.worker else { return }
+            let folder = measuring ? nil : forzac_books_folder(worker, home).map { String(cString: $0) }
+            var n: UInt32 = 0
+            let list = forzac_library_books(worker, &n)!
+            let books = (0..<Int(n)).map { i in
+                let path = String(cString: list[i].path)
+                let title = String(cString: list[i].title)
+                return LibraryBook(id: String(cString: list[i].id), path: path, title: title.isEmpty ? URL(fileURLWithPath: path).lastPathComponent : title,
+                                   authors: String(cString: list[i].authors), progress: list[i].progress, opened: list[i].opened)
+            }
+            DispatchQueue.main.async {
+                guard let self, let state = self.state else { return }
+                self.showingLibrary = false
+                forzac_state_reload(state)
+                let library = LibraryWindow(state: state, books: books, folder: folder) { [weak self] path in self?.openBook(path) }
+                self.library = library
+                if !measuring { self.checkUpdate(state) }
+                // Closing the library with no book open quits (the app stays after its last book window: the library follows).
+                NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: library.window, queue: .main) { [weak self] _ in
+                    if self?.library === library { self?.library = nil }
+                    if self?.readers.isEmpty == true { NSApp.terminate(nil) }
+                }
+                shown?(library)
+            }
+        }
+    }
+
+    /// File › Show the Books folder: opens it in Finder (made first when missing).
+    @objc func showBooksFolder(_ sender: Any?) {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        importQueue.async { [weak self] in
+            guard let worker = self?.worker else { return }
+            let folder = forzac_books_folder(worker, home).map { String(cString: $0) }
+            DispatchQueue.main.async {
+                if let folder { NSWorkspace.shared.open(URL(fileURLWithPath: folder, isDirectory: true)) }
+            }
         }
     }
 
@@ -539,7 +615,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel.allowsMultipleSelection = true
         panel.allowedContentTypes = []
         panel.allowsOtherFileTypes = true
-        if panel.runModal() == .OK { panel.urls.forEach { open($0.path) } }
+        if panel.runModal() == .OK { panel.urls.forEach { openBook($0.path) } }
     }
 
     @objc func showSettings(_ sender: Any?) { key?.run(.settings) }
@@ -564,7 +640,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func previousChapter(_ sender: Any?) { key?.view.jumpChapter(-1) }
     @objc func goBack(_ sender: Any?) { key?.view.goBack() }
     @objc func showHelp(_ sender: Any?) { key?.run(.help) }
-    @objc func openRecent(_ sender: NSMenuItem) { if let path = sender.representedObject as? String { open(path) } }
+    @objc func openRecent(_ sender: NSMenuItem) { if let path = sender.representedObject as? String { openBook(path) } }
 
     /// Open Recent: the reading state's recent books.
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -610,7 +686,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recentMenu.delegate = self
         recentItem.submenu = recentMenu
         let close = NSMenuItem(title: tr("Close"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
-        submenu(tr("File"), [item(tr("Open…"), #selector(openDocument(_:)), "o"), recentItem, .separator(), close])
+        submenu(tr("File"), [item(tr("Open…"), #selector(openDocument(_:)), "o"), recentItem, item(tr("Show the Books folder"), #selector(showBooksFolder(_:))),
+                             .separator(), close])
         let copy = NSMenuItem(title: tr("Copy"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         submenu(tr("Edit"), [
             copy, .separator(),

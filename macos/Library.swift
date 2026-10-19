@@ -1,6 +1,6 @@
-// The library (`library`): the reading state's books as the web reader's shelf of covers, with the Android app's
-// "Continue reading" card, generated covers, search and a question before a book is removed. Laid out as the GTK
-// shell's `library.rs`. Books open in place; cover thumbnails are cached in ~/Library/Caches/Forzac/covers, one file
+// The library (`library`): the Books folder's books and the reading state's as the web reader's shelf of covers, with
+// the Android app's "Continue reading" card, generated covers, search and a question before a book (its file) goes to
+// the Trash. Laid out as the GTK shell's `library.rs`. Cover thumbnails are cached in ~/Library/Caches/Forzac/covers, one file
 // per book id (empty: the book has none).
 
 import AppKit
@@ -69,10 +69,12 @@ enum Thumb {
     case generated
 }
 
-/// A book of the library, from the reading state.
+/// A book of the library, from the Books folder and the reading state.
 struct LibraryBook {
     let id, path, title, authors: String
     let progress: Float
+    /// False for a book in the folder never opened.
+    let opened: Bool
 }
 
 /// A book's cover: its picture filling the box, or a generated one (the Android app's `GeneratedCover`). The view
@@ -435,6 +437,8 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     let palette: Palette
     private let state: OpaquePointer
     private let open: (String) -> Void
+    /// The Books folder, when it could be made.
+    private let folder: String?
     private var books: [LibraryBook]
     private var thumbs: [String: Thumb] = [:]
     private var marbles: [Int32: CGImage] = [:]
@@ -457,6 +461,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     private let searchField = NSTextField()
     private let searchButton = FlatButton(IconView(Icons.search, size: 20))
     private let closeButton = FlatButton(IconView(Icons.x, size: 20))
+    private let folderButton = FlatButton(IconView(Icons.folder, size: 20))
     private let openButton: PillButton
     /// "Version N is out — download ×" (`update-check`), in the head when it fits.
     private let updateText = ClickLabel()
@@ -465,19 +470,14 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     private var body: [NSView] = []
     private var bodyLayout: ((CGFloat, CGFloat) -> CGFloat)?
 
-    init(state: OpaquePointer, open: @escaping (String) -> Void) {
+    /// The library of `books` (`forzac_library_books`) in the Books `folder`.
+    init(state: OpaquePointer, books: [LibraryBook], folder: String?, open: @escaping (String) -> Void) {
         self.state = state
         self.open = open
+        self.folder = folder
+        self.books = books
         var settings = forzac_state_settings(state)
         palette = themes[Int(forzac_settings_theme(&settings, systemIsDark()))]
-        var n: UInt32 = 0
-        let list = forzac_state_recent(state, UInt32.max, &n)!
-        books = (0..<Int(n)).map { i in
-            let path = String(cString: list[i].path)
-            let title = String(cString: list[i].title)
-            return LibraryBook(id: String(cString: list[i].id), path: path, title: title.isEmpty ? URL(fileURLWithPath: path).lastPathComponent : title,
-                               authors: String(cString: list[i].authors), progress: list[i].progress)
-        }
         brandName = label(tr("Forzac"), bookFont("Literata", 22, bold: true), palette.ink)
         openButton = PillButton(tr("Open a book"), big: false, palette: palette)
         container = DropView(palette: palette)
@@ -504,7 +504,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         searchField.placeholderAttributedString = NSAttributedString(string: tr("Title or author"), attributes: [.font: bookFont("PT Serif", 26), .foregroundColor: nsColor(palette.muted)])
         searchField.delegate = self
         searchField.isHidden = true
-        for b in [searchButton, closeButton] {
+        for b in [searchButton, closeButton, folderButton] {
             b.colour(palette)
             b.layer!.cornerRadius = 22
             b.layer!.borderWidth = 1
@@ -513,6 +513,8 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         }
         searchButton.toolTip = tr("Search")
         closeButton.toolTip = tr("Close")
+        folderButton.toolTip = tr("Show the Books folder")
+        folderButton.onClick = { [weak self] in self?.showFolder() }
         closeButton.isHidden = true
         searchButton.onClick = { [weak self] in self?.setSearching(true) }
         closeButton.onClick = { [weak self] in self?.setSearching(false) }
@@ -526,7 +528,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             self.showUpdate()
         }
         updateNotice()
-        for v in [brandIcon, brandName, searchField, searchButton, closeButton, openButton, updateText, updateClose] as [NSView] {
+        for v in [brandIcon, brandName, searchField, searchButton, closeButton, folderButton, openButton, updateText, updateClose] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = true
             content.addSubview(v)
         }
@@ -658,7 +660,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
 
     // MARK: Building
 
-    /// Fills the window for the books and the search: the empty state, or the note, the card and the shelf.
+    /// Fills the window for the books and the search: the empty state, or the card and the shelf.
     private func rebuild() {
         body.forEach { $0.removeFromSuperview() }
         body = []
@@ -666,6 +668,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         let empty = books.isEmpty
         searchButton.isHidden = empty || searching
         closeButton.isHidden = !searching
+        folderButton.isHidden = empty || searching || folder == nil
         openButton.isHidden = empty || searching
         brandIcon.isHidden = searching
         brandName.isHidden = searching
@@ -680,22 +683,15 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
                 return r < 0 ? nil : (r, i)
             }.sorted { $0.0 < $1.0 }.map { $0.1 }
         } else {
-            card = books.firstIndex { $0.progress < 0.999 }
+            card = books.firstIndex { $0.opened && $0.progress < 0.999 }
             order = books.indices.filter { $0 != card }
-        }
-        var note: NSTextField?
-        if !searching {
-            let n = wrapping(tr("We don’t store or send any data to a server. Everything runs on your computer. FB2, FB2.ZIP, FB3 and EPUB are supported."),
-                             interfaceFont(14), palette.muted)
-            note = n
-            body.append(n)
         }
         if let c = card {
             let b = books[c]
             var labels = [label(tr("Continue reading").uppercased(), interfaceFont(12, .medium), palette.muted),
                           wrapping(b.title, bookFont("Literata", 21, bold: true), palette.ink, lines: 2)]
             if !b.authors.isEmpty { labels.append(wrapping(b.authors, interfaceFont(14), palette.muted, lines: 2)) }
-            labels.append(label(share(b.progress), interfaceFont(12), palette.muted))
+            labels.append(label(share(b), interfaceFont(12), palette.muted))
             labels[0].attributedStringValue = NSAttributedString(string: labels[0].stringValue, attributes: [.font: interfaceFont(12, .medium), .kern: 0.7,
                                                                                                              .foregroundColor: nsColor(palette.muted)])
             items.append(item(c, labels: labels, card: true))
@@ -708,7 +704,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             let b = books[i]
             var labels = [wrapping(b.title, interfaceFont(14, .medium), palette.ink, lines: 3)]
             if !b.authors.isEmpty { labels.append(wrapping(b.authors, interfaceFont(13), palette.muted, lines: 2)) }
-            labels.append(label(share(b.progress), interfaceFont(12), palette.muted))
+            labels.append(label(share(b), interfaceFont(12), palette.muted))
             items.append(item(i, labels: labels, card: false))
         }
         for v in items { body.append(v) }
@@ -717,14 +713,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         body.forEach { $0.translatesAutoresizingMaskIntoConstraints = true; content.addSubview($0) }
         bodyLayout = { [weak self] x, width in
             guard let self else { return 0 }
-            var y: CGFloat = 20 + 48
-            if let note {
-                let h = ceil(note.cell!.cellSize(forBounds: CGRect(x: 0, y: 0, width: min(width, 720), height: 1e4)).height)
-                note.frame = CGRect(x: x, y: y + 12, width: min(width, 720), height: h)
-                y += 12 + h + 36
-            } else {
-                y += 24
-            }
+            var y: CGFloat = 20 + 48 + 24
             var shelf = self.items[...]
             if self.hasCard, let card = self.items.first {
                 let h = card.layout(width: width)
@@ -772,21 +761,29 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         return item
     }
 
-    private func share(_ progress: Float) -> String { progress >= 0.999 ? tr("Finished") : "\(max(Int(progress * 100), 1))%" }
+    private func share(_ b: LibraryBook) -> String {
+        !b.opened ? tr("New") : b.progress >= 0.999 ? tr("Finished") : "\(max(Int(b.progress * 100), 1))%"
+    }
 
-    /// The web's empty library: the invitation, the button, the hint and the note beside the sample page.
+    /// The web's empty library: the invitation, the button, the hint, the Books folder and the formats beside the
+    /// sample page.
     private func buildEmpty() {
         let heading = wrapping(tr("Read books right on your computer"), bookFont("Literata", 44, bold: true), palette.ink)
-        let lead = wrapping(tr("Open a book file — it stays where it is, the library only remembers it."), bookFont("Literata", 19), palette.ink)
+        let lead = wrapping(tr("Open a book file — a copy goes into your Books folder, the original stays where it is."), bookFont("Literata", 19), palette.ink)
         let button = PillButton(tr("Open a book"), big: true, palette: palette)
         button.onClick = { [weak self] in self?.chooseFile() }
         let hint = label(tr("or drop a file into this window"), interfaceFont(15), palette.muted)
+        let show = ClickLabel()
+        show.attributedStringValue = NSAttributedString(string: tr("Show the Books folder"), attributes: [.font: interfaceFont(15), .foregroundColor: nsColor(palette.muted),
+                                                                                                   .underlineStyle: NSUnderlineStyle.single.rawValue])
+        show.sizeToFit()
+        show.onClick = { [weak self] in self?.showFolder() }
+        show.isHidden = folder == nil
         let rule = LayerView()
         rule.layer!.backgroundColor = color(palette.line)
-        let privacy = wrapping(tr("We don’t store or send any data to a server. Everything runs on your computer. FB2, FB2.ZIP, FB3 and EPUB are supported."),
-                               interfaceFont(14), palette.muted)
+        let formats = wrapping(tr("FB2, FB2.ZIP, FB3 and EPUB are supported."), interfaceFont(14), palette.muted)
         let page = SamplePageView(palette: palette)
-        body = [heading, lead, button, hint, rule, privacy, page]
+        body = [heading, lead, button, hint, show, rule, formats, page]
         body.forEach { $0.translatesAutoresizingMaskIntoConstraints = true; content.addSubview($0) }
         bodyLayout = { [weak self] x, width in
             guard let self else { return 0 }
@@ -795,8 +792,8 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             let textWidth = wide ? width - gap - page.frame.width : width
             func height(_ l: NSTextField, _ w: CGFloat) -> CGFloat { ceil(l.cell!.cellSize(forBounds: CGRect(x: 0, y: 0, width: w, height: 1e4)).height) }
             let headingWidth = min(textWidth, 44 * 14 * 0.6 * 2)
-            let parts: [CGFloat] = [height(heading, headingWidth), 24, height(lead, min(textWidth, 560)), 36, button.frame.height, 14, hint.frame.height + 4, 48,
-                                    1 + 18, height(privacy, min(textWidth, 480))]
+            let parts: [CGFloat] = [height(heading, headingWidth), 24, height(lead, min(textWidth, 560)), 36, button.frame.height, 14, hint.frame.height + 4,
+                                    show.isHidden ? 0 : 6 + show.frame.height, 42, 1 + 18, height(formats, min(textWidth, 480))]
             let textHeight = parts.reduce(0, +)
             let top: CGFloat = 20 + 48 + 32
             let available = max(self.scroll.contentSize.height - top - 32 - 64, 0)
@@ -809,11 +806,13 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             y += button.frame.height + 14
             hint.sizeToFit()
             hint.frame.origin = CGPoint(x: x, y: y)
-            y += hint.frame.height + 4 + 48
+            y += hint.frame.height + 4
+            show.frame.origin = CGPoint(x: x, y: y + 6)
+            y += parts[7] + 42
             rule.frame = CGRect(x: x, y: y, width: textWidth, height: 1)
             y += 19
-            privacy.frame = CGRect(x: x, y: y, width: min(textWidth, 480), height: parts[9])
-            y += parts[9]
+            formats.frame = CGRect(x: x, y: y, width: min(textWidth, 480), height: parts[10])
+            y += parts[10]
             if wide {
                 page.frame.origin = CGPoint(x: x + width - page.frame.width, y: heading.frame.minY + (textHeight - page.frame.height) / 2)
                 return max(y, page.frame.maxY) + 32 + 64
@@ -840,7 +839,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             openButton.frame.origin = CGPoint(x: right - openButton.frame.width, y: headY + (48 - openButton.frame.height) / 2)
             right -= openButton.frame.width + 10
         }
-        for b in [searchButton, closeButton] where !b.isHidden {
+        for b in [folderButton, searchButton, closeButton] where !b.isHidden {
             b.frame = CGRect(x: right - 44, y: headY + 2, width: 44, height: 44)
             right -= 54
         }
@@ -895,6 +894,11 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
 
     private func chooseFile() { (NSApp.delegate as? AppDelegate)?.openDocument(nil) }
 
+    /// Opens the Books folder in Finder.
+    private func showFolder() {
+        if let folder { NSWorkspace.shared.open(URL(fileURLWithPath: folder, isDirectory: true)) }
+    }
+
     /// Shows the update line for the version the core offers, or hides it.
     func showUpdate() {
         updateNotice()
@@ -929,7 +933,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     private func ask(_ book: Int) {
         guard asking == nil, book < books.count else { return }
         let b = books[book]
-        let backdrop = QuestionView(palette: palette, title: fill(tr("Remove “{title}” from the library?"), ["title": b.title]), body: tr("The book file stays where it is."))
+        let backdrop = QuestionView(palette: palette, title: fill(tr("Remove “{title}” from the library?"), ["title": b.title]), body: tr("The book file goes to the Trash."))
         backdrop.onAnswer = { [weak self] remove in self?.answer(remove) }
         backdrop.frame = container.bounds
         backdrop.autoresizingMask = [.width, .height]
@@ -942,7 +946,22 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         view.removeFromSuperview()
         asking = nil
         guard remove else { return }
-        let id = books[book].id
+        let b = books[book]
+        // The file goes to the Trash first; the book stays when it cannot. A file outside the folder (one the move
+        // could not copy) is left alone.
+        if let folder, b.path.hasPrefix(folder + "/"), FileManager.default.fileExists(atPath: b.path) {
+            do {
+                try FileManager.default.trashItem(at: URL(fileURLWithPath: b.path), resultingItemURL: nil)
+            } catch {
+                fputs("cannot move \(b.path) to the Trash: \(error)\n", stderr)
+                let alert = NSAlert()
+                alert.messageText = fill(tr("Couldn't move “{title}” to the Trash"), ["title": b.title])
+                alert.informativeText = error.localizedDescription
+                alert.beginSheetModal(for: window)
+                return
+            }
+        }
+        let id = b.id
         guard forzac_state_forget(state, id) else { fputs("cannot save the reading state\n", stderr); return }
         try? FileManager.default.removeItem(at: thumbnailURL(id))
         books.remove(at: book)
@@ -951,7 +970,8 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     }
 
     /// The library's keys, by key code so a Russian layout works: arrows and h j k l move, Return opens, Delete or d
-    /// asks to remove, / searches, q and Esc close (Esc first leaves the search or the question). True when handled.
+    /// asks to remove, / searches, F shows the Books folder, q and Esc close (Esc first leaves the search or the
+    /// question). True when handled.
     private func key(_ e: NSEvent) -> Bool {
         guard e.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return false }
         let typing = window.firstResponder is NSTextView && searching
@@ -983,6 +1003,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             case 0x28: step(dy: -1)
             case 0x02: if selected < items.count { ask(items[selected].index) }
             case 0x2C: if !books.isEmpty && e.characters != "?" { setSearching(true) } else { return false }
+            case 0x03 where e.modifierFlags.contains(.shift): showFolder()
             case 0x0C: window.close()
             default: return false
             }

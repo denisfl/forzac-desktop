@@ -17,7 +17,8 @@
 //!
 //! Without a file, the library is shown (`library.rs`); `--measure` then prints the time to its first frame and to its
 //! last cover, `--png out.png` saves it, both after the covers arrive, and quit. Reading positions and the settings are
-//! remembered in `$XDG_DATA_HOME/forzac/state`, cover thumbnails in `$XDG_CACHE_HOME/forzac/covers`.
+//! remembered in `$XDG_DATA_HOME/forzac/state`, cover thumbnails in `$XDG_CACHE_HOME/forzac/covers`. Books are read
+//! from the Books folder (`~/Books`, `~/Книги`): a book opened from elsewhere is copied there first (`books-folder`).
 
 mod appearance;
 mod fonts;
@@ -36,7 +37,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use forzac_core::Locator;
-use forzac_core::i18n::{fill, tr};
+use forzac_core::i18n::{fill, language, tr};
 use forzac_core::settings::{DEFAULT_SIZE, Setting, Settings, Turning};
 use forzac_core::state::Store;
 use gtk::{gio, glib, graphene, prelude::*};
@@ -83,6 +84,10 @@ const KEEP_AWAKE: Duration = Duration::from_secs(10 * 60);
 thread_local! {
     /// The open book windows by the canonical path of their file: opening a book again brings its window forward.
     static WINDOWS: RefCell<Vec<(PathBuf, glib::WeakRef<gtk::ApplicationWindow>)>> = const { RefCell::new(Vec::new()) };
+    /// Files being copied into the Books folder: opening one again meanwhile does nothing.
+    static IMPORTING: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
+    /// The library is being read for its window.
+    static SHOWING: Cell<bool> = const { Cell::new(false) };
 }
 
 /// A window's default size, no larger than 85% of the first monitor in either direction: a small screen (the Pi
@@ -145,7 +150,7 @@ fn main() -> glib::ExitCode {
     app.connect_open(move |app, files, _| {
         for file in files {
             if let Some(path) = file.path() {
-                open_window(app, &path, &opts, &st);
+                open_book(app, &path, &opts, &st, |_| {});
             }
         }
     });
@@ -155,32 +160,34 @@ fn main() -> glib::ExitCode {
         let (opts, st) = (options.clone(), store.clone());
         app.connect_window_removed(move |app, window| {
             if app.windows().is_empty() && !window.has_css_class("forzac-library") {
-                library_window(app, &opts, &st);
+                library_window(app, &opts, &st, |_| {});
             }
         });
     }
     let opts = options.clone();
     app.connect_activate(move |app| {
-        let Some(library) = library_window(app, &opts, &store) else { return };
-        if !opts.measure && opts.png.is_none() {
-            return;
-        }
-        // Measurements: the library's first frame and its last cover, then quit.
-        let (opts, weak) = (opts.clone(), Rc::downgrade(&library));
-        library.connect_settled(move || {
-            let Some(library) = weak.upgrade() else { return };
-            if opts.measure {
-                let first = library.first_frame().map_or(Duration::ZERO, |t| t.duration_since(opts.start));
-                println!(
-                    "library: {} books, first frame presented {first:?}, covers loaded {:?}",
-                    library.book_count(),
-                    opts.start.elapsed()
-                );
+        let o = opts.clone();
+        library_window(app, &opts, &store, move |library| {
+            if !o.measure && o.png.is_none() {
+                return;
             }
-            if let Some(png) = &opts.png {
-                library.save_png(png);
-            }
-            library.window.close();
+            // Measurements: the library's first frame and its last cover, then quit.
+            let (opts, weak) = (o.clone(), Rc::downgrade(&library));
+            library.connect_settled(move || {
+                let Some(library) = weak.upgrade() else { return };
+                if opts.measure {
+                    let first = library.first_frame().map_or(Duration::ZERO, |t| t.duration_since(opts.start));
+                    println!(
+                        "library: {} books, first frame presented {first:?}, covers loaded {:?}",
+                        library.book_count(),
+                        opts.start.elapsed()
+                    );
+                }
+                if let Some(png) = &opts.png {
+                    library.save_png(png);
+                }
+                library.window.close();
+            });
         });
     });
     let mut run_args = vec![args[0].clone()];
@@ -216,7 +223,7 @@ fn cannot_open(app: &gtk::Application, path: &Path, e: forzac_core::Error, optio
         gio::Cancellable::NONE,
         move |_| {
             if !has_book_window() {
-                library_window(&app, &options, &store);
+                library_window(&app, &options, &store, |_| {});
             }
             drop(hold);
         },
@@ -226,6 +233,43 @@ fn cannot_open(app: &gtk::Application, path: &Path, e: forzac_core::Error, optio
 /// Whether a book window is open.
 fn has_book_window() -> bool {
     WINDOWS.with(|w| w.borrow().iter().any(|(_, w)| open_book_window(w).is_some()))
+}
+
+/// Opens the book at `path`, wherever it is: copied into the Books folder first, off the main thread (`books-folder`),
+/// then in a window of its own; `done` learns whether it opened. Measurement runs open the file where it is.
+fn open_book(app: &gtk::Application, path: &Path, options: &Options, store: &SharedStore, done: impl FnOnce(bool) + 'static) {
+    if options.stateless() {
+        done(open_window(app, path, options, store));
+        return;
+    }
+    if IMPORTING.with(|i| i.borrow().iter().any(|p| p == path)) {
+        return;
+    }
+    IMPORTING.with(|i| i.borrow_mut().push(path.to_owned()));
+    // No window may be open meanwhile: hold the application.
+    let hold = app.hold();
+    let (app, options, store, path) = (app.clone(), options.clone(), store.clone(), path.to_owned());
+    let (state, home, src) = (store.borrow().path().to_owned(), glib::home_dir(), path.clone());
+    glib::spawn_future_local(async move {
+        let copied = gio::spawn_blocking(move || {
+            let mut s = Store::open(state);
+            let folder = forzac_core::library::books_folder(&home, language(), &mut s).map_err(|_| forzac_core::Error::Unavailable)?;
+            forzac_core::library::import(&src, &folder, &mut s)
+        })
+        .await
+        .unwrap_or(Err(forzac_core::Error::Unavailable));
+        IMPORTING.with(|i| i.borrow_mut().retain(|p| *p != path));
+        store.borrow_mut().reload();
+        let opened = match copied {
+            Ok(copy) => open_window(&app, &copy, &options, &store),
+            Err(e) => {
+                cannot_open(&app, &path, e, &options, &store);
+                false
+            }
+        };
+        done(opened);
+        drop(hold);
+    });
 }
 
 /// Opens `path` in a window of its own (or brings its open window forward); false when it cannot be read.
@@ -423,7 +467,7 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
                     w.close();
                 }
                 if let Some(app) = app.upgrade().filter(|_| !stateless) {
-                    library_window(&app, &options, &store);
+                    library_window(&app, &options, &store, |_| {});
                 }
             }),
             contents: Box::new(move || contents(panels::Tab::Contents)),
@@ -759,27 +803,59 @@ fn remember_position(view: &PageView, window: &gtk::ApplicationWindow, path: &Pa
     save(); // an opened book is in the library, even if it is closed without turning a page
 }
 
-/// The library in the reader's theme, or the open one brought forward (then `None`); opening a book from it closes it.
-fn library_window(app: &gtk::Application, options: &Options, store: &SharedStore) -> Option<Rc<library::Library>> {
-    let theme = Settings::load(&store.borrow()).theme_index(appearance::dark());
-    panels::set_theme(theme);
-    let window: Rc<RefCell<Option<glib::WeakRef<gtk::ApplicationWindow>>>> = Rc::default();
-    let open: Rc<dyn Fn(&Path) -> bool> = {
-        let (app, options, store, window) = (app.clone(), options.clone(), store.clone(), window.clone());
-        Rc::new(move |path| {
-            let opened = open_window(&app, path, &options, &store);
-            if opened && let Some(w) = window.borrow().as_ref().and_then(|w| w.upgrade()) {
-                w.close();
-            }
-            opened
-        })
-    };
-    let library = library::Library::show(app, store, theme, fitted(1040, 760), open)?;
-    *window.borrow_mut() = Some(library.window.downgrade());
-    if !options.stateless() {
-        library.check_update();
+/// The library in the reader's theme, or the open one brought forward (then `shown` is not called); opening a book
+/// from it closes it. The Books folder is read first, off the main thread; the first time, it is made and the
+/// remembered books are copied in. Measurement runs read the folder only if it was made.
+fn library_window(app: &gtk::Application, options: &Options, store: &SharedStore, shown: impl FnOnce(Rc<library::Library>) + 'static) {
+    if SHOWING.get() {
+        return;
     }
-    Some(library)
+    SHOWING.set(true);
+    // No window may be open meanwhile: hold the application.
+    let hold = app.hold();
+    let (app, options, store) = (app.clone(), options.clone(), store.clone());
+    let (state, home, stateless) = (store.borrow().path().to_owned(), glib::home_dir(), options.stateless());
+    glib::spawn_future_local(async move {
+        let read = gio::spawn_blocking(move || {
+            let mut s = Store::open(state);
+            let folder = if stateless {
+                forzac_core::library::remembered_folder(&s)
+            } else {
+                forzac_core::library::books_folder(&home, language(), &mut s).ok()
+            };
+            let books = match &folder {
+                Some(folder) => forzac_core::library::scan(folder, &mut s),
+                None => s.books().into_iter().cloned().collect(),
+            };
+            (folder, books)
+        })
+        .await;
+        SHOWING.set(false);
+        let (folder, books) = read.unwrap_or_default();
+        store.borrow_mut().reload();
+        let theme = Settings::load(&store.borrow()).theme_index(appearance::dark());
+        panels::set_theme(theme);
+        let window: Rc<RefCell<Option<glib::WeakRef<gtk::ApplicationWindow>>>> = Rc::default();
+        let open: Rc<dyn Fn(&Path)> = {
+            let (app, options, store, window) = (app.clone(), options.clone(), store.clone(), window.clone());
+            Rc::new(move |path| {
+                let window = window.clone();
+                open_book(&app, path, &options, &store, move |opened| {
+                    if opened && let Some(w) = window.borrow().as_ref().and_then(|w| w.upgrade()) {
+                        w.close();
+                    }
+                });
+            })
+        };
+        if let Some(library) = library::Library::show(&app, &store, theme, fitted(1040, 760), open, books, folder) {
+            *window.borrow_mut() = Some(library.window.downgrade());
+            if !stateless {
+                library.check_update();
+            }
+            shown(library);
+        }
+        drop(hold);
+    });
 }
 
 /// Keys by keyval; GTK also matches them in the first (Latin) layout group, so `j`/`k` work in a Russian layout.

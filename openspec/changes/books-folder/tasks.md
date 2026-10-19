@@ -25,23 +25,23 @@
 
 ## 2. GTK shell
 
-- [ ] 2.1 Every open (file dialog, drop, command line, `xdg-open`, a second instance's file) goes through
+- [x] 2.1 Every open (file dialog, drop, command line, `xdg-open`, a second instance's file) goes through
       `forzac_import` in `gio::spawn_blocking`; errors as `reader-window`; the move before the first library show
-- [ ] 2.2 The library from `forzac_library_books`: folder-only books as not started, their covers through the existing
+- [x] 2.2 The library from `forzac_library_books`: folder-only books as not started, their covers through the existing
       cover cache
-- [ ] 2.3 Remove: the dialog text, `gio::File::trash`, forget only after the trash worked, the error message
-- [ ] 2.4 "Show the Books folder": the head button, `F`, the empty state's line; `gtk::FileLauncher`; help text
-- [ ] 2.5 The library's note line under the head removed; the empty state keeps only "FB2, FB2.ZIP, FB3 and EPUB are
+- [x] 2.3 Remove: the dialog text, `gio::File::trash`, forget only after the trash worked, the error message
+- [x] 2.4 "Show the Books folder": the head button, `F`, the empty state's line; `gtk::FileLauncher`; help text
+- [x] 2.5 The library's note line under the head removed; the empty state keeps only "FB2, FB2.ZIP, FB3 and EPUB are
       supported." under its rule
 
 ## 3. macOS shell
 
-- [ ] 3.1 Every open (open panel, drop, Finder and the Dock, `⌘O`, the command line) through `forzac_import` on a
+- [x] 3.1 Every open (open panel, drop, Finder and the Dock, `⌘O`, the command line) through `forzac_import` on a
       background queue; the move before the first library show
-- [ ] 3.2 The library from `forzac_library_books`, folder-only books not started
-- [ ] 3.3 Remove: dialog text, `FileManager.trashItem`, forget after it worked, the error message
-- [ ] 3.4 "Show the Books folder": head button, `F`, the empty state, `NSWorkspace`; the menu item; help text
-- [ ] 3.5 The note line removed as in 2.5
+- [x] 3.2 The library from `forzac_library_books`, folder-only books not started
+- [x] 3.3 Remove: dialog text, `FileManager.trashItem`, forget after it worked, the error message
+- [x] 3.4 "Show the Books folder": head button, `F`, the empty state, `NSWorkspace`; the menu item; help text
+- [x] 3.5 The note line removed as in 2.5
 
 ## 4. Docs
 
