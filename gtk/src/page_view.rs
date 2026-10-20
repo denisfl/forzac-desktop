@@ -173,8 +173,8 @@ struct Ribbon {
 
 struct Turn {
     from: gsk::RenderNode,
-    /// Whether the page sliding away has a bookmark: its ribbon slides with it.
-    from_marked: bool,
+    /// Where the ribbon of the page (or spread) sliding away hangs, when it has a bookmark: it slides with it.
+    from_ribbon: Option<f32>,
     /// +1 forward (the new page comes from the right), −1 back.
     dir: f32,
     /// Frame time of the first frame of the animation; `None` until it is drawn. The frame clock's time at the key
@@ -197,6 +197,9 @@ pub struct State {
     /// Decoded images by id; `None` for one that cannot be decoded.
     textures: HashMap<String, Option<gdk::Texture>>,
     style: Option<PageStyle>,
+    /// Whether the window shows two pages side by side ("Slide" in a wide window, `Settings::spread`).
+    spread: bool,
+    /// The page shown; in a spread its left (even) page.
     page: usize,
     /// The reading position; pages are derived from it after every re-layout.
     locator: Locator,
@@ -339,6 +342,7 @@ impl PageView {
             busy: false,
             textures: HashMap::new(),
             style: None,
+            spread: false,
             page: 0,
             locator: Locator { chapter, ..at },
             to_last: false,
@@ -523,8 +527,7 @@ impl PageView {
             let count = if s.mode == Mode::Scroll {
                 stops(Self::visible_areas(s, h)).len() as i32
             } else {
-                let Some(page) = Self::page_node(s, s.page).map(|_| s.page) else { return };
-                s.areas.get(&page).map_or(0, |a| stops(a).len()) as i32
+                stops(&Self::shown_areas(s)).len() as i32
             };
             if count == 0 {
                 return;
@@ -550,8 +553,8 @@ impl PageView {
         let h = WidgetExt::height(self) as f32;
         let target = self.with(|s| {
             let focus = s.focus?;
-            let areas = if s.mode == Mode::Scroll { Self::visible_areas(s, h) } else { s.areas.get(&s.page)? };
-            let (first, _) = *stops(areas).get(focus)?;
+            let areas = if s.mode == Mode::Scroll { Self::visible_areas(s, h).to_vec() } else { Self::shown_areas(s) };
+            let (first, _) = *stops(&areas).get(focus)?;
             Some(areas[first].target.clone())
         });
         match target {
@@ -577,13 +580,14 @@ impl PageView {
             return;
         }
         let target = self.with(|s| {
-            let areas = if s.mode == Mode::Scroll { Self::visible_areas(s, h) } else { s.areas.get(&s.page)? };
+            let areas = if s.mode == Mode::Scroll { Self::visible_areas(s, h).to_vec() } else { Self::shown_areas(s) };
             // A little slack: markers are small. A marker or link in a table goes before the table.
             let hit =
                 |a: &&Area| x >= a.rect.x - 4.0 && x <= a.rect.x + a.rect.w + 4.0 && y >= a.rect.y - 4.0 && y <= a.rect.y + a.rect.h + 4.0;
             areas.iter().filter(hit).min_by_key(|a| a.target.is_viewable()).map(|a| a.target.clone())
         });
-        let corner = self.with(|s| s.style.is_some_and(|st| y < st.margin_top && x >= st.ribbon().1));
+        // The ribbon's corner: the right page's in a spread.
+        let corner = self.with(|s| s.style.is_some_and(|st| y < st.margin_top && x >= st.ribbon().1 + Self::right_dx(s)));
         if let Some(t) = target {
             self.open(t);
         } else if corner {
@@ -740,7 +744,7 @@ impl PageView {
             s.focus = None;
             s.at_end = false;
             if let Some(layout) = s.layout.as_ref().filter(|l| l.chapter == at.chapter) {
-                s.page = layout.page_of(at);
+                s.page = Self::left(s, layout.page_of(at));
             }
             if s.mode == Mode::Scroll {
                 Self::align_column(s);
@@ -810,7 +814,66 @@ impl PageView {
             return Self::screen_range(s, h);
         }
         let layout = s.layout.as_ref().filter(|_| !s.at_end)?;
-        Some((layout.page_start(s.page), layout.page_end(s.page)))
+        let last = Self::shown_pages(s).last()?.0;
+        Some((layout.page_start(s.page), layout.page_end(last)))
+    }
+
+    /// The pages shown in "Slide" and their offsets from the window's left edge: the page, or a spread's left page and
+    /// its right one when the chapter has it.
+    fn shown_pages(s: &State) -> Vec<(usize, f32)> {
+        let (Some(layout), Some(style)) = (&s.layout, &s.style) else { return Vec::new() };
+        let mut pages = vec![(s.page, 0.0)];
+        if s.spread && s.page + 1 < layout.pages.len() {
+            pages.push((s.page + 1, style.width));
+        }
+        pages
+    }
+
+    /// The page to show for `page`: in a spread, the left page of its pair (every chapter starts on a left page).
+    fn left(s: &State, page: usize) -> usize {
+        if s.spread { page & !1 } else { page }
+    }
+
+    /// The right page's offset in a spread, else 0.
+    fn right_dx(s: &State) -> f32 {
+        match (s.spread, &s.style) {
+            (true, Some(style)) => style.width,
+            _ => 0.0,
+        }
+    }
+
+    /// The note markers, links, images, tables and highlights of the pages shown, the left page's first (view
+    /// coordinates).
+    fn shown_areas(s: &mut State) -> Vec<Area> {
+        let mut out = Vec::new();
+        for (page, _) in Self::shown_pages(s) {
+            if Self::page_node(s, page).is_some() {
+                out.extend(s.areas.get(&page).into_iter().flatten().cloned());
+            }
+        }
+        out
+    }
+
+    /// Rectangles over `[from, to)` on the pages shown, in view coordinates.
+    fn shown_marks(s: &State, from: Locator, to: Locator) -> Vec<Rect> {
+        let (Some(layout), Some(style)) = (&s.layout, &s.style) else { return Vec::new() };
+        let mut out = Vec::new();
+        for (page, dx) in Self::shown_pages(s) {
+            out.extend(layout.marks(page, style, from, to).into_iter().map(|r| Rect { x: r.x + dx, ..r }));
+        }
+        out
+    }
+
+    /// Where the ribbon of the page or spread shown hangs, when it is marked: 0, or the right page's offset when the
+    /// first bookmark on the spread lies on its right page.
+    fn ribbon_dx(s: &mut State, h: f32) -> Option<f32> {
+        let (from, to) = Self::shown_range(s, h)?;
+        let first = *s.bookmarks.iter().find(|m| from <= **m && **m < to)?;
+        let right = match (s.mode, Self::shown_pages(s).get(1), &s.layout) {
+            (Mode::Slide, Some(&(page, dx)), Some(layout)) => (first >= layout.page_start(page)).then_some(dx),
+            _ => None,
+        };
+        Some(right.unwrap_or(0.0))
     }
 
     fn shown_marked(s: &mut State, h: f32) -> bool {
@@ -845,11 +908,12 @@ impl PageView {
         offset
     }
 
-    /// The ribbon hanging `offset` below its rest, in `theme`, beside the text column of `style`.
-    fn draw_ribbon(snapshot: &gtk::Snapshot, theme: usize, style: &PageStyle, offset: f32) {
+    /// The ribbon hanging `offset` below its rest, in `theme`, beside the text column of `style` on the page `dx` from
+    /// the window's left edge.
+    fn draw_ribbon(snapshot: &gtk::Snapshot, theme: usize, style: &PageStyle, dx: f32, offset: f32) {
         let palette = THEMES[theme];
         let colour = rgba(if palette.paper < 0x808080 { RIBBON_DARK } else { RIBBON_LIGHT });
-        let x = style.ribbon().0 - RIBBON_WIDTH / 2.0;
+        let x = dx + style.ribbon().0 - RIBBON_WIDTH / 2.0;
         let (top, bottom) = (offset - RIBBON_TUCK, offset + RIBBON_LENGTH);
         let path = gsk::PathBuilder::new();
         path.move_to(x, top);
@@ -993,14 +1057,18 @@ impl PageView {
             return false;
         }
         self.with(|s| {
-            let style = s.settings.page_style(w, h);
-            let fresh = s.layout.as_ref().is_some_and(|l| l.chapter == s.chapter) && s.style == Some(style);
+            // The page style depends on the mode: "Scroll" is never a spread.
+            let settings = Settings { turning: if s.mode == Mode::Scroll { Turning::Scroll } else { Turning::Slide }, ..s.settings };
+            let style = settings.page_style(w, h);
+            let spread = settings.spread(w, h);
+            let fresh = s.layout.as_ref().is_some_and(|l| l.chapter == s.chapter) && s.style == Some(style) && s.spread == spread;
             if fresh {
                 return false;
             }
-            if s.style != Some(style) {
+            if s.style != Some(style) || s.spread != spread {
                 s.typesetter = Some(Typesetter::new(style, s.hyphenator.clone()));
                 s.style = Some(style);
+                s.spread = spread;
                 s.neighbours.clear();
                 s.layout = None;
                 s.end = None;
@@ -1010,10 +1078,11 @@ impl PageView {
                 None => paginate(&s.book, s.chapter, &style, s.typesetter.as_mut().unwrap()),
             };
             if std::mem::take(&mut s.to_last) {
-                s.page = layout.pages.len() - 1;
-                s.locator = layout.page_start(s.page); // turned back into this chapter: its last page
+                s.page = Self::left(s, layout.pages.len() - 1);
+                s.locator = layout.page_start(s.page); // turned back into this chapter: its last page (or spread)
             } else {
-                s.page = layout.page_of(s.locator);
+                // The reading position stays where it is: leaving a spread shows the page that holds it.
+                s.page = Self::left(s, layout.page_of(s.locator));
             }
             if let Some(old) = s.layout.replace(layout) {
                 s.neighbours.push(old);
@@ -1200,10 +1269,30 @@ impl PageView {
             Some(bands) => gsk::ContainerNode::new(&[bands, node]).upcast(),
             None => node,
         };
-        let areas = selection::with_highlights(s, layout.chapter, content.areas, marks);
+        let mut areas = selection::with_highlights(s, layout.chapter, content.areas, marks);
+        // A spread's right page is cached where it is drawn, half the window to the right.
+        let dx = if page % 2 == 1 { Self::right_dx(s) } else { 0.0 };
+        let node = if dx > 0.0 {
+            for area in &mut areas {
+                area.rect.x += dx;
+            }
+            gsk::TransformNode::new(node, Some(&gsk::Transform::new().translate(&graphene::Point::new(dx, 0.0)))).upcast()
+        } else {
+            node
+        };
         s.nodes.insert(page, node.clone());
         s.areas.insert(page, areas);
         Some(node)
+    }
+
+    /// The page shown, or the spread's two pages, as one node.
+    fn screen_node(s: &mut State) -> Option<gsk::RenderNode> {
+        let nodes: Vec<_> = Self::shown_pages(s).into_iter().filter_map(|(page, _)| Self::page_node(s, page)).collect();
+        match nodes.len() {
+            0 => None,
+            1 => nodes.into_iter().next(),
+            _ => Some(gsk::ContainerNode::new(&nodes).upcast()),
+        }
     }
 
     /// The end page's node for the current style and theme.
@@ -1212,6 +1301,11 @@ impl PageView {
             let (style, t) = (s.style?, s.typesetter.as_mut()?);
             let content = end_page(&s.book, &style, t);
             s.end = content_node(&content, s.theme, &mut s.fonts, &mut s.textures, &s.book);
+            // In a spread, centred on the window.
+            if s.spread {
+                let centre = graphene::Point::new(style.width / 2.0, 0.0);
+                s.end = s.end.take().map(|n| gsk::TransformNode::new(n, Some(&gsk::Transform::new().translate(&centre))).upcast());
+            }
         }
         s.end.clone()
     }
@@ -1318,11 +1412,11 @@ impl PageView {
                 Self::draw_column(s, snapshot, h);
                 self.draw_selection(s, snapshot, h);
                 if let (Some(offset), Some(style)) = (Self::ribbon_offset(s, h, now, refresh), &s.style) {
-                    Self::draw_ribbon(snapshot, s.theme, style, offset);
+                    Self::draw_ribbon(snapshot, s.theme, style, 0.0, offset);
                 }
                 return;
             }
-            let current = if s.at_end { Self::end_node(s) } else { Self::page_node(s, s.page) };
+            let current = if s.at_end { Self::end_node(s) } else { Self::screen_node(s) };
             let Some(current) = current else { return };
             let progress: f32 =
                 s.turn.as_mut().map(|t| ((now - *t.start.get_or_insert(now)) as f32 / TURN as f32).clamp(0.0, 1.0)).unwrap_or(1.0);
@@ -1330,15 +1424,15 @@ impl PageView {
             match &s.turn {
                 Some(t) if progress < 1.0 => {
                     let p = 1.0 - (1.0 - progress).powi(3); // ease-out cubic
-                    let (dir, from, from_marked) = (t.dir, t.from.clone(), t.from_marked);
-                    let marked = Self::shown_marked(s, h);
-                    // Each page with its ribbon.
-                    for (node, ribbon, x) in [(&from, from_marked, -dir * p * w), (&current, marked, dir * (1.0 - p) * w)] {
+                    let (dir, from, from_ribbon) = (t.dir, t.from.clone(), t.from_ribbon);
+                    let ribbon = if s.at_end { None } else { Self::ribbon_dx(s, h) };
+                    // Each page (or spread) with its ribbon.
+                    for (node, ribbon, x) in [(&from, from_ribbon, -dir * p * w), (&current, ribbon, dir * (1.0 - p) * w)] {
                         snapshot.save();
                         snapshot.translate(&graphene::Point::new(x, 0.0));
                         snapshot.append_node(node);
-                        if let (true, Some(style)) = (ribbon, &style) {
-                            Self::draw_ribbon(snapshot, s.theme, style, 0.0);
+                        if let (Some(dx), Some(style)) = (ribbon, &style) {
+                            Self::draw_ribbon(snapshot, s.theme, style, dx, 0.0);
                         }
                         snapshot.restore();
                     }
@@ -1353,17 +1447,18 @@ impl PageView {
                     snapshot.append_node(&current);
                     self.draw_selection(s, snapshot, h);
                     if let (Some(offset), Some(style)) = (Self::ribbon_offset(s, h, now, refresh), &style) {
-                        Self::draw_ribbon(snapshot, s.theme, style, offset);
+                        let dx = Self::ribbon_dx(s, h).unwrap_or(0.0);
+                        Self::draw_ribbon(snapshot, s.theme, style, dx, offset);
                     }
-                    if let (Some((from, to)), Some(layout), Some(style)) = (Self::highlighted(s, s.chapter), &s.layout, &s.style) {
-                        Self::draw_marks(s, snapshot, &layout.marks(s.page, style, from, to), 0.0);
+                    if let Some((from, to)) = Self::highlighted(s, s.chapter) {
+                        Self::draw_marks(s, snapshot, &Self::shown_marks(s, from, to), 0.0);
                     }
-                    // The focused stop, over the cached page.
-                    let areas = s.areas.get(&s.page);
-                    if let (Some(areas), Some(f)) = (areas, s.focus)
-                        && let Some(&stop) = stops(areas).get(f)
-                    {
-                        draw_focus(snapshot, s.theme, areas, stop);
+                    // The focused stop, over the cached pages.
+                    if let Some(f) = s.focus {
+                        let areas = Self::shown_areas(s);
+                        if let Some(&stop) = stops(&areas).get(f) {
+                            draw_focus(snapshot, s.theme, &areas, stop);
+                        }
                     }
                 }
             }
@@ -1374,7 +1469,7 @@ impl PageView {
     pub fn current_page_node(&self) -> Option<gsk::RenderNode> {
         let (w, h) = (WidgetExt::width(self) as f32, WidgetExt::height(self) as f32);
         self.with(|s| {
-            let page = Self::page_node(s, s.page)?;
+            let page = Self::screen_node(s)?;
             let snapshot = gtk::Snapshot::new();
             snapshot.append_color(&rgba(THEMES[s.theme].paper), &graphene::Rect::new(0.0, 0.0, w, h));
             snapshot.append_node(&page);
@@ -1391,26 +1486,27 @@ impl PageView {
         }
         let h = WidgetExt::height(self) as f32;
         let animate = self.with(|s| {
-            let from_marked = Self::shown_marked(s, h);
+            let from_ribbon = Self::ribbon_dx(s, h);
+            let from = Self::screen_node(s);
+            let step = if s.spread { 2 } else { 1 };
             let Some(layout) = &s.layout else { return false };
             if s.at_end {
                 // Back from the end page to the last page of the text; forward does nothing.
                 if delta > 0 {
                     return false;
                 }
-                s.turn = s.end.clone().map(|from| Turn { from, from_marked: false, dir: -1.0, start: None });
+                s.turn = s.end.clone().map(|from| Turn { from, from_ribbon: None, dir: -1.0, start: None });
                 s.at_end = false;
                 return true;
             }
-            let from = s.nodes.get(&s.page).cloned();
-            let target = s.page as i64 + delta as i64;
+            let target = s.page as i64 + delta as i64 * step;
             if let Some(p) = &mut s.pill {
                 p.turns += delta;
             }
             if delta > 0 && target as usize >= layout.pages.len() && s.chapter + 1 == s.book.chapters.len() {
                 // Past the book's last page: the end page; the position stays at the last page.
                 s.at_end = true;
-                s.turn = from.map(|from| Turn { from, from_marked, dir: 1.0, start: None });
+                s.turn = from.map(|from| Turn { from, from_ribbon, dir: 1.0, start: None });
                 s.focus = None;
                 return true;
             }
@@ -1427,7 +1523,7 @@ impl PageView {
             } else {
                 return false;
             }
-            s.turn = from.map(|from| Turn { from, from_marked, dir: delta.signum() as f32, start: None });
+            s.turn = from.map(|from| Turn { from, from_ribbon, dir: delta.signum() as f32, start: None });
             s.focus = None;
             true
         });
@@ -1490,7 +1586,7 @@ impl PageView {
         }
         self.with(|s| {
             if let Some(layout) = &s.layout {
-                s.page = if end { layout.pages.len() - 1 } else { 0 };
+                s.page = if end { Self::left(s, layout.pages.len() - 1) } else { 0 };
                 s.locator = layout.page_start(s.page);
                 s.turn = None;
                 s.focus = None;
@@ -1505,7 +1601,7 @@ impl PageView {
     pub fn go_to_page(&self, page: usize) {
         self.with(|s| {
             if let Some(layout) = &s.layout {
-                s.page = page.min(layout.pages.len() - 1);
+                s.page = Self::left(s, page.min(layout.pages.len() - 1));
                 s.locator = layout.page_start(s.page);
                 s.turn = None;
             }

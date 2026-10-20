@@ -16,6 +16,10 @@ const DARK: usize = 2;
 pub const TEXT_SIZES: [f32; 7] = [16.0, 18.0, 20.0, 22.0, 24.0, 27.0, 30.0];
 pub const DEFAULT_SIZE: usize = 2;
 
+/// The narrowest text column, in em, of a page in a two-page spread (~55–60 characters): a full-screen 13" MacBook
+/// (1440 px) holds two at the default size.
+pub const MIN_SPREAD_COLUMN: f32 = 28.0;
+
 /// Line spacing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Spacing {
@@ -197,9 +201,17 @@ impl Settings {
         TEXT_SIZES[self.size.min(TEXT_SIZES.len() - 1)]
     }
 
-    /// The page for a window of `width` × `height` logical pixels.
+    /// Whether a window of `width` × `height` logical pixels shows two pages side by side: "Slide", wider than tall,
+    /// and each half holds a column of `MIN_SPREAD_COLUMN` with the least side margins.
+    pub fn spread(&self, width: f32, height: f32) -> bool {
+        let (_, min_margin) = self.margins.column();
+        self.turning == Turning::Slide && width > height && width / 2.0 - 2.0 * min_margin >= MIN_SPREAD_COLUMN * self.text_size()
+    }
+
+    /// The page for a window of `width` × `height` logical pixels: half the window in a spread.
     pub fn page_style(&self, width: f32, height: f32) -> PageStyle {
         let (measure, min_margin) = self.margins.column();
+        let width = if self.spread(width, height) { width / 2.0 } else { width };
         PageStyle {
             line_height: self.spacing.em(),
             justify: self.align == Align::Justified,

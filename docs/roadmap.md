@@ -8,8 +8,8 @@ Linux comes first: Omarchy and the Raspberry Pi 5 are the primary audience. macO
 on Linux, so the shared core API is settled before the second shell catches up.
 
 **Status (2026-10-19).** Milestones 0.2–0.4 are done and archived (2026-10-16–17), and so are `localization`,
-`bookmarks`, `selection-quotes`, `library`, `reader-menu` and `help-card` from 1.0. Left for 1.0: `two-page-spread` and
-`release-1-0` (proposals only). Nothing is published yet; the 0.1.0 release was dry-run on 2026-10-17
+`bookmarks`, `selection-quotes`, `library`, `reader-menu`, `help-card` and (2026-10-20) `two-page-spread` from 1.0.
+Left for 1.0: `release-1-0` (proposal only). Nothing is published yet; the 0.1.0 release was dry-run on 2026-10-17
 ([publishing.md](publishing.md)).
 
 **After 0.9.0 (released 2026-10-19).** The maintainer's direction is a Calibre-like library: first the Books folder

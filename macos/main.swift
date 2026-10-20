@@ -585,7 +585,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 print(String(format: "startup: parsed %.1f ms, first page presented %.1f ms, pages in chapter %d", parsed * 1000,
                              Date().timeIntervalSince(processStart) * 1000, v.pageCount))
             }
-            if let p = self.value(after: "--page").flatMap({ UInt32($0) }) { v.page = min(p, v.pageCount - 1) }
+            if let p = self.value(after: "--page").flatMap({ UInt32($0) }) { v.page = v.left(min(p, v.pageCount - 1)) }
             guard let png, let panel = self.value(after: "--panel") ?? (self.args.contains("--scroll") ? "" : nil) else {
                 if let png { v.savePNG(png) }
                 return NSApp.terminate(nil)

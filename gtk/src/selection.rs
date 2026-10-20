@@ -239,7 +239,14 @@ impl PageView {
             return out;
         }
         match &s.layout {
-            Some(l) if l.chapter == s.chapter && !s.at_end => l.words(s.page, &style, &s.book),
+            Some(l) if l.chapter == s.chapter && !s.at_end => {
+                // A spread's two pages: the right one's words where it is drawn.
+                let mut out = Vec::new();
+                for (page, dx) in Self::shown_pages(s) {
+                    out.extend(l.words(page, &style, &s.book).into_iter().map(|w| Word { rect: Rect { x: w.rect.x + dx, ..w.rect }, ..w }));
+                }
+                out
+            }
             _ => Vec::new(),
         }
     }
@@ -257,7 +264,7 @@ impl PageView {
             return out;
         }
         match &s.layout {
-            Some(l) if l.chapter == s.chapter && !s.at_end => l.marks(s.page, &style, from, to),
+            Some(l) if l.chapter == s.chapter && !s.at_end => Self::shown_marks(s, from, to),
             _ => Vec::new(),
         }
     }

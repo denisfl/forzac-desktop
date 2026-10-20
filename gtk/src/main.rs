@@ -12,7 +12,8 @@
 //! rises), `--strokes N` highlights N paragraphs one after another (the marker's stroke), each printing the same
 //! statistics; `--mouse "down X Y; drag X Y; up X Y; click X Y N"` sends those mouse events to the page's handlers after
 //! the first frame, 0.15 s apart, and leaves the window open; `--show-help` opens the help (with `--png`: the whole
-//! window is saved once it has faded in).
+//! window is saved once it has faded in); `--size WxH` makes the window W × H instead of 760 × 980 (`1920x1080`: a
+//! two-page spread).
 //! With any of them the reading state is neither read nor written.
 //!
 //! Without a file, the library is shown (`library.rs`); `--measure` then prints the time to its first frame and to its
@@ -57,6 +58,7 @@ struct Options {
     mouse: Option<String>,
     chapter: Option<usize>,
     page: usize,
+    size: Option<(i32, i32)>,
 }
 
 impl Options {
@@ -71,6 +73,7 @@ impl Options {
             || self.mouse.is_some()
             || self.chapter.is_some()
             || self.page > 0
+            || self.size.is_some()
     }
 }
 
@@ -145,8 +148,21 @@ fn main() -> glib::ExitCode {
     let toggles = args.iter().position(|a| a == "--toggles").and_then(|i| args.get(i + 1)).and_then(|n| n.parse().ok()).unwrap_or(0);
     let strokes = args.iter().position(|a| a == "--strokes").and_then(|i| args.get(i + 1)).and_then(|n| n.parse().ok()).unwrap_or(0);
     let mouse = args.iter().position(|a| a == "--mouse").and_then(|i| args.get(i + 1)).cloned();
-    let options =
-        Options { start, measure: args.iter().any(|a| a == "--measure"), png, turns, scrolls, toggles, strokes, mouse, chapter, page };
+    let size_arg = args.iter().position(|a| a == "--size").and_then(|i| args.get(i + 1));
+    let size = size_arg.and_then(|s| s.split_once('x')).and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
+    let options = Options {
+        start,
+        measure: args.iter().any(|a| a == "--measure"),
+        png,
+        turns,
+        scrolls,
+        toggles,
+        strokes,
+        mouse,
+        chapter,
+        page,
+        size,
+    };
     let files: Vec<&String> = args
         .iter()
         .skip(1)
@@ -155,6 +171,7 @@ fn main() -> glib::ExitCode {
                 && a.parse::<usize>().is_err()
                 && Some(PathBuf::from(a.as_str())) != options.png
                 && Some(*a) != options.mouse.as_ref()
+                && Some(*a) != size_arg
         })
         .collect();
 
@@ -336,7 +353,11 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
     outer.set_child(Some(&overlay));
     outer.add_overlay(&help.root);
 
-    let (width, height) = if stateless { fitted(760, 980) } else { remembered_size(&store.borrow(), "window-book", (760, 980)) };
+    let (width, height) = match options.size {
+        Some((w, h)) => (w, h),
+        None if stateless => fitted(760, 980),
+        None => remembered_size(&store.borrow(), "window-book", (760, 980)),
+    };
     let window =
         gtk::ApplicationWindow::builder().application(app).title(&title).default_width(width).default_height(height).child(&outer).build();
     // While the help is open it takes every key, before the panels, the menu and the page.

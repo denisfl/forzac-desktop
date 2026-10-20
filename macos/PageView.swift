@@ -36,7 +36,10 @@ final class PageView: NSView {
 
     var chapter: UInt32
     var pageCount: UInt32 = 0
+    /// The page shown; in a spread its left (even) page.
     var page: UInt32 = 0
+    /// Whether the window shows two pages side by side ("Slide" in a wide window, `forzac_settings_spread`).
+    private(set) var spread = false
     var locator: ForzacLocator
     private var toLast = false
     /// What the current layout was made for: the size, the settings that change it, the chapter.
@@ -50,6 +53,8 @@ final class PageView: NSView {
     private let focusLayer = CALayer()
     /// The focused `Tab` stop of the page (or of the screen in "Scroll").
     private var focus: Int?
+    /// Where the current page's (or spread's) ribbon hangs: 0, or the right page's offset.
+    private var ribbonDx: CGFloat = 0
     /// Where jumps started, the latest last (`⌃O`).
     private var back: [ForzacLocator] = []
     /// The matches of the last search gone to (start, end), and the one highlighted (`n`/`N` move it).
@@ -198,18 +203,21 @@ final class PageView: NSView {
         let size = bounds.size
         guard size.width > 0, size.height > 0 else { return }
         let s = settings
-        let key: [Float] = [Float(size.width), Float(size.height), Float(s.size), Float(s.family), Float(s.spacing), Float(s.align), Float(s.margins), Float(chapter)]
+        // The pages depend on the mode: "Scroll" is never a spread.
+        let key: [Float] = [Float(size.width), Float(size.height), Float(s.size), Float(s.family), Float(s.spacing), Float(s.align), Float(s.margins), Float(s.turning), Float(chapter)]
         if laidOutFor == key { return }
         let styleChanged = laidOutFor.map { Array($0.dropLast()) != Array(key.dropLast()) } ?? true
+        spread = withUnsafePointer(to: settings) { forzac_settings_spread($0, Float(size.width), Float(size.height)) }
         pageCount = withUnsafePointer(to: settings) { forzac_paginate(doc, chapter, Float(size.width), Float(size.height), $0) }
         var top: Float = 0, line: Float = 0
         forzac_metrics(doc, &top, &line)
         (marginTop, lineHeight) = (CGFloat(top), CGFloat(line))
         if toLast {
-            page = pageCount - 1
-            locator = forzac_page_start(doc, page) // turned back into this chapter: its last page
+            page = left(pageCount - 1)
+            locator = forzac_page_start(doc, page) // turned back into this chapter: its last page (or spread)
         } else {
-            page = forzac_page_of(doc, locator)
+            // The reading position stays where it is: leaving a spread shows the page that holds it.
+            page = left(forzac_page_of(doc, locator))
         }
         toLast = false
         laidOutFor = key
@@ -270,18 +278,36 @@ final class PageView: NSView {
 
     // MARK: Slide
 
-    /// The page as a bitmap at the backing scale.
+    // MARK: Spreads
+
+    /// A page's width: half the view in a spread.
+    private var pageWidth: CGFloat { spread ? bounds.width / 2 : bounds.width }
+
+    /// The page to show for `index`: in a spread, the left page of its pair (every chapter starts on a left page).
+    func left(_ index: UInt32) -> UInt32 { spread ? index & ~1 : index }
+
+    /// The pages shown with `index` first and their offsets from the view's left edge: the page, or a spread's left
+    /// page and its right one when the chapter has it.
+    private func shownPages(_ index: UInt32) -> [(UInt32, CGFloat)] {
+        spread && index + 1 < pageCount ? [(index, 0), (index + 1, pageWidth)] : [(index, 0)]
+    }
+
+    /// The page (or spread) as a bitmap at the backing scale; `index` is its (left) page.
     private func image(_ index: UInt32) -> CGImage? {
         if let i = images[index] { return i }
         let h = bounds.height
-        // Highlights under the text, and among the page's areas (`Tab`, clicks).
-        let marked = highlights.map { ($0, pageMarks(index, $0)) }
-        let bands = marked.map(\.1)
         let image = bitmap(bounds.size, scale: scale, background: palette.paper) { ctx in
-            drawBands(bands, in: ctx, height: h)
-            let page = forzac_page(doc, index)
-            pageAreas[index] = withHighlights(areas(of: page), marked)
-            drawPage(page, in: ctx, height: h, palette: palette, fonts: fonts, pictures: &pictures)
+            for (p, dx) in shownPages(index) {
+                // Highlights under the text, and among the page's areas (`Tab`, clicks), where the page is drawn.
+                let marked = highlights.map { ($0, pageMarks(p, $0)) }
+                ctx.saveGState()
+                ctx.translateBy(x: dx, y: 0)
+                drawBands(marked.map(\.1), in: ctx, height: h)
+                let page = forzac_page(doc, p)
+                pageAreas[p] = withHighlights(areas(of: page), marked).map { $0.offsetBy(dx: dx) }
+                drawPage(page, in: ctx, height: h, palette: palette, fonts: fonts, pictures: &pictures)
+                ctx.restoreGState()
+            }
         }
         images[index] = image
         return image
@@ -291,7 +317,9 @@ final class PageView: NSView {
     private func endPage() -> CGImage? {
         if let i = endImage { return i }
         let h = bounds.height
+        let centre = (bounds.width - pageWidth) / 2 // in a spread, centred on the window
         endImage = bitmap(bounds.size, scale: scale, background: palette.paper) { ctx in
+            ctx.translateBy(x: centre, y: 0)
             drawPage(forzac_end_page(doc), in: ctx, height: h, palette: palette, fonts: fonts, pictures: &pictures)
         }
         return endImage
@@ -322,7 +350,7 @@ final class PageView: NSView {
             previous.contentsScale = scale
             previous.frame = frame
             previousRibbon.isHidden = ribbon.isHidden
-            placeRibbon(previousRibbon)
+            placeRibbon(previousRibbon, dx: ribbonDx)
         }
         current.contents = img
         current.contentsScale = scale
@@ -359,7 +387,7 @@ final class PageView: NSView {
             onMoved?()
             return
         }
-        let target = Int64(page) + Int64(delta)
+        let target = Int64(page) + Int64(delta) * (spread ? 2 : 1)
         if pill != nil { pill!.turns += delta }
         if delta > 0 && target >= Int64(pageCount) && chapter + 1 == forzac_chapter_count(doc) {
             // Past the book's last page: the end page; the position stays at the last page.
@@ -404,7 +432,7 @@ final class PageView: NSView {
             settle()
             return
         }
-        page = end ? pageCount - 1 : 0
+        page = end ? left(pageCount - 1) : 0
         locator = forzac_page_start(doc, page)
         focus = nil
         atEnd = false
@@ -731,7 +759,7 @@ final class PageView: NSView {
     /// The markers and links on screen, y down.
     private func visibleAreas() -> [Area] {
         if atEnd { return [] }
-        if !scrolling { return pageAreas[page] ?? [] }
+        if !scrolling { return shownPages(page).flatMap { pageAreas[$0.0] ?? [] } }
         var out: [Area] = []
         forTiles(from: 0, to: bounds.height) { top, key in
             out += (tileAreas[key] ?? []).map { $0.offsetBy(dy: top) }
@@ -756,7 +784,7 @@ final class PageView: NSView {
             return (lineAt(Float(offset + marginTop)), lineAt(Float(offset + bounds.height)))
         }
         if atEnd { return nil }
-        return (forzac_page_start(doc, page), forzac_page_end(doc, page))
+        return (forzac_page_start(doc, page), forzac_page_end(doc, shownPages(page).last!.0))
     }
 
     /// The first line at or below height `y` of the current chapter's column, or of the chapters after it.
@@ -822,21 +850,27 @@ final class PageView: NSView {
 
     /// Shows the current page's ribbon when it is marked, in the theme's colour, beside the text.
     private func updateRibbon() {
+        // Over the page holding the spread's first bookmark.
+        ribbonDx = 0
+        if let (from, to) = shownRange(), let first = bookmarks.first(where: { !($0 < from) && $0 < to }),
+           !scrolling, let right = shownPages(page).dropFirst().first, !(first < forzac_page_start(doc, right.0)) {
+            ribbonDx = right.1
+        }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        placeRibbon(ribbon)
+        placeRibbon(ribbon, dx: ribbonDx)
         // A ribbon going up stays until it is gone; one dropping goes with its page.
         if ribbon.animation(forKey: "rise") == nil { ribbon.isHidden = !shownMarked }
         if ribbon.isHidden { ribbon.removeAnimation(forKey: "drop") }
         CATransaction.commit()
     }
 
-    /// Puts `r` at the top of its page layer, beside the text column.
-    private func placeRibbon(_ r: CAShapeLayer) {
+    /// Puts `r` at the top of its page layer, beside the text column of the page `dx` from the left edge.
+    private func placeRibbon(_ r: CAShapeLayer, dx: CGFloat) {
         var centre: Float = 0, corner: Float = 0
         forzac_ribbon(doc, &centre, &corner)
         // Layers are y up: the ribbon hangs from the top edge, its tuck above it.
-        r.frame = CGRect(x: CGFloat(centre) - ribbonWidth / 2, y: bounds.height - ribbonLength, width: ribbonWidth, height: ribbonLength + ribbonTuck)
+        r.frame = CGRect(x: dx + CGFloat(centre) - ribbonWidth / 2, y: bounds.height - ribbonLength, width: ribbonWidth, height: ribbonLength + ribbonTuck)
         let path = CGMutablePath()
         path.move(to: CGPoint(x: 0, y: ribbonLength + ribbonTuck))
         path.addLine(to: CGPoint(x: ribbonWidth, y: ribbonLength + ribbonTuck))
@@ -898,8 +932,8 @@ final class PageView: NSView {
         guard !atEnd, let i = currentMatch, let (from, to) = matches[safe: i] else { return [] }
         var rects = [ForzacRect](repeating: ForzacRect(x: 0, y: 0, w: 0, h: 0), count: 8)
         var out: [CGRect] = []
-        func add(_ n: UInt32, dy: CGFloat) {
-            out += rects[0..<Int(n)].map { CGRect(x: CGFloat($0.x), y: CGFloat($0.y) + dy, width: CGFloat($0.w), height: CGFloat($0.h)) }
+        func add(_ n: UInt32, dx: CGFloat = 0, dy: CGFloat) {
+            out += rects[0..<Int(n)].map { CGRect(x: CGFloat($0.x) + dx, y: CGFloat($0.y) + dy, width: CGFloat($0.w), height: CGFloat($0.h)) }
         }
         if scrolling {
             var top = -offset.rounded()
@@ -909,7 +943,7 @@ final class PageView: NSView {
                 top += CGFloat(height) + gap
             }
         } else if from.chapter == chapter {
-            add(forzac_marks(doc, page, from, to, &rects, 8), dy: 0)
+            for (p, dx) in shownPages(page) { add(forzac_marks(doc, p, from, to, &rects, 8), dx: dx, dy: 0) }
         }
         return out
     }
@@ -1011,7 +1045,7 @@ final class PageView: NSView {
         forzac_ribbon(doc, &centre, &corner)
         if let a = hits.first(where: { !$0.isViewable }) ?? hits.first {
             open(a)
-        } else if y < marginTop && p.x >= CGFloat(corner) {
+        } else if y < marginTop && p.x >= CGFloat(corner) + (spread ? pageWidth : 0) { // the right page's corner in a spread
             toggleBookmark()
         } else if p.x >= bounds.width / 3 && p.x <= bounds.width * 2 / 3 {
             if e.clickCount == 1 { onCommand?(.menu) } // the middle opens the menu (`reader-menu`), in both modes
@@ -1186,20 +1220,27 @@ extension PageView {
             return out
         }
         if atEnd { return [] }
-        let p = forzac_page_words(doc, page, &n)
-        return (0..<Int(n)).map { p![$0] }
+        // A spread's two pages: the right one's words where it is drawn.
+        return shownPages(page).flatMap { index, dx in
+            let p = forzac_page_words(doc, index, &n)
+            return (0..<Int(n)).map { i -> ForzacWord in
+                var w = p![i]
+                w.rect.x += Float(dx)
+                return w
+            }
+        }
     }
 
     /// Rectangles over `r` shown (y down).
     func shownRects(_ r: LocRange) -> [CGRect] {
         var buf = [ForzacRect](repeating: ForzacRect(x: 0, y: 0, w: 0, h: 0), count: 256)
         var out: [CGRect] = []
-        func add(_ n: UInt32, _ dy: CGFloat) { out += buf[0..<Int(n)].map { CGRect(x: CGFloat($0.x), y: CGFloat($0.y) + dy, width: CGFloat($0.w), height: CGFloat($0.h)) } }
+        func add(_ n: UInt32, _ dy: CGFloat, dx: CGFloat = 0) { out += buf[0..<Int(n)].map { CGRect(x: CGFloat($0.x) + dx, y: CGFloat($0.y) + dy, width: CGFloat($0.w), height: CGFloat($0.h)) } }
         if scrolling {
             let h = bounds.height
             for (c, top) in screenChapters() { add(forzac_flow_marks(doc, c, Float(-top), Float(h - top), r.start, r.end, &buf, 256), 0) }
         } else if !atEnd {
-            add(forzac_marks(doc, page, r.start, r.end, &buf, 256), 0)
+            for (p, dx) in shownPages(page) { add(forzac_marks(doc, p, r.start, r.end, &buf, 256), 0, dx: dx) }
         }
         return out
     }

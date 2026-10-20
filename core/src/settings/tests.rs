@@ -70,3 +70,21 @@ fn margins_change_the_column() {
     s.margins = Margins::Wide;
     assert!((s.page_style(500.0, 900.0).margin_h - 72.0).abs() < 0.01);
 }
+
+#[test]
+fn a_wide_window_shows_a_spread() {
+    let mut s = Settings::default();
+    assert!(s.spread(1440.0, 900.0), "a full-screen 13-inch MacBook at 20 px");
+    let page = s.page_style(1440.0, 900.0);
+    assert_eq!(page.width, 720.0);
+    assert!((page.text_width() - 624.0).abs() < 0.01, "31 em between the least margins");
+    s.step(Setting::Size, 2, false);
+    assert_eq!(s.text_size(), 24.0);
+    assert!(!s.spread(1440.0, 900.0), "26 em halves");
+    assert_eq!(s.page_style(1440.0, 900.0).width, 1440.0);
+    let s = Settings::default();
+    assert!(!s.spread(900.0, 1440.0), "taller than wide");
+    assert!(!Settings { turning: Turning::Scroll, ..s }.spread(1920.0, 1080.0), "Scroll is one column");
+    assert_eq!(s.note_style(1440.0).width, 1440.0);
+    assert_eq!(s.table_style(1.0).width, 100_000.0);
+}

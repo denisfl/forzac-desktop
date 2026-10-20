@@ -1527,6 +1527,16 @@ pub unsafe extern "C" fn forzac_settings_text_size(settings: *const ForzacSettin
     Settings::from(unsafe { *settings }).text_size()
 }
 
+/// Whether a window of `width` × `height` with `settings` shows two pages side by side; [`forzac_paginate`] then
+/// typesets pages half its width.
+///
+/// # Safety
+/// `settings` must point to valid settings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_settings_spread(settings: *const ForzacSettings, width: f32, height: f32) -> bool {
+    Settings::from(unsafe { *settings }).spread(width, height)
+}
+
 /// How many text sizes there are (`ForzacSettings::size` is below it).
 #[unsafe(no_mangle)]
 pub extern "C" fn forzac_settings_size_count() -> u32 {

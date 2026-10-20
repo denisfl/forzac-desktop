@@ -219,7 +219,7 @@ struct Area {
         kind == o.kind && target == o.target && (kind < 3 || (at.chapter, at.block, at.offset) == (o.at.chapter, o.at.block, o.at.offset))
     }
 
-    func offsetBy(dy: CGFloat) -> Area { Area(rect: rect.offsetBy(dx: 0, dy: dy), kind: kind, target: target, at: at) }
+    func offsetBy(dx: CGFloat = 0, dy: CGFloat = 0) -> Area { Area(rect: rect.offsetBy(dx: dx, dy: dy), kind: kind, target: target, at: at) }
 }
 
 func areas(of page: ForzacPage, dy: CGFloat = 0) -> [Area] {

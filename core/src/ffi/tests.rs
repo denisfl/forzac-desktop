@@ -442,3 +442,23 @@ fn the_books_folder_through_the_c_functions() {
         forzac_state_close(state);
     }
 }
+
+#[test]
+fn a_spread_window_paginates_half_pages() {
+    let path = book_file();
+    let doc = unsafe { forzac_open(c(path.to_str().unwrap()).as_ptr(), std::ptr::null_mut()) };
+    unsafe {
+        let settings = forzac_settings_default();
+        assert!(forzac_settings_spread(&settings, 1440.0, 900.0));
+        assert!(!forzac_settings_spread(&settings, 900.0, 1440.0));
+        // 1440 wide in a spread is the same page as a 720 wide window.
+        let half = forzac_paginate(doc, 2, 720.0, 900.0, &settings);
+        let spread = forzac_paginate(doc, 2, 1440.0, 900.0, &settings);
+        assert_eq!(spread, half);
+        let count = forzac_count_new(doc, 1440.0, 900.0, &settings);
+        forzac_count_run(count);
+        assert!(forzac_count_install(doc, count), "the count numbers the spread's pages");
+        forzac_count_free(count);
+        forzac_close(doc);
+    }
+}
