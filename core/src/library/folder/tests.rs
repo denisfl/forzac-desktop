@@ -275,3 +275,75 @@ fn the_scan_sees_what_another_handle_wrote() {
     assert_eq!(titles(&books), ["B", "A"], "the book opened last first");
     assert!(books[0].opened > 0);
 }
+
+// region book-identity: the move to SHA-256 ids
+
+/// A state as 0.11.0 left it: the folder remembered, `books` read (a position and a highlight each) under their FNV ids
+/// and cached as the folder's files.
+fn old_state(home: &Path, folder: &Path, books: &[&Path]) -> Store {
+    let mut s = store(home);
+    s.set_setting(FOLDER, &folder.to_string_lossy()).unwrap();
+    let at = Locator { chapter: 0, block: 0, offset: 3 };
+    let mut files = Vec::new();
+    for path in books {
+        let bytes = std::fs::read(path).unwrap();
+        let mut book = crate::parse(&bytes).unwrap();
+        book.id = legacy_id(&bytes);
+        s.save_position(&book, path, at, false).unwrap();
+        s.set_quotes(&book, &[(at, Locator { offset: 5, ..at })]).unwrap();
+        let meta = std::fs::metadata(path).unwrap();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        files.push(Cached { name, size: meta.len(), mtime: mtime(&meta), id: book.id, title: book.title, authors: String::new() });
+    }
+    s.set_files(files).unwrap();
+    s
+}
+
+#[test]
+fn a_state_of_0_11_moves_to_the_new_ids_once() {
+    let home = home();
+    let folder = home.join("Books");
+    let (a, b) = (write(&folder.join("A.fb2"), &fb2("A", "", "a")), write(&folder.join("B.fb2"), &fb2("B", "", "b")));
+    let gone = write(&folder.join("Gone.fb2"), &fb2("Gone", "", "gone"));
+    let mut s = old_state(&home, &folder, &[&a, &b, &gone]);
+    let gone_id = legacy_id(&std::fs::read(&gone).unwrap());
+    std::fs::remove_file(&gone).unwrap();
+
+    books_folder(&home, Language::English, &mut s).unwrap();
+    let s = store(&home);
+    let at = Locator { chapter: 0, block: 0, offset: 3 };
+    for path in [&a, &b] {
+        let book = crate::parse(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(book.id.len(), 32);
+        assert_eq!(s.position(&book, Path::new("/moved.fb2")), Some(at), "found by the new id");
+        assert_eq!(s.quotes(&book).len(), 1);
+    }
+    assert!(s.entries().iter().any(|e| e.id == gone_id), "a book without its file keeps its old id");
+    assert!(s.files().iter().all(|f| f.id.len() == 32));
+    assert_eq!(s.setting(IDS), Some("sha256"));
+
+    let mut s = store(&home);
+    let books = scan(&folder, &mut s);
+    let mut seen = titles(&books);
+    seen.sort();
+    assert_eq!(seen, ["A", "B"], "one entry per book, nothing doubled");
+}
+
+#[test]
+fn a_book_put_back_after_the_move_brings_its_highlights() {
+    let home = home();
+    let folder = home.join("Books");
+    let a = write(&folder.join("A.fb2"), &fb2("A", "", "a"));
+    let mut s = old_state(&home, &folder, &[&a]);
+    let book = crate::parse(&std::fs::read(&a).unwrap()).unwrap();
+    s.forget(&legacy_id(&std::fs::read(&a).unwrap())).unwrap();
+    let trash = home.join(".Trash/A.fb2");
+    std::fs::create_dir_all(trash.parent().unwrap()).unwrap();
+    std::fs::rename(&a, &trash).unwrap();
+
+    books_folder(&home, Language::English, &mut s).unwrap();
+    assert!(s.quotes(&book).is_empty(), "its file was in the Trash");
+    std::fs::rename(&trash, &a).unwrap();
+    assert_eq!(titles(&scan(&folder, &mut s)), ["A"]);
+    assert_eq!(store(&home).quotes(&book).len(), 1);
+}

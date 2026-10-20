@@ -17,5 +17,6 @@ imagesize = "0.15.0"
 memmap2 = "0.9.11"
 quick-xml = "0.42.0"
 read-fonts = "0.45"
+sha2 = "0.11.1"
 zip = { version = "9.0.3", default-features = false, features = ["deflate"] }
 

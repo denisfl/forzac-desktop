@@ -17,6 +17,27 @@ Left for 1.0: `release-1-0` (proposal only). Nothing is published yet; the 0.1.0
 later, syncing with the Android app through Dropbox-like services. `update-check` is done too, and on macOS
 `macos-auto-update` installs the update from the library's line (Sparkle; from 0.11.0).
 
+## After 0.11.0 — a library and syncing, after Calibre
+
+Agreed with the maintainer on 2026-10-20: "follow calibre-ebook.com — a library and syncing data with readers". In this
+order; the library's screens (17–19) are designed after the UX review (`docs/ux-review.md`). Done: `book-identity`
+(2026-10-20).
+
+| # | Change | What | Done when | Size |
+|---|---|---|---|---|
+| 15 | `book-identity` | The Android app's book id (the first 16 bytes of the file's SHA-256, in hex) instead of FNV-1a over parts of the file; the state's books, bookmarks and highlights moved to the new ids once | A book read in 0.11.0 opens where it was left, with its bookmarks and highlights; a file has the same id on Android and the desktop | 2 d |
+| 16 | `folder-import` | Importing a whole folder, subfolders included, from the file dialog or a drop: copies into the Books folder, no duplicates, a count at the end | A folder of 300 books in subfolders imports without blocking the window; a second import adds nothing | 3 d |
+| 17 | `library-metadata` | Series and number, genres, language and year from FB2, FB3 and EPUB; sorting and grouping (Recent, Author, Series, Title); search over series too; a book card with the annotation | 500 books group by author and by series, a series in its order | 1–1.5 w |
+| 18 | `library-shelves` | The reader's own shelves and the automatic ones (Reading, Finished, Not started) | A book put on a shelf stays there after a restart | 1 w |
+| 19 | `metadata-editing` | Editing title, authors, series and genre; kept by Forzac beside the reading state, book files untouched (`books-folder`) | An edited book sorts and groups by the edited fields; its file is byte for byte the same | 4–5 d |
+| 20 | `books-folder-setting` | Choosing the Books folder in the settings (needed to keep the books in Dropbox, iCloud Drive or Syncthing), offering to move the books there | Switching to a folder in Dropbox keeps every book's position | 2–3 d |
+| 21 | `send-to-kindle` | FB2/FB3 → EPUB 3 (cover, contents, notes with links back, the language for the Kindle's hyphenation), saved as a file or copied to a Kindle connected over USB (the maintainer's is older than 2024: a mass storage disk). First check on that Kindle whether it shows an EPUB copied into `documents/`; only if not, write AZW3 instead (+1–1.5 w) | A converted FB2 opens on the maintainer's Kindle with its cover, contents and notes | 1.5 w |
+| 22 | `sync-format` | A shared format in a synced folder (Dropbox, iCloud Drive, Google Drive, Syncthing; no server of our own): each device writes only its own file and reads the others', merged per item by time, deletions kept as tombstones; reading position, bookmarks, highlights, edited metadata, shelves. A position is (chapter, block, offset in code points) with the share read and a short text fragment: the desktop counts UTF-8 bytes and Android UTF-16 units, and the two parsers may number blocks differently. First between the Mac and the Pi 5 | A position, a bookmark and a highlight made on the Mac show on the Pi 5 through Dropbox, and nothing is lost when both changed offline | 1.5 w |
+
+Then, in the Android repository: the same format, through Syncthing or a folder chosen with the system picker (Dropbox
+and Google Drive keep no synced folder on Android; a direct Dropbox client only if that proves too weak), and the
+reading log once the desktop has one.
+
 ## Test hardware
 
 Plans count only on what is at hand:

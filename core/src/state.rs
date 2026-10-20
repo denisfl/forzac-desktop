@@ -17,7 +17,7 @@
 //! the file and changes only its own entries, then replaces the file atomically, so other processes' writes survive.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -214,6 +214,50 @@ impl Store {
         self.write(|saved| saved.books.retain(|e| e.id != id))
     }
 
+    /// Renames book ids, old to new, in the entries, bookmarks, highlights and the Books folder's files
+    /// (`book-identity`). Data already under a new id is merged; of two entries for one id the later opened stays.
+    /// Nothing is written when no old id is in use.
+    pub fn rename_ids(&mut self, ids: &HashMap<String, String>) -> io::Result<()> {
+        let (s, old) = (&self.saved, |id: &String| ids.contains_key(id));
+        let used = s.books.iter().any(|e| old(&e.id))
+            || s.bookmarks.keys().any(old)
+            || s.quotes.keys().any(old)
+            || s.files.iter().any(|f| old(&f.id));
+        if !used {
+            return Ok(());
+        }
+        self.write(|saved| {
+            let rename = |id: &mut String| {
+                if let Some(new) = ids.get(id) {
+                    id.clone_from(new);
+                }
+            };
+            saved.books.iter_mut().for_each(|e| rename(&mut e.id));
+            saved.files.iter_mut().for_each(|f| rename(&mut f.id));
+            let mut latest: HashMap<String, u64> = HashMap::new();
+            for e in &saved.books {
+                let t = latest.entry(e.id.clone()).or_default();
+                *t = (*t).max(e.opened);
+            }
+            let mut seen = HashSet::new();
+            saved.books.retain(|e| e.opened == latest[&e.id] && seen.insert(e.id.clone()));
+            for (old, new) in ids {
+                if let Some(marks) = saved.bookmarks.remove(old) {
+                    let all = saved.bookmarks.entry(new.clone()).or_default();
+                    all.extend(marks);
+                    all.sort();
+                    all.dedup();
+                }
+                if let Some(quotes) = saved.quotes.remove(old) {
+                    let all = saved.quotes.entry(new.clone()).or_default();
+                    all.extend(quotes);
+                    all.sort();
+                    all.dedup();
+                }
+            }
+        })
+    }
+
     /// Re-reads the file, applies `change`, and replaces the file with the result.
     fn write(&mut self, change: impl FnOnce(&mut Saved)) -> io::Result<()> {
         let mut saved = read(&self.path);
@@ -359,9 +403,16 @@ fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
-/// The identity of a book file: FNV-1a 64 over its length, first 64 KiB and last 64 KiB. Cheap for any size and
-/// stable across Rust versions.
+/// The identity of a book file, the Android app's (`BookImport.idOf`): the first 16 bytes of the SHA-256 of the whole
+/// file in lowercase hex, so the same file is the same book on both.
 pub fn book_id(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)[..16].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The id of 0.11.0 and before: FNV-1a 64 over the file's length, first 64 KiB and last 64 KiB. Only for moving old
+/// states to [`book_id`] (`library::books_folder`).
+pub fn legacy_id(bytes: &[u8]) -> String {
     const PART: usize = 64 * 1024;
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     let mut feed = |data: &[u8]| {

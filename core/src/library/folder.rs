@@ -1,34 +1,69 @@
 //! The Books folder (`books-folder`): where it is, the names of the copies, reading the folder for the library with a
 //! cache in the state, copying a book in, and moving the 0.9.0 library in once.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use crate::i18n::Language;
-use crate::state::{Cached, Entry, Store, book_id};
+use crate::state::{Cached, Entry, Store, book_id, legacy_id};
 
 /// The setting that remembers the folder; unset until the folder is made and the library moved in.
 pub const FOLDER: &str = "books.folder";
+/// The setting that marks a state whose book ids are SHA-256 (`book-identity`); unset in states of 0.11.0 and before.
+const IDS: &str = "books.ids";
 /// The longest name of a copy, in characters, before ` (2)` and the extension.
 const NAME_CHARS: usize = 120;
 /// Extensions of the books the library reads, longest first: `.fb2.zip` is one extension.
 const EXTENSIONS: [&str; 4] = [".fb2.zip", ".fb2", ".fb3", ".epub"];
 
 /// The Books folder: the remembered one, else `~/Книги` (a Russian interface) or `~/Books` in `home`, made when missing.
-/// The first time, the remembered books are moved in ([`move_in`]) before the folder is remembered.
+/// The first time, the remembered books are moved in ([`move_in`]) before the folder is remembered; a state of 0.11.0
+/// or before is moved to the new book ids once ([`move_ids`]).
 pub fn books_folder(home: &Path, language: Language, store: &mut Store) -> io::Result<PathBuf> {
     if let Some(folder) = store.setting(FOLDER) {
         let folder = PathBuf::from(folder);
         std::fs::create_dir_all(&folder)?;
+        move_ids(&folder, store);
         return Ok(folder);
     }
     let folder = home.join(if language == Language::Russian { "Книги" } else { "Books" });
     std::fs::create_dir_all(&folder)?;
+    move_ids(&folder, store);
     move_in(&folder, store);
     store.set_setting(FOLDER, &folder.to_string_lossy())?;
     Ok(folder)
+}
+
+/// Renames the state's FNV ids of 0.11.0 and before to SHA-256 ids, once: every remembered book and every file of the
+/// folder whose file still has the old id is hashed again. Books whose files are gone keep their old ids until the
+/// folder scan sees their files again.
+fn move_ids(folder: &Path, store: &mut Store) {
+    if store.setting(IDS).is_some() {
+        return;
+    }
+    let files = store.files().iter().filter(|f| !f.id.is_empty()).map(|f| (f.id.clone(), folder.join(&f.name)));
+    let places: Vec<(String, PathBuf)> = files.chain(store.entries().iter().map(|e| (e.id.clone(), e.path.clone()))).collect();
+    let mut ids = HashMap::new();
+    for (old, path) in places {
+        if ids.contains_key(&old) {
+            continue;
+        }
+        if let Ok(bytes) = std::fs::read(&path)
+            && legacy_id(&bytes) == old
+        {
+            ids.insert(old, book_id(&bytes));
+        }
+    }
+    // A cached file that could not be hashed is read again by the next scan, which renames what its old id holds.
+    let files: Vec<Cached> = store.files().iter().filter(|f| f.id.is_empty() || ids.contains_key(&f.id)).cloned().collect();
+    if files.len() != store.files().len() {
+        let _ = store.set_files(files);
+    }
+    if store.rename_ids(&ids).is_ok() {
+        let _ = store.set_setting(IDS, "sha256");
+    }
 }
 
 /// The remembered folder, when it has been made.
@@ -87,22 +122,25 @@ fn mtime(meta: &std::fs::Metadata) -> u64 {
     meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos() as u64)
 }
 
-/// What `path` holds: its id, title and authors; an empty id when it is not a readable book.
-fn read_file(name: String, meta: &std::fs::Metadata, path: &Path) -> Cached {
+/// What `path` holds: its id, title and authors, and its id of 0.11.0 and before ([`legacy_id`]); an empty id when it
+/// is not a readable book.
+fn read_file(name: String, meta: &std::fs::Metadata, path: &Path) -> (Cached, Option<String>) {
     let (size, mtime) = (meta.len(), mtime(meta));
-    let book = std::fs::read(path).ok().and_then(|bytes| crate::parse(&bytes).ok());
-    match book {
-        Some(b) => Cached { name, size, mtime, id: b.id, title: b.title, authors: b.authors.join(", ") },
-        None => Cached { name, size, mtime, id: String::new(), title: String::new(), authors: String::new() },
+    let bytes = std::fs::read(path).ok();
+    match bytes.as_deref().and_then(|b| crate::parse(b).ok().map(|book| (book, legacy_id(b)))) {
+        Some((b, old)) => (Cached { name, size, mtime, id: b.id, title: b.title, authors: b.authors.join(", ") }, Some(old)),
+        None => (Cached { name, size, mtime, id: String::new(), title: String::new(), authors: String::new() }, None),
     }
 }
 
 /// Reads the folder's books (FB2, FB2.ZIP, FB3, EPUB at its top level; not dotfiles, not subfolders), parsing only the
 /// files that are new or changed since the cache in `store`, which is written once when anything changed. Unreadable
-/// files are ignored; files with one id count once.
+/// files are ignored; files with one id count once. Data a new file's old id still holds (a book put back from the
+/// Trash after the move to new ids) is renamed to its new id.
 fn folder_files(folder: &Path, store: &mut Store) -> Vec<Cached> {
     let mut files = Vec::new();
     let mut changed = false;
+    let mut ids = HashMap::new();
     for item in std::fs::read_dir(folder).into_iter().flatten().flatten() {
         let Ok(name) = item.file_name().into_string() else { continue };
         if name.starts_with('.') || extension(&name).is_none() {
@@ -117,7 +155,11 @@ fn folder_files(folder: &Path, store: &mut Store) -> Vec<Cached> {
             Some(c) => c.clone(),
             None => {
                 changed = true;
-                read_file(name, &meta, &item.path())
+                let (file, old) = read_file(name, &meta, &item.path());
+                if let Some(old) = old {
+                    ids.insert(old, file.id.clone());
+                }
+                file
             }
         });
     }
@@ -125,6 +167,7 @@ fn folder_files(folder: &Path, store: &mut Store) -> Vec<Cached> {
     if changed || files.len() != store.files().len() {
         let _ = store.set_files(files.clone());
     }
+    let _ = store.rename_ids(&ids);
     files
 }
 

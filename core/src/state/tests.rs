@@ -176,16 +176,57 @@ fn a_forgotten_book_keeps_its_bookmarks_and_highlights() {
 }
 
 #[test]
-fn book_ids_depend_on_content() {
+fn book_ids_are_the_android_apps() {
+    // SHA-256("abc") = ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad; Android keeps 16 bytes.
+    assert_eq!(book_id(b"abc"), "ba7816bf8f01cfea414140de5dae2223");
     let a = vec![7u8; 200_000];
-    let mut b = a.clone();
-    b[199_999] = 8; // the end differs
     let mut c = a.clone();
-    c[100_000] = 8; // only the middle differs: the same id, by design
-    assert_ne!(book_id(&a), book_id(&b));
-    assert_eq!(book_id(&a), book_id(&c));
-    assert_ne!(book_id(b"short"), book_id(b"shorter"));
-    assert_eq!(book_id(b"short").len(), 16);
+    c[100_000] = 8; // only the middle differs: unlike the old id, another book
+    assert_ne!(book_id(&a), book_id(&c));
+    assert_eq!(book_id(&a), book_id(&a.clone()));
+    assert_eq!(legacy_id(&a), legacy_id(&c), "the old id skipped the middle");
+    assert_eq!(legacy_id(b"short").len(), 16);
+}
+
+#[test]
+fn ids_are_renamed_everywhere() {
+    let file = dir().join("state");
+    let mut store = Store::open(&file);
+    let (old, new) = (book("0123456789abcdef", &[4]), book("ffffffffffffffffffffffffffffffff", &[4]));
+    store.save_position(&old, Path::new("/books/a.fb2"), at(0, 2, 0), false).unwrap();
+    store.set_bookmarks(&old, &[at(0, 1, 0)]).unwrap();
+    store.set_quotes(&old, &[(at(0, 1, 0), at(0, 1, 4))]).unwrap();
+    store.set_bookmarks(&new, &[at(0, 3, 0)]).unwrap();
+    let cached = Cached { name: "a.fb2".into(), size: 1, mtime: 1, id: old.id.clone(), title: "A".into(), authors: String::new() };
+    store.set_files(vec![cached]).unwrap();
+
+    let ids = HashMap::from([(old.id.clone(), new.id.clone())]);
+    store.rename_ids(&ids).unwrap();
+    let store = Store::open(&file);
+    assert_eq!(store.position(&new, Path::new("/elsewhere.fb2")), Some(at(0, 2, 0)));
+    assert_eq!(store.bookmarks(&new), [at(0, 1, 0), at(0, 3, 0)], "merged with the bookmarks already there");
+    assert_eq!(store.quotes(&new), [(at(0, 1, 0), at(0, 1, 4))]);
+    assert!(store.bookmarks(&old).is_empty());
+    assert_eq!(store.files()[0].id, new.id);
+    assert_eq!(store.entries().len(), 1);
+
+    let before = std::fs::metadata(&file).unwrap().modified().unwrap();
+    let mut store = Store::open(&file);
+    store.rename_ids(&ids).unwrap();
+    assert_eq!(std::fs::metadata(&file).unwrap().modified().unwrap(), before, "nothing to rename, nothing written");
+}
+
+#[test]
+fn of_two_entries_for_one_id_the_later_opened_stays() {
+    let file = dir().join("state");
+    let mut store = Store::open(&file);
+    let (old, new) = (book("0123456789abcdef", &[4]), book("ffffffffffffffffffffffffffffffff", &[4]));
+    store.save_position(&old, Path::new("/books/old.fb2"), at(0, 1, 0), false).unwrap();
+    store.save_position(&new, Path::new("/books/new.fb2"), at(0, 3, 0), false).unwrap();
+    store.write(|saved| saved.books[0].opened -= 10).unwrap();
+    store.rename_ids(&HashMap::from([(old.id.clone(), new.id.clone())])).unwrap();
+    assert_eq!(store.entries().len(), 1);
+    assert_eq!(store.position(&new, Path::new("/x.fb2")), Some(at(0, 3, 0)));
 }
 
 #[test]
