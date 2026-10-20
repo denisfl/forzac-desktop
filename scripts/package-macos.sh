@@ -10,8 +10,10 @@ name=Forzac-$version-macos-arm64.dmg
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 ditto "$root/macos/build/Forzac.app" "$stage/Forzac.app"
-# The committed Info.plist keeps the development version; the release's goes into the copy, which is signed again.
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$stage/Forzac.app/Contents/Info.plist"
+# The committed Info.plist keeps the development version; the release's goes into the copy, which is signed again
+# (CFBundleVersion is what Sparkle compares).
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" -c "Set :CFBundleVersion $version" \
+  "$stage/Forzac.app/Contents/Info.plist"
 codesign --force --sign - --identifier app.truenrth.forzac "$stage/Forzac.app"
 codesign --verify --deep --strict "$stage/Forzac.app"
 ln -s /Applications "$stage/Applications"

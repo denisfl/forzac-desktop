@@ -110,7 +110,8 @@ OS 13 (arm64): `sudo apt install ./forzac-linux-arm64.deb`, made by `scripts/pac
 in new windows of that process.
 
 The release archives and the macOS app look for a newer release on GitHub at most once a day, when the library
-opens, and offer it in one line there. Packages leave updates to their package manager: a build whose
+opens, and offer it in one line there; on macOS a click installs it (Sparkle, from the release's EdDSA-signed disk
+image) and restarts the app. Packages leave updates to their package manager: a build whose
 `share/forzac` holds a file named `packaged` (the AUR packages and the `.deb` install it) never asks.
 
 ## Default reader on Linux
@@ -125,4 +126,5 @@ xdg-mime default app.truenrth.forzac.desktop application/epub+zip application/x-
 ## Licences
 
 The code is licensed under the [Mozilla Public License 2.0](LICENSE). Bundled: PT Serif, Literata, Source Serif 4 and PT Sans — SIL Open Font License 1.1 (`OFL.txt` in each `assets/fonts/` folder); Russian hyphenation patterns — LPPL 1.2 or later, English — free use
-with the notice kept (`assets/hyph/*.lic.txt`).
+with the notice kept (`assets/hyph/*.lic.txt`). The macOS app embeds [Sparkle](https://sparkle-project.org) — MIT
+(`Contents/Resources/licenses/Sparkle-LICENSE`).

@@ -600,7 +600,15 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         searchButton.onClick = { [weak self] in self?.setSearching(true) }
         closeButton.onClick = { [weak self] in self?.setSearching(false) }
         openButton.onClick = { [weak self] in self?.chooseFile() }
-        updateText.onClick = { NSWorkspace.shared.open(URL(string: String(cString: forzac_update_page()))!) }
+        // "install" (macos-auto-update) until it fails, then "download" from the site.
+        updateText.onClick = {
+            switch Installer.shared.phase {
+            case .offered: Installer.shared.install()
+            case .installing: break
+            case .failed: NSWorkspace.shared.open(URL(string: String(cString: forzac_update_page()))!)
+            }
+        }
+        Installer.shared.onChange = { [weak self] in self?.showUpdate() }
         updateClose.attributedStringValue = NSAttributedString(string: "×", attributes: [.font: interfaceFont(18), .foregroundColor: nsColor(palette.muted)])
         updateClose.sizeToFit()
         updateClose.onClick = { [weak self] in
@@ -935,7 +943,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         // The update line next to the buttons, unless it would reach the brand.
         let fits = hasUpdate && !searching && right - 4 - updateClose.frame.width - 6 - updateText.frame.width >= brandName.frame.maxX + 24
         updateText.isHidden = !fits
-        updateClose.isHidden = !fits
+        updateClose.isHidden = !fits || Installer.shared.phase == .installing
         if fits {
             updateClose.frame.origin = CGPoint(x: right - 4 - updateClose.frame.width, y: headY + (48 - updateClose.frame.height) / 2)
             updateText.frame.origin = CGPoint(x: updateClose.frame.minX - 6 - updateText.frame.width, y: headY + (48 - updateText.frame.height) / 2)
@@ -995,9 +1003,15 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
 
     private func updateNotice() {
         guard let version = forzac_update_notice(state) else { hasUpdate = false; return }
-        let text = NSMutableAttributedString(string: fill(tr("Version {version} is out"), ["version": String(cString: version)]) + " — ",
-                                             attributes: [.font: interfaceFont(13), .foregroundColor: nsColor(palette.muted)])
-        text.append(NSAttributedString(string: tr("download"), attributes: [.font: interfaceFont(13), .foregroundColor: nsColor(palette.link)]))
+        let muted: [NSAttributedString.Key: Any] = [.font: interfaceFont(13), .foregroundColor: nsColor(palette.muted)]
+        let text: NSMutableAttributedString
+        if Installer.shared.phase == .installing {
+            text = NSMutableAttributedString(string: fill(tr("Installing version {version}…"), ["version": String(cString: version)]), attributes: muted)
+        } else {
+            text = NSMutableAttributedString(string: fill(tr("Version {version} is out"), ["version": String(cString: version)]) + " — ", attributes: muted)
+            let link = Installer.shared.phase == .offered ? tr("install") : tr("download")
+            text.append(NSAttributedString(string: link, attributes: [.font: interfaceFont(13), .foregroundColor: nsColor(palette.link)]))
+        }
         updateText.attributedStringValue = text
         updateText.sizeToFit()
         hasUpdate = true

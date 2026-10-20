@@ -62,12 +62,21 @@ jobs:
         with:
           targets: aarch64-apple-darwin
       - run: macos/build.sh
-      - name: Disk image
-        run: scripts/package-macos.sh "${GITHUB_REF_NAME#v}"
+      # The appcast the app installs updates from, signed with the EdDSA key (docs/publishing.md); no release without it.
+      - name: Disk image and appcast
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          [ -n "$SPARKLE_ED_PRIVATE_KEY" ] || { echo "::error::The SPARKLE_ED_PRIVATE_KEY secret is missing"; exit 1; }
+          version=${GITHUB_REF_NAME#v}
+          scripts/package-macos.sh "$version"
+          scripts/appcast.sh "$version" "Forzac-$version-macos-arm64.dmg" > appcast.xml
       - uses: actions/upload-artifact@v4
         with:
           name: macos-arm64
-          path: Forzac-*-macos-arm64.dmg*
+          path: |
+            Forzac-*-macos-arm64.dmg*
+            appcast.xml
 
   release:
     name: Draft release

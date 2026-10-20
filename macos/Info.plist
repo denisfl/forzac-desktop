@@ -15,6 +15,11 @@
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <!-- Updates (macos-auto-update): Sparkle installs the latest release's signed disk image when the library's
+       "install" is clicked; it never checks on its own (the core's daily check does). -->
+  <key>SUFeedURL</key><string>https://github.com/denisfl/forzac-desktop/releases/latest/download/appcast.xml</string>
+  <key>SUPublicEDKey</key><string>NZGAqdxEDb4tFmAJwKTZcI3/JH2aekxc7kWwUWlnDQU=</string>
+  <key>SUEnableAutomaticChecks</key><false/>
   <key>NSHumanReadableCopyright</key><string>Mozilla Public License 2.0</string>
   <key>CFBundleDocumentTypes</key>
   <array>

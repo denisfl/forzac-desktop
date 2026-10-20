@@ -14,7 +14,8 @@ Left for 1.0: `release-1-0` (proposal only). Nothing is published yet; the 0.1.0
 
 **After 0.9.0 (released 2026-10-19).** The maintainer's direction is a Calibre-like library: first the Books folder
 (`books-folder`, done), then the library over it, sending books to a Kindle (FB2 → EPUB and Send to Kindle) and,
-later, syncing with the Android app through Dropbox-like services. `update-check` is done too.
+later, syncing with the Android app through Dropbox-like services. `update-check` is done too, and on macOS
+`macos-auto-update` installs the update from the library's line (Sparkle; from 0.11.0).
 
 ## Test hardware
 

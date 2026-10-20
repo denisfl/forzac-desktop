@@ -296,6 +296,8 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Open a book", "Открыть книгу"),
     ("Version {version} is out", "Вышла версия {version}"),
     ("download", "скачать"),
+    ("install", "установить"),
+    ("Installing version {version}…", "Устанавливается версия {version}…"),
     ("Read books right on your computer", "Читайте книги прямо на\u{a0}компьютере"),
     (
         "Open a book file — a copy goes into your Books folder, the original stays where it is.",

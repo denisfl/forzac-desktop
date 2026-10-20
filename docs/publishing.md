@@ -18,6 +18,7 @@ links never change; the version stays inside (the DMG's volume, the archives' to
 | `forzac-linux-x86_64.tar.gz` | AUR `forzac-bin`, any x86_64 Linux with GTK 4.14+ | `scripts/package-linux.sh` |
 | `forzac-linux-aarch64.tar.gz` | AUR `forzac-bin` on ARM, any aarch64 Linux with GTK 4.14+ | `scripts/package-linux.sh` |
 | `forzac-linux-arm64.deb` | Debian 13, Raspberry Pi OS 13 (arm64) | `scripts/package-deb.sh` |
+| `appcast.xml` | the Mac app's updates (Sparkle): this version, the DMG's EdDSA signature | `scripts/appcast.sh` |
 | `forzac-desktop-X.Y.Z.tar.gz` | the source (MPL-2.0), the AUR `forzac` package | GitHub's tag archive (`git archive` locally) |
 | `SHA256SUMS` | checking any of the above | the release workflow (`sha256sum`) |
 
@@ -37,6 +38,12 @@ Sizes for 0.1.0: DMG 9.0 MB, archives 6.3 and 6.4 MB, `.deb` 3.7 MB, source 5.0 
   Cloudflare would allow the files as site assets too (25 MiB per file; the biggest, the DMG, is 9 MB), but a deploy
   uploads exactly what is in `site/public/` and the binaries would have to live outside the Android repository's git.
 - **The download links are on the site's main page**, under "Get it on Google Play" (section 6).
+- **The Mac app installs its updates itself** (the maintainer, 2026-10-20; `macos-auto-update`): the library's
+  "install" makes Sparkle 2 fetch `releases/latest/download/appcast.xml`, download the DMG it names, check the DMG's
+  EdDSA signature against `SUPublicEDKey` in `macos/Info.plist`, replace the app and restart it. The appcast is a
+  release asset made by the workflow with the private key from the secret `SPARKLE_ED_PRIVATE_KEY`, so it goes live
+  when the draft is published. Ad hoc signing is enough: Sparkle accepts an update whose EdDSA signature verifies with
+  the same key, whatever its code-signing identity. 0.10.x has no Sparkle; 0.11.0 is installed by hand once.
 
 Below, `$REL` is `https://github.com/denisfl/forzac-desktop/releases/download/vX.Y.Z`.
 
@@ -50,6 +57,20 @@ Before the repository goes public, once:
   (`.github/workflows/ci.yml`); it has to be green before the first tag.
 - On GitHub: Settings › General — Issues on, Discussions and Wiki off unless wanted. The default read-only workflow
   token is enough: the release job asks for `contents: write` itself.
+
+The update key, once (the first two commands were run on 2026-10-20 on the M1, the public half is in
+`macos/Info.plist`; the secret is not set yet — the maintainer sets it before tagging 0.11.0). Sparkle's tools come with
+`macos/build.sh` (`macos/build/sparkle/bin/`):
+
+```bash
+macos/build/sparkle/bin/generate_keys --account forzac          # private key into the login Keychain, prints the public key
+(umask 077; macos/build/sparkle/bin/generate_keys --account forzac -x ~/keys/forzac-sparkle-ed25519)
+gh secret set SPARKLE_ED_PRIVATE_KEY < ~/keys/forzac-sparkle-ed25519
+```
+
+Keep `~/keys/forzac-sparkle-ed25519` backed up with the Android upload key, never in a repository. Without it no later
+release can update the Mac apps already out (readers would download by hand again). A tag pushed without the secret
+fails in the macOS job instead of publishing a release without an appcast.
 
 ## 2. Before the release
 
@@ -72,6 +93,12 @@ The checklist; every item is done on hardware, not in containers (`CLAUDE.md`, `
 - [ ] Mac, before the first public DMG (moved here from `macos-release`): the DMG downloaded from the draft release on a
       **fresh macOS user account**, opened by following the line under the site's macOS link (the Gatekeeper step), on
       macOS 14 and on a macOS 15 Mac.
+- [ ] Mac, the update: the previous release, installed from its DMG by dragging it in Finder and opened by the
+      first-open step, shows "Version X.Y.Z is out — install" once the release is published; "install" restarts it as
+      X.Y.Z without asking anything. Before publishing, try it against the draft's files from `localhost`
+      (`defaults write app.truenrth.forzac SUFeedURL http://127.0.0.1:8765/appcast.xml`, an appcast made by
+      `scripts/appcast.sh X.Y.Z Forzac-macos-arm64.dmg http://127.0.0.1:8765/Forzac-macos-arm64.dmg`, the line shown
+      by setting `update-latest` in the state file; `defaults delete app.truenrth.forzac SUFeedURL` afterwards).
 - [ ] Release notes (`docs/releases/X.Y.Z.md`, used as the GitHub release's text): what is new, what is not checked
       (Hyprland and x86_64 hardware: built and installed in a container only), known issues.
 
@@ -132,9 +159,9 @@ docker run --rm --platform linux/amd64 -v "$PWD":/src -v forzac-amd64-target:/ta
   bash -c "cargo build --release --locked -q -p forzac-gtk --manifest-path /src/Cargo.toml \
    && /src/scripts/package-linux.sh forzac-$V-linux-x86_64"
 
-# Mac: the app signed ad hoc, the DMG and its own .sha256
+# Mac: the app signed ad hoc, the DMG and its own .sha256, the appcast (the key from the Keychain)
 macos/build.sh
-(cd dist && ../scripts/package-macos.sh $V)
+(cd dist && ../scripts/package-macos.sh $V && ../scripts/appcast.sh $V Forzac-$V-macos-arm64.dmg > appcast.xml)
 ```
 
 The release names and the checksums, as the workflow makes them, checked right away:
@@ -144,7 +171,7 @@ cd dist
 mv Forzac-$V-macos-arm64.dmg Forzac-macos-arm64.dmg && rm -f Forzac-$V-macos-arm64.dmg.sha256
 for a in x86_64 aarch64; do mv forzac-$V-linux-$a.tar.gz forzac-linux-$a.tar.gz; done
 mv forzac_${V}_arm64.deb forzac-linux-arm64.deb
-shasum -a 256 Forzac-macos-arm64.dmg forzac-linux-*.tar.gz forzac-linux-arm64.deb > SHA256SUMS
+shasum -a 256 Forzac-macos-arm64.dmg appcast.xml forzac-linux-*.tar.gz forzac-linux-arm64.deb > SHA256SUMS
 shasum -a 256 -c SHA256SUMS
 ```
 
@@ -155,7 +182,7 @@ them as in the checklist (step 2) before publishing.
 
 ```bash
 # after a local build (step 4) only; the workflow's draft has the files already:
-# gh release upload vX.Y.Z dist/*.dmg dist/forzac-linux-*.tar.gz dist/*.deb dist/SHA256SUMS
+# gh release upload vX.Y.Z dist/*.dmg dist/appcast.xml dist/forzac-linux-*.tar.gz dist/*.deb dist/SHA256SUMS
 gh release edit vX.Y.Z --notes-file docs/releases/X.Y.Z.md --draft=false --latest
 ```
 
@@ -166,6 +193,9 @@ mkdir -p /tmp/forzac-check && cd /tmp/forzac-check
 curl -fsSLO "$REL/SHA256SUMS"
 for f in $(awk '{print $2}' SHA256SUMS); do curl -fsSLO "$REL/$f"; done
 shasum -a 256 -c SHA256SUMS
+# the appcast that the Mac apps now see names this version and this DMG, with its size
+curl -fsSL https://github.com/denisfl/forzac-desktop/releases/latest/download/appcast.xml | grep -E 'shortVersionString|enclosure'
+stat -f %z Forzac-macos-arm64.dmg
 ```
 
 ## 6. The download links on the site
