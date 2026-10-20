@@ -307,6 +307,10 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Show the Books folder", "Показать папку «Книги»"),
     ("FB2, FB2.ZIP, FB3 and EPUB are supported.", "Поддерживаются FB2, FB2.ZIP, FB3 и\u{a0}EPUB."),
     ("Release the file to open it", "Отпустите файл, чтобы открыть"),
+    ("Add a Folder…", "Добавить папку…"),
+    ("Adding books… {n} of {m}", "Добавляю книги… {n} из\u{a0}{m}"),
+    ("No books in “{folder}”: FB2, FB3 or EPUB needed.", "В\u{a0}«{folder}» нет книг: нужны FB2, FB3 или EPUB."),
+    ("No books were added.", "Книги не добавлены."),
     ("Continue reading", "Продолжить"),
     ("Search", "Поиск"),
     ("Title or author", "Название или автор"),
@@ -396,7 +400,22 @@ const RUSSIAN: &[(&str, &str)] = &[
 ];
 
 /// English "other" form → Russian one, few, many.
-const PLURALS: &[(&str, [&str; 3])] = &[("{n} matches", ["{n} совпадение", "{n} совпадения", "{n} совпадений"])];
+const PLURALS: &[(&str, [&str; 3])] = &[
+    ("{n} matches", ["{n} совпадение", "{n} совпадения", "{n} совпадений"]),
+    ("Added {n} books.", ["Добавлена {n} книга.", "Добавлены {n} книги.", "Добавлено {n} книг."]),
+    (
+        "{n} files couldn't be read.",
+        ["{n} файл не\u{a0}удалось прочитать.", "{n} файла не\u{a0}удалось прочитать.", "{n} файлов не\u{a0}удалось прочитать."],
+    ),
+    (
+        "No new books in “{folder}”: all {n} are already in the library.",
+        [
+            "В\u{a0}«{folder}» нет новых книг: {n} книга уже в\u{a0}библиотеке.",
+            "В\u{a0}«{folder}» нет новых книг: все {n} уже в\u{a0}библиотеке.",
+            "В\u{a0}«{folder}» нет новых книг: все {n} уже в\u{a0}библиотеке.",
+        ],
+    ),
+];
 
 #[cfg(test)]
 mod tests;

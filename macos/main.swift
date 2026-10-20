@@ -518,20 +518,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         importQueue.async { [weak self] in
             guard let worker = self?.worker else { return }
             let folder = measuring ? nil : forzac_books_folder(worker, home).map { String(cString: $0) }
-            var n: UInt32 = 0
-            let list = forzac_library_books(worker, &n)!
-            let books = (0..<Int(n)).map { i in
-                let path = String(cString: list[i].path)
-                let title = String(cString: list[i].title)
-                return LibraryBook(id: String(cString: list[i].id), path: path, title: title.isEmpty ? URL(fileURLWithPath: path).lastPathComponent : title,
-                                   authors: String(cString: list[i].authors), progress: list[i].progress, opened: list[i].opened)
-            }
+            let books = LibraryBook.list(worker)
             DispatchQueue.main.async {
                 guard let self, let state = self.state else { return }
                 self.showingLibrary = false
                 forzac_state_reload(state)
                 let library = LibraryWindow(state: state, books: books, folder: folder, remembersFrame: !measuring) { [weak self] path in self?.openBook(path) }
                 self.library = library
+                library.onAddFolder = { [weak self] path in self?.importFolder(path) }
                 if !measuring { self.checkUpdate(state) }
                 // Closing the library with no book open quits (the app stays after its last book window: the library follows).
                 NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: library.window, queue: .main) { [weak self] _ in
@@ -555,6 +549,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// File › Add a Folder… (`folder-import`).
+    @objc func addFolder(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        if panel.runModal() == .OK, let url = panel.url { importFolder(url.path) }
+    }
+
+    /// Adds the books of the folder at `path` to the Books folder on the background queue (`forzac_import_folder`),
+    /// the library counting; then the library shows them, with a message when something was not added. The queue is
+    /// serial, so a second folder waits for the first.
+    func importFolder(_ path: String) {
+        guard let state, !measuring else { return }
+        guard let library else {
+            showLibrary(state) { [weak self] _ in self?.importFolder(path) }
+            return
+        }
+        library.addingStarted()
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        importQueue.async { [weak self, weak library] in
+            guard let worker = self?.worker else { return }
+            _ = forzac_books_folder(worker, home)
+            let progress = AddingProgress { done, found in DispatchQueue.main.async { library?.addingProgress(done: done, found: found) } }
+            let added = withExtendedLifetime(progress) {
+                forzac_import_folder(worker, path, { ctx, done, found in
+                    Unmanaged<AddingProgress>.fromOpaque(ctx!).takeUnretainedValue().report(Int(done), Int(found))
+                }, Unmanaged.passUnretained(progress).toOpaque())
+            }
+            let message = forzac_added_message(worker, added, URL(fileURLWithPath: path).lastPathComponent).map { String(cString: $0) }
+            let books = LibraryBook.list(worker)
+            DispatchQueue.main.async {
+                if let state = self?.state { forzac_state_reload(state) }
+                guard let library else { return }
+                library.addingEnded(books: books)
+                if let message {
+                    let alert = NSAlert()
+                    alert.messageText = message
+                    alert.beginSheetModal(for: library.window)
+                }
+            }
+        }
     }
 
     /// File › Show the Books folder: opens it in Finder (made first when missing).
@@ -670,7 +707,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel.allowsMultipleSelection = true
         panel.allowedContentTypes = []
         panel.allowsOtherFileTypes = true
-        if panel.runModal() == .OK { panel.urls.forEach { openBook($0.path) } }
+        panel.canChooseDirectories = true
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls {
+            if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true { importFolder(url.path) } else { openBook(url.path) }
+        }
     }
 
     @objc func showSettings(_ sender: Any?) { key?.run(.settings) }
@@ -741,7 +782,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recentMenu.delegate = self
         recentItem.submenu = recentMenu
         let close = NSMenuItem(title: tr("Close"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
-        submenu(tr("File"), [item(tr("Open…"), #selector(openDocument(_:)), "o"), recentItem, item(tr("Show the Books folder"), #selector(showBooksFolder(_:))),
+        submenu(tr("File"), [item(tr("Open…"), #selector(openDocument(_:)), "o"), item(tr("Add a Folder…"), #selector(addFolder(_:)), "o", [.command, .shift]),
+                             recentItem, item(tr("Show the Books folder"), #selector(showBooksFolder(_:))),
                              .separator(), close])
         let copy = NSMenuItem(title: tr("Copy"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         submenu(tr("Edit"), [
@@ -784,3 +826,9 @@ app.setActivationPolicy(.regular)
 let delegate = AppDelegate()
 app.delegate = delegate
 app.run()
+
+/// The progress callback's context for `forzac_import_folder`.
+final class AddingProgress {
+    let report: (Int, Int) -> Void
+    init(_ report: @escaping (Int, Int) -> Void) { self.report = report }
+}

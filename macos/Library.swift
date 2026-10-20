@@ -75,6 +75,19 @@ struct LibraryBook {
     let progress: Float
     /// False for a book in the folder never opened.
     let opened: Bool
+
+    /// The library's books (`forzac_library_books`): reads the Books folder, so on a background queue with a state
+    /// handle of its own.
+    static func list(_ state: OpaquePointer) -> [LibraryBook] {
+        var n: UInt32 = 0
+        let list = forzac_library_books(state, &n)!
+        return (0..<Int(n)).map { i in
+            let path = String(cString: list[i].path)
+            let title = String(cString: list[i].title)
+            return LibraryBook(id: String(cString: list[i].id), path: path, title: title.isEmpty ? URL(fileURLWithPath: path).lastPathComponent : title,
+                               authors: String(cString: list[i].authors), progress: list[i].progress, opened: list[i].opened)
+        }
+    }
 }
 
 /// A book's cover: its picture filling the box, or a generated one (the Android app's `GeneratedCover`). The view
@@ -534,6 +547,11 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     /// Covers being loaded or made; `onSettled` runs when none is left.
     private var pending = 0
     var onSettled: (() -> Void)? { didSet { settle() } }
+    /// Adds a dropped folder (`folder-import`); the app runs it and reports through `addingStarted` and the rest.
+    var onAddFolder: ((String) -> Void)?
+    /// Folders being added; "Adding books… N of M" stands in place of the search button meanwhile.
+    private var adding = 0
+    private let progressText: NSTextField
 
     private let scroll = NSScrollView()
     private let content = FlippedView()
@@ -563,6 +581,8 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         palette = themes[Int(forzac_settings_theme(&settings, systemIsDark()))]
         brandName = label(tr("Forzac"), bookFont("Literata", 22, bold: true), palette.ink)
         openButton = PillButton(tr("Open a book"), big: false, palette: palette)
+        progressText = label("", interfaceFont(15), palette.muted)
+        progressText.isHidden = true
         container = DropView(palette: palette)
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1040, height: 760), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init()
@@ -617,7 +637,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             self.showUpdate()
         }
         updateNotice()
-        for v in [brandIcon, brandName, searchField, searchButton, closeButton, openButton, updateText, updateClose] as [NSView] {
+        for v in [brandIcon, brandName, searchField, searchButton, closeButton, openButton, progressText, updateText, updateClose] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = true
             content.addSubview(v)
         }
@@ -628,7 +648,11 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         scroll.autoresizingMask = [.width, .height]
         container.addSubview(scroll)
         container.onResize = { [weak self] in self?.relayout() }
-        container.onDrop = { [weak self] urls in urls.forEach { self?.open($0.path) } }
+        container.onDrop = { [weak self] urls in
+            for url in urls {
+                if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true { self?.onAddFolder?(url.path) } else { self?.open(url.path) }
+            }
+        }
         window.contentView = container
         scroll.frame = container.bounds
 
@@ -763,7 +787,8 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         body = []
         items = []
         let empty = books.isEmpty
-        searchButton.isHidden = empty || searching
+        searchButton.isHidden = empty || searching || adding > 0
+        progressText.isHidden = adding == 0 || searching
         closeButton.isHidden = !searching
         openButton.isHidden = empty || searching
         brandIcon.isHidden = searching
@@ -939,6 +964,11 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             b.frame = CGRect(x: right - 44, y: headY + 2, width: 44, height: 44)
             right -= 54
         }
+        if !progressText.isHidden {
+            progressText.sizeToFit()
+            progressText.frame.origin = CGPoint(x: right - progressText.frame.width, y: headY + (48 - progressText.frame.height) / 2)
+            right -= progressText.frame.width + 16
+        }
         searchField.frame = CGRect(x: x, y: headY + 5, width: max(right - x, 100), height: 38)
         // The update line next to the buttons, unless it would reach the brand.
         let fits = hasUpdate && !searching && right - 4 - updateClose.frame.width - 6 - updateText.frame.width >= brandName.frame.maxX + 24
@@ -989,6 +1019,28 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     }
 
     private func chooseFile() { (NSApp.delegate as? AppDelegate)?.openDocument(nil) }
+
+    // MARK: Adding a folder (folder-import)
+
+    func addingStarted() {
+        adding += 1
+        progressText.stringValue = ""
+        rebuild()
+    }
+
+    func addingProgress(done: Int, found: Int) {
+        progressText.stringValue = fill(tr("Adding books… {n} of {m}"), ["n": "\(done)", "m": "\(found)"])
+        relayout()
+    }
+
+    /// One folder is added: the library shows `books` (the folder read again), the first selected.
+    func addingEnded(books: [LibraryBook]) {
+        adding -= 1
+        self.books = books
+        selected = 0
+        loadCovers()
+        rebuild()
+    }
 
     /// Opens the Books folder in Finder.
     private func showFolder() {

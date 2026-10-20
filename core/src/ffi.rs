@@ -4,7 +4,7 @@
 //! one and a few around it, for "Scroll"). Pointers in a [`ForzacPage`] stay valid until the next call on the same
 //! document; strings and lists a function returns stay valid as long as the function says.
 
-use std::ffi::{CStr, CString, c_char};
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -1575,6 +1575,8 @@ pub struct State {
     notice: CString,
     /// The Books folder or an imported book's path, as last returned.
     path: CString,
+    /// The message after adding a folder, as last returned.
+    message: CString,
 }
 
 /// A book of the library.
@@ -1625,6 +1627,7 @@ pub unsafe extern "C" fn forzac_state_open(path: *const c_char) -> *mut State {
         recent: Vec::new(),
         recent_strings: Vec::new(),
         notice: CString::default(),
+        message: CString::default(),
         path: CString::default(),
     }))
 }
@@ -1712,6 +1715,57 @@ pub unsafe extern "C" fn forzac_import(state: *mut State, path: *const c_char, e
             }
             std::ptr::null()
         }
+    }
+}
+
+/// What adding a folder did (`library::Added`).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ForzacAdded {
+    pub added: u32,
+    pub known: u32,
+    pub failed: u32,
+}
+
+/// Adds the folder `src` to the Books folder (`library::import_folder`): `progress(ctx, done, found)` hears the count
+/// on the calling thread before each file and at the end. Nothing is added before [`forzac_books_folder`] made the
+/// folder. Off the main thread, with a state handle of its own.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`]; `src` a valid NUL-terminated string; `ctx` whatever `progress` expects.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_import_folder(
+    state: *mut State,
+    src: *const c_char,
+    progress: Option<extern "C" fn(*mut c_void, u32, u32)>,
+    ctx: *mut c_void,
+) -> ForzacAdded {
+    let state = unsafe { &mut *state };
+    let src = PathBuf::from(unsafe { str(src) }.into_owned());
+    let Some(folder) = crate::library::remembered_folder(&state.store) else { return ForzacAdded { added: 0, known: 0, failed: 0 } };
+    let added = crate::library::import_folder(&src, &folder, &mut state.store, |done, found| {
+        if let Some(progress) = progress {
+            progress(ctx, done as u32, found as u32);
+        }
+    });
+    ForzacAdded { added: added.added as u32, known: added.known as u32, failed: added.failed as u32 }
+}
+
+/// The message after adding the folder named `name` (`library::Added::message`), or null when every book found was
+/// added; valid until the next call on `state`.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`]; `name` a valid NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_added_message(state: *mut State, added: ForzacAdded, name: *const c_char) -> *const c_char {
+    let state = unsafe { &mut *state };
+    let added = crate::library::Added { added: added.added as usize, known: added.known as usize, failed: added.failed as usize };
+    match added.message(&unsafe { str(name) }) {
+        Some(message) => {
+            state.message = cstring(&message);
+            state.message.as_ptr()
+        }
+        None => std::ptr::null(),
     }
 }
 

@@ -21,7 +21,7 @@ later, syncing with the Android app through Dropbox-like services. `update-check
 
 Agreed with the maintainer on 2026-10-20: "follow calibre-ebook.com — a library and syncing data with readers". In this
 order; the library's screens (17–19) are designed after the UX review (`docs/ux-review.md`). Done: `book-identity`
-(2026-10-20).
+and `folder-import` (2026-10-20).
 
 | # | Change | What | Done when | Size |
 |---|---|---|---|---|
@@ -31,7 +31,7 @@ order; the library's screens (17–19) are designed after the UX review (`docs/u
 | 18 | `library-shelves` | The reader's own shelves and the automatic ones (Reading, Finished, Not started) | A book put on a shelf stays there after a restart | 1 w |
 | 19 | `metadata-editing` | Editing title, authors, series and genre; kept by Forzac beside the reading state, book files untouched (`books-folder`) | An edited book sorts and groups by the edited fields; its file is byte for byte the same | 4–5 d |
 | 20 | `books-folder-setting` | Choosing the Books folder in the settings (needed to keep the books in Dropbox, iCloud Drive or Syncthing), offering to move the books there | Switching to a folder in Dropbox keeps every book's position | 2–3 d |
-| 21 | `send-to-kindle` | FB2/FB3 → EPUB 3 (cover, contents, notes with links back, the language for the Kindle's hyphenation), saved as a file or copied to a Kindle connected over USB (the maintainer's is older than 2024: a mass storage disk). First check on that Kindle whether it shows an EPUB copied into `documents/`; only if not, write AZW3 instead (+1–1.5 w) | A converted FB2 opens on the maintainer's Kindle with its cover, contents and notes | 1.5 w |
+| 21 | `send-to-kindle` | FB2, FB3 and EPUB → AZW3 (KF8, the format a Kindle reads from its `documents/` folder: an EPUB copied there does not show, as the maintainer found on 2026-10-20, while Calibre's conversion does): cover, contents, notes with links back, the language for the Kindle's hyphenation; written by the core, copied to a Kindle connected over USB (the maintainer's is older than 2024: a mass storage disk) | A converted FB2 opens on the maintainer's Kindle with its cover, contents and notes, as Calibre's copy does | 2.5–3 w |
 | 22 | `sync-format` | A shared format in a synced folder (Dropbox, iCloud Drive, Google Drive, Syncthing; no server of our own): each device writes only its own file and reads the others', merged per item by time, deletions kept as tombstones; reading position, bookmarks, highlights, edited metadata, shelves. A position is (chapter, block, offset in code points) with the share read and a short text fragment: the desktop counts UTF-8 bytes and Android UTF-16 units, and the two parsers may number blocks differently. First between the Mac and the Pi 5 | A position, a bookmark and a highlight made on the Mac show on the Pi 5 through Dropbox, and nothing is lost when both changed offline | 1.5 w |
 
 Then, in the Android repository: the same format, through Syncthing or a folder chosen with the system picker (Dropbox

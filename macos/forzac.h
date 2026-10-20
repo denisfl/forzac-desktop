@@ -302,6 +302,18 @@ const char *forzac_books_folder(ForzacState *state, const char *home);
 const char *forzac_import(ForzacState *state, const char *path, uint32_t *error);
 const ForzacRecent *forzac_library_books(ForzacState *state, uint32_t *count);
 
+// Adding a folder (folder-import): forzac_import_folder copies the books in `src` and its subfolders into the Books
+// folder, calling `progress(ctx, done, found)` on the calling thread before each file and at the end; on a background
+// queue with a state handle of its own, after forzac_books_folder. forzac_added_message is the message for the reader
+// afterwards, null when every book found was added; valid until the next call on `state`.
+typedef struct {
+    uint32_t added;
+    uint32_t known;
+    uint32_t failed;
+} ForzacAdded;
+ForzacAdded forzac_import_folder(ForzacState *state, const char *src, void (*progress)(void *ctx, uint32_t done, uint32_t found), void *ctx);
+const char *forzac_added_message(ForzacState *state, ForzacAdded added, const char *name);
+
 // The library: search rank (lower first, -1 no match), generated covers, the empty state's sample page (lines: head,
 // title, subtitle, folio, paragraphs; valid for good).
 int32_t forzac_library_rank(const char *query, const char *title, const char *authors);

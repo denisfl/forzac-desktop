@@ -70,15 +70,14 @@ fn every_string_the_shells_ask_for_has_its_russian_and_none_is_left_over() {
         for path in files(&root.join(dir)) {
             if path.extension().is_some_and(|e| e == ext) && !path.to_string_lossy().contains("i18n") {
                 let source = std::fs::read_to_string(&path).unwrap();
-                for call in calls {
-                    asked_for.extend(asked(&source, call));
-                }
+                asked_for.extend(asked(&source, calls[0]));
+                // A count's English singular (its first literal) has no Russian of its own.
+                asked_for.extend(asked(&source, calls[1]).chunks(2).filter_map(|pair| pair.last().cloned()));
             }
         }
     }
     let plural_ones: Vec<&str> = PLURALS.iter().map(|p| p.0).collect();
-    let missing: Vec<&String> =
-        asked_for.iter().filter(|s| russian(s).is_none() && !plural_ones.contains(&s.as_str()) && !is_plural_one(s)).collect();
+    let missing: Vec<&String> = asked_for.iter().filter(|s| russian(s).is_none() && !plural_ones.contains(&s.as_str())).collect();
     assert!(missing.is_empty(), "no Russian for {missing:?}");
     let unused: Vec<&str> =
         RUSSIAN.iter().map(|e| e.0).chain(plural_ones.iter().copied()).filter(|e| !asked_for.iter().any(|a| a == e)).collect();
@@ -93,11 +92,6 @@ fn files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
         if path.is_dir() { out.extend(files(&path)) } else { out.push(path) }
     }
     out
-}
-
-/// The English singular of a plural entry ("{n} match"): it has no Russian of its own.
-fn is_plural_one(s: &str) -> bool {
-    PLURALS.iter().any(|p| p.0.starts_with("{n} ") && s.starts_with("{n} ") && !s.ends_with('s'))
 }
 
 #[test]

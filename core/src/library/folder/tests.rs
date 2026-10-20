@@ -347,3 +347,70 @@ fn a_book_put_back_after_the_move_brings_its_highlights() {
     assert_eq!(titles(&scan(&folder, &mut s)), ["A"]);
     assert_eq!(store(&home).quotes(&book).len(), 1);
 }
+
+// region folder-import
+
+#[test]
+fn a_folder_with_subfolders_is_added() {
+    let home = home();
+    let mut s = store(&home);
+    let folder = books_folder(&home, Language::English, &mut s).unwrap();
+    write(&folder.join("Known.fb2"), &fb2("Known", "", "known"));
+    let old = home.join("Old books");
+    write(&old.join("Tolstoy/War.fb2"), &fb2("War", "Leo", "war"));
+    write(&old.join("Tolstoy/Deep/Anna.fb2"), &fb2("Anna", "Leo", "anna"));
+    write(&old.join("Known again.fb2"), &fb2("Known", "", "known"));
+    write(&old.join("War copy.fb2"), &fb2("War", "Leo", "war"));
+    write(&old.join("broken.epub"), b"PK not a zip");
+    write(&old.join("notes.pdf"), b"%PDF-1.4");
+    write(&old.join(".hidden/Secret.fb2"), &fb2("Secret", "", "secret"));
+    let before = names(&old);
+
+    let mut seen = Vec::new();
+    let added = import_folder(&old, &folder, &mut s, |done, all| seen.push((done, all)));
+    assert_eq!(added, Added { added: 2, known: 2, failed: 1 });
+    assert_eq!(seen.first(), Some(&(0, 5)));
+    assert_eq!(seen.last(), Some(&(5, 5)));
+    assert_eq!(names(&folder), ["Known.fb2", "Leo — Anna.fb2", "Leo — War.fb2"]);
+    assert_eq!(names(&old), before, "the added folder is only read");
+    let mut s = store(&home);
+    assert_eq!(s.files().len(), 3, "the copies are remembered");
+    assert_eq!(titles(&scan(&folder, &mut s)).len(), 3);
+
+    let again = import_folder(&old, &folder, &mut s, |_, _| {});
+    assert_eq!(again, Added { added: 0, known: 4, failed: 1 });
+    assert_eq!(names(&folder).len(), 3);
+}
+
+#[test]
+fn adding_the_home_folder_skips_the_books_folder() {
+    let home = home();
+    let mut s = store(&home);
+    let folder = books_folder(&home, Language::English, &mut s).unwrap();
+    write(&folder.join("In.fb2"), &fb2("In", "", "in"));
+    write(&home.join("Downloads/Out.fb2"), &fb2("Out", "", "out"));
+    assert_eq!(book_files(&home, &folder), [home.join("Downloads/Out.fb2")]);
+    assert_eq!(import_folder(&home, &folder, &mut s, |_, _| {}), Added { added: 1, known: 0, failed: 0 });
+    assert_eq!(names(&folder), ["In.fb2", "Out.fb2"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn links_to_folders_are_not_followed() {
+    let home = home();
+    let src = home.join("src");
+    write(&src.join("a.fb2"), &fb2("A", "", "a"));
+    std::os::unix::fs::symlink(&src, src.join("loop")).unwrap();
+    assert_eq!(book_files(&src, &home.join("Books")), [src.join("a.fb2")]);
+}
+
+#[test]
+fn the_message_after_adding() {
+    crate::i18n::set_language(Language::English);
+    let m = |added, known, failed| Added { added, known, failed }.message("Old");
+    assert_eq!(m(3, 1, 0), None);
+    assert_eq!(m(12, 0, 3).unwrap(), "Added 12 books. 3 files couldn't be read.");
+    assert_eq!(m(0, 0, 1).unwrap(), "No books were added. 1 file couldn't be read.");
+    assert_eq!(m(0, 40, 0).unwrap(), "No new books in “Old”: all 40 are already in the library.");
+    assert_eq!(m(0, 0, 0).unwrap(), "No books in “Old”: FB2, FB3 or EPUB needed.");
+}

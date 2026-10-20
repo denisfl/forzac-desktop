@@ -217,22 +217,129 @@ pub fn import(src: &Path, folder: &Path, store: &mut Store) -> Result<PathBuf, c
     if let Some(copy) = scan(folder, store).into_iter().find(|e| e.id == id && e.path.starts_with(folder)) {
         return Ok(copy.path);
     }
-    let book = crate::parse(&bytes)?;
+    let copy = copy_in(src, &bytes, id, folder)?;
+    let path = folder.join(&copy.name);
+    let mut files = store.files().to_vec();
+    files.push(copy);
+    let _ = store.set_files(files);
+    Ok(path)
+}
+
+/// Writes `bytes`, read from `src` with the id `id`, into `folder` under its copy's name and returns what the folder's
+/// cache keeps of it. The copy is written to a dotfile and renamed into place, so a half-copied book never shows.
+fn copy_in(src: &Path, bytes: &[u8], id: String, folder: &Path) -> Result<Cached, crate::Error> {
+    let book = crate::parse(bytes)?;
     let original = src.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let fallback = if extension(&original).is_some() { "" } else { content_extension(&bytes) };
+    let fallback = if extension(&original).is_some() { "" } else { content_extension(bytes) };
     let name = file_name(&book.title, &book.authors, &original, fallback, |n| folder.join(n).exists());
     let (part, path) = (folder.join(format!(".{id}.part")), folder.join(&name));
-    let written = std::fs::write(&part, &bytes).and_then(|_| std::fs::rename(&part, &path));
+    let written = std::fs::write(&part, bytes).and_then(|_| std::fs::rename(&part, &path));
     if written.is_err() {
         let _ = std::fs::remove_file(&part);
         return Err(crate::Error::Unavailable);
     }
-    if let Ok(meta) = std::fs::metadata(&path) {
-        let mut files = store.files().to_vec();
-        files.push(Cached { name, size: meta.len(), mtime: mtime(&meta), id, title: book.title, authors: book.authors.join(", ") });
-        let _ = store.set_files(files);
+    let (size, mtime) = std::fs::metadata(&path).map(|m| (m.len(), mtime(&m))).unwrap_or_default();
+    Ok(Cached { name, size, mtime, id, title: book.title, authors: book.authors.join(", ") })
+}
+
+/// What adding a folder did ([`import_folder`]).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Added {
+    /// Books copied into the Books folder.
+    pub added: usize,
+    /// Books already in the Books folder, or met twice in the added folder.
+    pub known: usize,
+    /// Files that could not be read or parsed.
+    pub failed: usize,
+}
+
+impl Added {
+    /// The message for the reader when the import ends, `None` when every book found was added: what failed, or that
+    /// nothing was new. `name` is the added folder's name.
+    pub fn message(&self, name: &str) -> Option<String> {
+        use crate::i18n::{fill, tr, tr_count};
+        let Added { added, known, failed } = *self;
+        let message = if added + known + failed == 0 {
+            fill(tr("No books in “{folder}”: FB2, FB3 or EPUB needed."), &[("folder", name)])
+        } else if failed > 0 {
+            let added = match added {
+                0 => tr("No books were added.").to_owned(),
+                n => tr_count(n, "Added {n} book.", "Added {n} books."),
+            };
+            format!("{added} {}", tr_count(failed, "{n} file couldn't be read.", "{n} files couldn't be read."))
+        } else if added == 0 {
+            let all = tr_count(
+                known,
+                "No new books in “{folder}”: the book is already in the library.",
+                "No new books in “{folder}”: all {n} are already in the library.",
+            );
+            fill(&all, &[("folder", name)])
+        } else {
+            return None;
+        };
+        Some(message)
     }
-    Ok(path)
+}
+
+/// The book files (FB2, FB2.ZIP, FB3, EPUB) in `dir` and its subfolders at any depth, in path order: not dotfiles or
+/// dot-folders, not symbolic links to folders, nothing inside `skip` (the Books folder).
+pub fn book_files(dir: &Path, skip: &Path) -> Vec<PathBuf> {
+    let skip = skip.canonicalize().unwrap_or_else(|_| skip.to_owned());
+    let (mut found, mut dirs) = (Vec::new(), vec![dir.to_owned()]);
+    while let Some(dir) = dirs.pop() {
+        if dir.canonicalize().is_ok_and(|d| d == skip) {
+            continue;
+        }
+        for item in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let Ok(name) = item.file_name().into_string() else { continue };
+            let Ok(kind) = item.file_type() else { continue };
+            if name.starts_with('.') {
+                continue;
+            }
+            if kind.is_dir() {
+                dirs.push(item.path());
+            } else if extension(&name).is_some() && item.path().is_file() {
+                found.push(item.path());
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// Adds the folder `src`: copies every book in it and its subfolders ([`book_files`]) into `folder` as [`import`]
+/// does, skipping books whose content is already there or met before, and remembers the copies in one write.
+/// `progress` hears (files done, files found) before each file and at the end. `src` is only read.
+pub fn import_folder(src: &Path, folder: &Path, store: &mut Store, mut progress: impl FnMut(usize, usize)) -> Added {
+    let files = book_files(src, folder);
+    let mut ids: HashSet<String> = folder_files(folder, store).into_iter().map(|f| f.id).filter(|id| !id.is_empty()).collect();
+    let (mut copies, mut added) = (Vec::new(), Added::default());
+    for (i, path) in files.iter().enumerate() {
+        progress(i, files.len());
+        let Ok(bytes) = std::fs::read(path) else {
+            added.failed += 1;
+            continue;
+        };
+        let id = book_id(&bytes);
+        if !ids.insert(id.clone()) {
+            added.known += 1;
+            continue;
+        }
+        match copy_in(path, &bytes, id, folder) {
+            Ok(copy) => {
+                copies.push(copy);
+                added.added += 1;
+            }
+            Err(_) => added.failed += 1,
+        }
+    }
+    progress(files.len(), files.len());
+    if !copies.is_empty() {
+        let mut all = store.files().to_vec();
+        all.extend(copies);
+        let _ = store.set_files(all);
+    }
+    added
 }
 
 /// Copies every remembered book whose file exists outside `folder` into it and points its entry at the copy, so its

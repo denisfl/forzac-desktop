@@ -6,7 +6,9 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::Instant;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use forzac_core::i18n::{fill, tr};
 use forzac_core::library::{self, CoverStyle};
@@ -630,6 +632,19 @@ struct Book {
     opened: bool,
 }
 
+impl Book {
+    fn of(e: &Entry) -> Book {
+        Book {
+            id: e.id.clone(),
+            path: e.path.clone(),
+            title: if e.title.is_empty() { e.path.file_name().unwrap_or_default().to_string_lossy().into_owned() } else { e.title.clone() },
+            authors: e.authors.clone(),
+            progress: e.progress,
+            opened: e.opened > 0,
+        }
+    }
+}
+
 /// A selectable book on the window: the card or a shelf item.
 struct Item {
     book: usize,
@@ -742,6 +757,11 @@ pub struct Library {
     update: (gtk::Box, gtk::Label),
     entry: gtk::Entry,
     buttons: (gtk::Button, gtk::Button, gtk::Button),
+    /// "Adding books… N of M" while a folder is added (`folder-import`), in place of the search button.
+    progress: gtk::Label,
+    adding: Cell<bool>,
+    /// Folders dropped while one is being added.
+    waiting: RefCell<Vec<PathBuf>>,
     question: RefCell<Option<(gtk::Widget, usize)>>,
     /// Covers being loaded or made; `settled` runs when none is left after the first frame.
     pending: Cell<usize>,
@@ -767,21 +787,7 @@ impl Library {
         crate::fonts::add_interface_fonts();
         let palette = THEMES[theme];
         set_theme(palette);
-        let books: Vec<Book> = books
-            .iter()
-            .map(|e| Book {
-                id: e.id.clone(),
-                path: e.path.clone(),
-                title: if e.title.is_empty() {
-                    e.path.file_name().unwrap_or_default().to_string_lossy().into_owned()
-                } else {
-                    e.title.clone()
-                },
-                authors: e.authors.clone(),
-                progress: e.progress,
-                opened: e.opened > 0,
-            })
-            .collect();
+        let books: Vec<Book> = books.iter().map(Book::of).collect();
         let window =
             gtk::ApplicationWindow::builder().application(app).title(tr("Forzac")).default_width(size.0).default_height(size.1).build();
         if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
@@ -803,6 +809,9 @@ impl Library {
         let close = circle(icons::X, tr("Close"));
         close.set_visible(false);
         let open_button = pill(tr("Open a book"), false);
+        let progress = gtk::Label::new(None);
+        progress.add_css_class("hint");
+        progress.set_visible(false);
         let brand = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         brand.append(&brand_icon());
         let name = gtk::Label::new(Some(tr("Forzac")));
@@ -834,6 +843,7 @@ impl Library {
             entry.upcast_ref(),
             spacer.upcast_ref(),
             update_line.upcast_ref(),
+            progress.upcast_ref(),
             search.upcast_ref(),
             close.upcast_ref(),
             open_button.upcast_ref(),
@@ -873,6 +883,9 @@ impl Library {
             update: (update_line, update_label),
             entry,
             buttons: (search, close, open_button),
+            progress,
+            adding: Cell::new(false),
+            waiting: RefCell::default(),
             question: RefCell::default(),
             pending: Cell::new(0),
             first_frame: Cell::new(None),
@@ -1103,7 +1116,7 @@ impl Library {
         let searching = self.searching.get();
         let empty = self.books.borrow().is_empty();
         let (search, close, open) = &self.buttons;
-        search.set_visible(!empty && !searching);
+        search.set_visible(!empty && !searching && !self.adding.get());
         close.set_visible(searching);
         open.set_visible(!empty && !searching);
         self.brand.set_visible(!searching);
@@ -1397,6 +1410,77 @@ impl Library {
         });
     }
 
+    /// Asks for a folder to add (`folder-import`).
+    fn choose_folder(self: &Rc<Self>) {
+        let dialog = gtk::FileDialog::builder().title(tr("Add a Folder…")).modal(true).build();
+        let weak = Rc::downgrade(self);
+        dialog.select_folder(Some(&self.window), gio::Cancellable::NONE, move |dir| {
+            if let (Some(l), Some(dir)) = (weak.upgrade(), dir.ok().and_then(|d| d.path())) {
+                l.add_folder(dir);
+            }
+        });
+    }
+
+    /// Adds the folder `dir` in the background (`library::import_folder`), the head counting the files; then shows the
+    /// books again and, when something was not added, says so. A folder added meanwhile waits for this one.
+    fn add_folder(self: &Rc<Self>, dir: PathBuf) {
+        let Some(folder) = self.folder.clone() else { return };
+        if self.adding.replace(true) {
+            self.waiting.borrow_mut().push(dir);
+            return;
+        }
+        self.progress.set_text("");
+        self.progress.set_visible(true);
+        self.buttons.0.set_visible(false);
+        let counts = Arc::new((AtomicUsize::new(0), AtomicUsize::new(0)));
+        let (weak, c) = (Rc::downgrade(self), counts.clone());
+        let tick = glib::timeout_add_local(Duration::from_millis(100), move || {
+            let Some(l) = weak.upgrade() else { return glib::ControlFlow::Break };
+            let (done, all) = (c.0.load(Ordering::Relaxed), c.1.load(Ordering::Relaxed));
+            if all > 0 {
+                l.progress.set_text(&fill(tr("Adding books… {n} of {m}"), &[("n", &done.to_string()), ("m", &all.to_string())]));
+            }
+            glib::ControlFlow::Continue
+        });
+        let (state, src, weak) = (self.store.borrow().path().to_owned(), dir.clone(), Rc::downgrade(self));
+        glib::spawn_future_local(async move {
+            let done = gio::spawn_blocking(move || {
+                let mut s = Store::open(state);
+                let added = library::import_folder(&src, &folder, &mut s, |done, all| {
+                    counts.0.store(done, Ordering::Relaxed);
+                    counts.1.store(all, Ordering::Relaxed);
+                });
+                (added, library::scan(&folder, &mut s))
+            })
+            .await;
+            tick.remove();
+            let Some(l) = weak.upgrade() else { return };
+            l.store.borrow_mut().reload();
+            l.adding.set(false);
+            l.progress.set_visible(false);
+            if let Ok((added, books)) = done {
+                *l.books.borrow_mut() = books.iter().map(Book::of).collect();
+                l.selected.set(0);
+                l.load_covers();
+                let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                if let Some(message) = added.message(&name) {
+                    gtk::AlertDialog::builder()
+                        .message(message)
+                        .buttons([tr("Close")])
+                        .cancel_button(0)
+                        .modal(true)
+                        .build()
+                        .show(Some(&l.window));
+                }
+            }
+            l.rebuild();
+            let next = (!l.waiting.borrow().is_empty()).then(|| l.waiting.borrow_mut().remove(0));
+            if let Some(next) = next {
+                l.add_folder(next);
+            }
+        });
+    }
+
     /// Android's question before removing a book, as a sheet at the window's bottom.
     fn ask(self: &Rc<Self>, book: usize) {
         if self.question.borrow().is_some() {
@@ -1666,6 +1750,7 @@ impl Library {
             }),
         );
         add("<Control>o", false, Box::new(move |l| l.choose_file()));
+        add("<Control><Shift>o|<Control><Shift>O", false, Box::new(move |l| l.choose_folder()));
         add(
             "<Shift>f",
             true,
@@ -1722,7 +1807,7 @@ impl Library {
             frame.set_visible(false);
             let (Some(l), Ok(files)) = (weak.upgrade(), value.get::<gdk::FileList>()) else { return false };
             for path in files.files().iter().filter_map(|f| f.path()) {
-                (l.open)(&path);
+                if path.is_dir() { l.add_folder(path) } else { (l.open)(&path) }
             }
             true
         });

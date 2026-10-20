@@ -444,6 +444,36 @@ fn the_books_folder_through_the_c_functions() {
 }
 
 #[test]
+fn adding_a_folder_through_the_c_functions() {
+    extern "C" fn progress(ctx: *mut c_void, done: u32, found: u32) {
+        unsafe { &mut *(ctx as *mut Vec<(u32, u32)>) }.push((done, found));
+    }
+    let path = book_file();
+    let root = path.parent().unwrap().join("adding");
+    let (home, src) = (root.join("home"), root.join("old"));
+    std::fs::create_dir_all(src.join("sub")).unwrap();
+    std::fs::copy(&path, src.join("sub/book.fb2")).unwrap();
+    std::fs::write(src.join("broken.fb2"), b"not a book").unwrap();
+    unsafe {
+        let state = forzac_state_open(c(root.join("state").to_str().unwrap()).as_ptr());
+        let mut calls: Vec<(u32, u32)> = Vec::new();
+        let ctx = &mut calls as *mut Vec<(u32, u32)> as *mut c_void;
+        let added = forzac_import_folder(state, c(src.to_str().unwrap()).as_ptr(), Some(progress), ctx);
+        assert_eq!((added.added, added.known, added.failed), (0, 0, 0), "no Books folder yet");
+        assert!(!forzac_books_folder(state, c(home.to_str().unwrap()).as_ptr()).is_null());
+        let added = forzac_import_folder(state, c(src.to_str().unwrap()).as_ptr(), Some(progress), ctx);
+        assert_eq!((added.added, added.known, added.failed), (1, 0, 1));
+        assert_eq!(calls, [(0, 2), (1, 2), (2, 2)]);
+        crate::i18n::set_language(crate::i18n::Language::English);
+        let message = string(forzac_added_message(state, added, c("old").as_ptr()));
+        assert_eq!(message.as_deref(), Some("Added 1 book. 1 file couldn't be read."));
+        let all = ForzacAdded { added: 2, known: 0, failed: 0 };
+        assert!(forzac_added_message(state, all, c("old").as_ptr()).is_null());
+        forzac_state_close(state);
+    }
+}
+
+#[test]
 fn a_spread_window_paginates_half_pages() {
     let path = book_file();
     let doc = unsafe { forzac_open(c(path.to_str().unwrap()).as_ptr(), std::ptr::null_mut()) };
