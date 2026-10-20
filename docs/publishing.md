@@ -58,8 +58,8 @@ Before the repository goes public, once:
 - On GitHub: Settings › General — Issues on, Discussions and Wiki off unless wanted. The default read-only workflow
   token is enough: the release job asks for `contents: write` itself.
 
-The update key, once (the first two commands were run on 2026-10-20 on the M1, the public half is in
-`macos/Info.plist`; the secret is not set yet — the maintainer sets it before tagging 0.11.0). Sparkle's tools come with
+The update key, once (all three commands were run on 2026-10-20 on the M1: the public half is in
+`macos/Info.plist`, the secret is set in the GitHub repository). Sparkle's tools come with
 `macos/build.sh` (`macos/build/sparkle/bin/`):
 
 ```bash
