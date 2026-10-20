@@ -7,11 +7,12 @@
 //! book<TAB>id<TAB>chapter<TAB>block<TAB>offset<TAB>progress<TAB>opened<TAB>path<TAB>title<TAB>authors
 //! bookmark<TAB>id<TAB>chapter<TAB>block<TAB>offset
 //! quote<TAB>id<TAB>chapter<TAB>block<TAB>offset<TAB>chapter<TAB>block<TAB>offset
-//! file<TAB>name<TAB>size<TAB>mtime<TAB>id<TAB>title<TAB>authors
+//! file<TAB>name<TAB>size<TAB>mtime<TAB>id<TAB>title<TAB>authors<TAB>series<TAB>number
 //! ```
 //!
 //! `file` lines cache what the Books folder's files hold (`library::scan`), keyed by name, size and mtime (nanoseconds);
-//! an empty id marks a file that is not a readable book.
+//! an empty id marks a file that is not a readable book. A `file` line of 0.11 and before (no series) is dropped, so the
+//! file is read again.
 //!
 //! Tabs, line breaks and backslashes inside fields are escaped. Unreadable lines are skipped. Every write re-reads
 //! the file and changes only its own entries, then replaces the file atomically, so other processes' writes survive.
@@ -24,12 +25,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::model::{Block, Book, Locator};
+use crate::model::{Block, Book, Locator, Series};
 
 const HEADER: &str = "forzac-state 1";
 
 /// A remembered book.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Entry {
     pub id: String,
     pub path: PathBuf,
@@ -40,10 +41,12 @@ pub struct Entry {
     pub progress: f32,
     /// When it was last opened or read, in seconds since the Unix epoch.
     pub opened: u64,
+    /// From the Books folder's cache (`library::scan`), not kept in `book` lines.
+    pub series: Option<Series>,
 }
 
 /// What a file in the Books folder holds, as last read.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Cached {
     pub name: String,
     pub size: u64,
@@ -52,6 +55,7 @@ pub struct Cached {
     pub id: String,
     pub title: String,
     pub authors: String,
+    pub series: Option<Series>,
 }
 
 #[derive(Debug, Default)]
@@ -108,6 +112,7 @@ impl Store {
             position: at,
             progress: if finished { 1.0 } else { progress(book, at) },
             opened: now(),
+            series: book.series.clone(),
         };
         self.write(|saved| {
             saved.books.retain(|e| e.id != entry.id && e.path != entry.path);
@@ -295,7 +300,9 @@ impl Store {
         }
         for f in &saved.files {
             let (name, id, title, authors) = (escape(&f.name), escape(&f.id), escape(&f.title), escape(&f.authors));
-            let _ = writeln!(text, "file\t{name}\t{}\t{}\t{id}\t{title}\t{authors}", f.size, f.mtime);
+            let series = f.series.as_ref().map(|s| escape(&s.name).into_owned()).unwrap_or_default();
+            let number = f.series.as_ref().and_then(|s| s.number).map(|n| n.to_string()).unwrap_or_default();
+            let _ = writeln!(text, "file\t{name}\t{}\t{}\t{id}\t{title}\t{authors}\t{series}\t{number}", f.size, f.mtime);
         }
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir)?;
@@ -361,12 +368,15 @@ fn read(path: &Path) -> Saved {
                     position: Locator { chapter, block, offset },
                     progress,
                     opened,
+                    series: None,
                 });
             }
-            Some("file") if f.len() == 7 => {
+            Some("file") if f.len() == 9 => {
                 let (Ok(size), Ok(mtime)) = (f[2].parse::<u64>(), f[3].parse::<u64>()) else { continue };
                 saved.files.retain(|c| c.name != f[1]);
-                saved.files.push(Cached { name: f[1].clone(), size, mtime, id: f[4].clone(), title: f[5].clone(), authors: f[6].clone() });
+                let (id, title, authors) = (f[4].clone(), f[5].clone(), f[6].clone());
+                let series = Series::parse(&f[7], Some(&f[8]));
+                saved.files.push(Cached { name: f[1].clone(), size, mtime, id, title, authors, series });
             }
             _ => {} // unknown or damaged: dropped at the next write
         }

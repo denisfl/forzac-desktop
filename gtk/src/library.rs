@@ -11,7 +11,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use forzac_core::i18n::{fill, tr};
-use forzac_core::library::{self, CoverStyle};
+use forzac_core::library::{self, CoverStyle, View};
+use forzac_core::model::Series;
 use forzac_core::state::{Entry, Store};
 use forzac_core::update;
 use gtk::subclass::prelude::*;
@@ -630,6 +631,7 @@ struct Book {
     progress: f32,
     /// False for a book in the folder never opened.
     opened: bool,
+    series: Option<Series>,
 }
 
 impl Book {
@@ -641,7 +643,13 @@ impl Book {
             authors: e.authors.clone(),
             progress: e.progress,
             opened: e.opened > 0,
+            series: e.series.clone(),
         }
+    }
+
+    /// The key the views sort it by (`library::arrange`).
+    fn entry(&self) -> Entry {
+        Entry { title: self.title.clone(), authors: self.authors.clone(), series: self.series.clone(), ..Entry::default() }
     }
 }
 
@@ -650,6 +658,8 @@ struct Item {
     book: usize,
     cover: Cover,
     widget: gtk::Widget,
+    /// The "⋯" button, shown under the pointer and on the selected book.
+    more: gtk::Button,
 }
 
 thread_local! {
@@ -689,6 +699,11 @@ fn set_theme(p: Palette) {
              .forzac-library .question {{ background-color: {sheet}; }}
              .forzac-library button.sheet-button {{ border: 1px solid {line}; }}
              .forzac-library button.sheet-button.filled {{ background-color: {ink}; border-color: {ink}; color: {sheet}; }}
+             .forzac-library button.view-tab {{ color: {muted}; }}
+             .forzac-library button.view-tab.active {{ color: {ink}; border-bottom: 2px solid {ink}; }}
+             .forzac-library .tabs {{ border-bottom: 1px solid {line}; }}
+             .forzac-library .about {{ background-color: {sheet}; }}
+             .forzac-library .about-details, .forzac-library .about-series {{ color: {muted}; }}
              {STATIC_CSS}"
         ));
     });
@@ -729,6 +744,14 @@ const STATIC_CSS: &str = "
     .forzac-library .question-title { font-family: 'PT Serif'; font-weight: 700; font-size: 19px; }
     .forzac-library .question-body { font-size: 14px; }
     .forzac-library button.sheet-button { min-height: 48px; border-radius: 24px; font-size: 16px; font-weight: 500; }
+    .forzac-library button.view-tab { background: none; border: none; box-shadow: none; border-radius: 0; padding: 8px 0;
+        margin-right: 24px; font-size: 15px; font-weight: 500; border-bottom: 2px solid transparent; }
+    .forzac-library .group-heading { font-family: 'Literata'; font-weight: 600; font-size: 19px; }
+    .forzac-library .about { border-radius: 22px; padding: 28px; }
+    .forzac-library .about-title { font-family: 'Literata'; font-weight: 700; font-size: 22px; }
+    .forzac-library .about-authors { font-size: 15px; }
+    .forzac-library .about-series, .forzac-library .about-details { font-size: 14px; }
+    .forzac-library .about-annotation { font-family: 'Literata'; font-size: 15px; line-height: 1.5; }
 ";
 
 /// The library window and what it shows.
@@ -746,7 +769,13 @@ pub struct Library {
     items: RefCell<Vec<Item>>,
     /// The item index of the card's book, if shown.
     card: Cell<bool>,
-    shelf: RefCell<Option<Layout>>,
+    /// The groups' shelves, in order (`library::arrange`).
+    shelves: RefCell<Vec<Layout>>,
+    view: Cell<View>,
+    /// The views' tabs under the head.
+    tabs: gtk::Box,
+    /// "About the book" while it shows, with its book.
+    about: RefCell<Option<(gtk::Widget, usize)>>,
     selected: Cell<usize>,
     searching: Cell<bool>,
     scrolled: gtk::ScrolledWindow,
@@ -797,7 +826,7 @@ impl Library {
         window.add_css_class("forzac-library");
         OPEN.with(|o| *o.borrow_mut() = Some(window.downgrade()));
 
-        let entry = gtk::Entry::builder().placeholder_text(tr("Title or author")).hexpand(true).visible(false).build();
+        let entry = gtk::Entry::builder().placeholder_text(tr("Title, author or series")).hexpand(true).visible(false).build();
         entry.add_css_class("search-field");
         let circle = |paths: icons::Paths, tip: &str| {
             let b = gtk::Button::builder().child(&Icon::new(paths, 20)).tooltip_text(tip).focusable(false).build();
@@ -852,9 +881,14 @@ impl Library {
         }
         let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
         body.set_vexpand(true);
+        let tabs = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        tabs.add_css_class("tabs");
+        tabs.set_margin_top(12);
         let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
         page.append(&head);
+        page.append(&tabs);
         page.append(&body);
+        let view = View::from_key(store.borrow().setting(library::VIEW));
         let column = Layout::new(Kind::Column);
         column.add(&page);
         let scrolled = gtk::ScrolledWindow::builder().child(&column).hscrollbar_policy(gtk::PolicyType::Never).build();
@@ -873,7 +907,10 @@ impl Library {
             marbles: RefCell::default(),
             items: RefCell::default(),
             card: Cell::new(false),
-            shelf: RefCell::default(),
+            shelves: RefCell::default(),
+            view: Cell::new(view),
+            tabs,
+            about: RefCell::default(),
             selected: Cell::new(0),
             searching: Cell::new(false),
             scrolled,
@@ -1112,7 +1149,7 @@ impl Library {
             self.body.remove(&child);
         }
         self.items.borrow_mut().clear();
-        *self.shelf.borrow_mut() = None;
+        self.shelves.borrow_mut().clear();
         let searching = self.searching.get();
         let empty = self.books.borrow().is_empty();
         let (search, close, open) = &self.buttons;
@@ -1121,27 +1158,37 @@ impl Library {
         open.set_visible(!empty && !searching);
         self.brand.set_visible(!searching);
         self.show_update();
+        self.show_tabs(!empty && !searching);
         if empty {
             self.body.append(&self.empty_state());
             return;
         }
         let books = self.books.borrow().clone();
-        let (card, order): (Option<usize>, Vec<usize>) = if searching {
+        let series_name = |b: &Book| b.series.as_ref().map_or(String::new(), |s| s.name.clone());
+        let view = self.view.get();
+        let (card, groups): (Option<usize>, Vec<library::Group>) = if searching {
             let query = self.entry.text();
-            let mut ranked: Vec<(u32, usize)> =
-                books.iter().enumerate().filter_map(|(i, b)| library::rank(&query, &b.title, &b.authors).map(|r| (r, i))).collect();
+            let mut ranked: Vec<(u32, usize)> = books
+                .iter()
+                .enumerate()
+                .filter_map(|(i, b)| library::rank(&query, &b.title, &b.authors, &series_name(b)).map(|r| (r, i)))
+                .collect();
             ranked.sort_by_key(|&(r, _)| r);
-            (None, ranked.into_iter().map(|(_, i)| i).collect())
-        } else {
+            (None, vec![library::Group { heading: None, books: ranked.into_iter().map(|(_, i)| i).collect() }])
+        } else if view == View::Recent {
             let card = library::continue_book(books.iter().map(|b| (b.progress, b.opened)));
-            (card, (0..books.len()).filter(|&i| Some(i) != card).collect())
+            (card, vec![library::Group { heading: None, books: (0..books.len()).filter(|&i| Some(i) != card).collect() }])
+        } else {
+            let entries: Vec<Entry> = books.iter().map(Book::entry).collect();
+            (None, library::arrange(&entries, view))
         };
+        let order: Vec<usize> = groups.iter().flat_map(|g| g.books.iter().copied()).collect();
         self.body.append(&spacing(24));
         let mut items = Vec::new();
         if let Some(c) = card {
-            let (widget, cover) = self.card_widget(c);
+            let (widget, cover, more) = self.card_widget(c);
             self.body.append(&widget);
-            items.push(Item { book: c, cover, widget });
+            items.push(Item { book: c, cover, widget, more });
             if !order.is_empty() {
                 let rule = gtk::Box::new(gtk::Orientation::Horizontal, 0);
                 rule.add_css_class("rule");
@@ -1157,21 +1204,29 @@ impl Library {
             none.set_margin_top(48);
             self.body.append(&none);
         }
-        let shelf = Layout::new(Kind::Shelf);
-        for &i in &order {
-            let (widget, cover) = self.shelf_item(i);
-            shelf.add(&widget);
-            items.push(Item { book: i, cover, widget });
+        for (n, group) in groups.iter().enumerate() {
+            if let Some(heading) = &group.heading {
+                let heading = label(heading, "group-heading");
+                heading.set_margin_top(if n == 0 { 0 } else { 40 });
+                heading.set_margin_bottom(16);
+                self.body.append(&heading);
+            }
+            let shelf = Layout::new(Kind::Shelf);
+            for &i in &group.books {
+                let (widget, cover, more) = self.shelf_item(i, view != View::Series || searching);
+                shelf.add(&widget);
+                items.push(Item { book: i, cover, widget, more });
+            }
+            self.body.append(&shelf);
+            self.shelves.borrow_mut().push(shelf);
         }
-        self.body.append(&shelf);
-        *self.shelf.borrow_mut() = Some(shelf);
         *self.items.borrow_mut() = items;
         let n = self.items.borrow().len();
         self.select(self.selected.get().min(n.saturating_sub(1)));
     }
 
     /// The Android app's "Continue reading" card.
-    fn card_widget(self: &Rc<Self>, book: usize) -> (gtk::Widget, Cover) {
+    fn card_widget(self: &Rc<Self>, book: usize) -> (gtk::Widget, Cover, gtk::Button) {
         let b = self.books.borrow()[book].clone();
         let cover = self.cover(book, Some((92, 138)));
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 18);
@@ -1184,8 +1239,8 @@ impl Library {
         let title = lines(&b.title, "card-title", 2);
         title.set_hexpand(true);
         title_row.append(&title);
-        let remove = self.remove_button(book);
-        title_row.append(&remove);
+        let more = self.more_button(book);
+        title_row.append(&more);
         text.append(&title_row);
         if !b.authors.is_empty() {
             let authors = lines(&b.authors, "card-authors", 2);
@@ -1197,12 +1252,13 @@ impl Library {
         text.append(&bar);
         text.append(&label(&library::share_label(b.progress, b.opened), "shelf-share"));
         row.append(&text);
-        self.connect_item(&row, &cover, &remove, book);
-        (row.upcast(), cover)
+        self.connect_item(&row, &cover, &more, book);
+        (row.upcast(), cover, more)
     }
 
-    /// A book on the shelf: its cover, the title with the remove "×", the authors and the share read.
-    fn shelf_item(self: &Rc<Self>, book: usize) -> (gtk::Widget, Cover) {
+    /// A book on the shelf: its cover, the title with the "⋯" menu, the authors, the series (`with_series`) and the
+    /// share read.
+    fn shelf_item(self: &Rc<Self>, book: usize, with_series: bool) -> (gtk::Widget, Cover, gtk::Button) {
         let b = self.books.borrow()[book].clone();
         let cover = self.cover(book, None);
         let item = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -1212,37 +1268,200 @@ impl Library {
         let title = lines(&b.title, "shelf-title", 3);
         title.set_hexpand(true);
         title_row.append(&title);
-        let remove = self.remove_button(book);
-        remove.set_valign(gtk::Align::Start);
-        title_row.append(&remove);
+        let more = self.more_button(book);
+        more.set_valign(gtk::Align::Start);
+        title_row.append(&more);
         item.append(&title_row);
         if !b.authors.is_empty() {
             let authors = lines(&b.authors, "shelf-author", 2);
             authors.set_margin_top(2);
             item.append(&authors);
         }
+        if let Some(series) = b.series.as_ref().filter(|_| with_series) {
+            let text = match series.number_label() {
+                Some(n) => format!("{} · {n}", series.name),
+                None => series.name.clone(),
+            };
+            let series = lines(&text, "shelf-author", 1);
+            series.set_margin_top(2);
+            item.append(&series);
+        }
         let share = label(&library::share_label(b.progress, b.opened), "shelf-share");
         share.set_margin_top(4);
         item.append(&share);
-        self.connect_item(&item, &cover, &remove, book);
-        (item.upcast(), cover)
+        self.connect_item(&item, &cover, &more, book);
+        (item.upcast(), cover, more)
     }
 
-    fn remove_button(self: &Rc<Self>, book: usize) -> gtk::Button {
-        let remove = gtk::Button::builder().label("×").tooltip_text(tr("Remove from library")).focusable(false).build();
-        remove.add_css_class("remove");
-        remove.set_opacity(0.0);
+    /// The book's "⋯": its menu (`library-metadata`).
+    fn more_button(self: &Rc<Self>, book: usize) -> gtk::Button {
+        let more = gtk::Button::builder().label("⋯").tooltip_text(tr("More")).focusable(false).build();
+        more.add_css_class("remove");
+        more.set_opacity(0.0);
         let weak = Rc::downgrade(self);
-        remove.connect_clicked(move |_| {
+        more.connect_clicked(move |b| {
             if let Some(l) = weak.upgrade() {
-                l.ask(book);
+                l.menu(book, b);
             }
         });
-        remove
+        more
     }
 
-    /// A click opens the book; under the pointer its cover lifts and its "×" shows.
-    fn connect_item(self: &Rc<Self>, item: &gtk::Box, cover: &Cover, remove: &gtk::Button, book: usize) {
+    /// The book's menu at `anchor`: "About the book", "Remove from library".
+    fn menu(self: &Rc<Self>, book: usize, anchor: &gtk::Button) {
+        let model = gio::Menu::new();
+        model.append(Some(tr("About the book")), Some(&format!("lib.about(uint32 {book})")));
+        model.append(Some(tr("Remove from library")), Some(&format!("lib.remove(uint32 {book})")));
+        let popover = gtk::PopoverMenu::from_model(Some(&model));
+        popover.set_parent(anchor);
+        popover.set_has_arrow(false);
+        popover.connect_closed(|p| {
+            let p = p.clone();
+            glib::idle_add_local_once(move || p.unparent());
+        });
+        popover.popup();
+    }
+
+    /// The views' tabs, the chosen one marked; hidden while searching or without books.
+    fn show_tabs(self: &Rc<Self>, visible: bool) {
+        while let Some(child) = self.tabs.first_child() {
+            self.tabs.remove(&child);
+        }
+        self.tabs.set_visible(visible);
+        for view in View::ALL {
+            let tab = gtk::Button::builder().label(view.label()).focusable(false).build();
+            tab.add_css_class("view-tab");
+            if view == self.view.get() {
+                tab.add_css_class("active");
+            }
+            let weak = Rc::downgrade(self);
+            tab.connect_clicked(move |_| {
+                if let Some(l) = weak.upgrade() {
+                    l.set_view(view);
+                }
+            });
+            self.tabs.append(&tab);
+        }
+    }
+
+    /// Shows `view` and remembers it.
+    fn set_view(self: &Rc<Self>, view: View) {
+        self.view.set(view);
+        if let Err(e) = self.store.borrow_mut().set_setting(library::VIEW, view.key()) {
+            eprintln!("cannot save the reading state: {e}");
+        }
+        self.selected.set(0);
+        self.rebuild();
+        self.scrolled.vadjustment().set_value(0.0);
+    }
+
+    /// "About the book": the book's file read in the background, then a sheet over the dimmed library.
+    fn about(self: &Rc<Self>, book: usize) {
+        if self.about.borrow().is_some() || self.question.borrow().is_some() {
+            return;
+        }
+        let Some(path) = self.books.borrow().get(book).map(|b| b.path.clone()) else { return };
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let info = gio::spawn_blocking(move || forzac_core::open(&path).ok().map(|b| library::book_info(&b))).await.ok().flatten();
+            let (Some(l), Some(info)) = (weak.upgrade(), info) else { return };
+            if l.about.borrow().is_none() && l.question.borrow().is_none() {
+                l.show_about(book, info);
+            }
+        });
+    }
+
+    fn show_about(self: &Rc<Self>, book: usize, info: library::BookInfo) {
+        let backdrop = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        backdrop.add_css_class("backdrop");
+        let sheet = gtk::Box::new(gtk::Orientation::Vertical, 16);
+        sheet.add_css_class("about");
+        sheet.set_valign(gtk::Align::Center);
+        sheet.set_halign(gtk::Align::Center);
+        sheet.set_vexpand(true);
+        sheet.set_size_request((self.window.width() - 48).clamp(280, 600), -1);
+        let top = gtk::Box::new(gtk::Orientation::Horizontal, 20);
+        top.append(&self.cover(book, Some((100, 150))));
+        let text = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        text.set_hexpand(true);
+        text.set_valign(gtk::Align::Center);
+        for (value, class) in [
+            (&info.title, "about-title"),
+            (&info.authors, "about-authors"),
+            (&info.series, "about-series"),
+            (&info.details, "about-details"),
+        ] {
+            if !value.is_empty() {
+                text.append(&label(value, class));
+            }
+        }
+        top.append(&text);
+        sheet.append(&top);
+        if !info.annotation.is_empty() {
+            let annotation = label(&info.annotation, "about-annotation");
+            let scroll = gtk::ScrolledWindow::builder().child(&annotation).hscrollbar_policy(gtk::PolicyType::Never).build();
+            scroll.set_propagate_natural_height(true);
+            scroll.set_max_content_height(260);
+            sheet.append(&scroll);
+        }
+        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        buttons.set_homogeneous(true);
+        let close = gtk::Button::builder().label(tr("Close")).focusable(false).hexpand(true).build();
+        let read = gtk::Button::builder().label(tr("Read")).focusable(false).hexpand(true).build();
+        close.add_css_class("sheet-button");
+        read.add_css_class("sheet-button");
+        read.add_css_class("filled");
+        buttons.append(&close);
+        buttons.append(&read);
+        sheet.append(&buttons);
+        backdrop.append(&sheet);
+        let weak = Rc::downgrade(self);
+        close.connect_clicked(move |_| {
+            if let Some(l) = weak.upgrade() {
+                l.close_about(false);
+            }
+        });
+        let weak = Rc::downgrade(self);
+        read.connect_clicked(move |_| {
+            if let Some(l) = weak.upgrade() {
+                l.close_about(true);
+            }
+        });
+        let click = gtk::GestureClick::new();
+        let (weak, s) = (Rc::downgrade(self), sheet.clone());
+        click.connect_released(move |_, _, x, y| {
+            let inside =
+                s.compute_bounds(&s.parent().unwrap()).is_some_and(|b| b.contains_point(&graphene::Point::new(x as f32, y as f32)));
+            if !inside && let Some(l) = weak.upgrade() {
+                l.close_about(false);
+            }
+        });
+        backdrop.add_controller(click);
+        self.overlay.add_overlay(&backdrop);
+        *self.about.borrow_mut() = Some((backdrop.upcast(), book));
+    }
+
+    /// Closes "About the book"; opens the book when `read`.
+    fn close_about(self: &Rc<Self>, read: bool) {
+        let Some((sheet, book)) = self.about.borrow_mut().take() else { return };
+        self.overlay.remove_overlay(&sheet);
+        if read {
+            self.open_book(book);
+        }
+    }
+
+    /// A click opens the book, a right click opens its menu; under the pointer its cover lifts and its "⋯" shows.
+    fn connect_item(self: &Rc<Self>, item: &gtk::Box, cover: &Cover, more: &gtk::Button, book: usize) {
+        let right = gtk::GestureClick::builder().button(3).build();
+        let (weak, m) = (Rc::downgrade(self), more.clone());
+        right.connect_pressed(move |g, _, _, _| {
+            if let Some(l) = weak.upgrade() {
+                g.set_state(gtk::EventSequenceState::Claimed);
+                m.set_opacity(1.0);
+                l.menu(book, &m);
+            }
+        });
+        item.add_controller(right);
         let click = gtk::GestureClick::new();
         let weak = Rc::downgrade(self);
         click.connect_released(move |g, n, _, _| {
@@ -1255,15 +1474,17 @@ impl Library {
         });
         item.add_controller(click);
         let motion = gtk::EventControllerMotion::new();
-        let (c, r) = (cover.clone(), remove.clone());
+        let (c, r) = (cover.clone(), more.clone());
         motion.connect_enter(move |_, _, _| {
             c.set_hover(true);
             r.set_opacity(1.0);
         });
-        let (c, r) = (cover.clone(), remove.clone());
+        let (c, r, weak) = (cover.clone(), more.clone(), Rc::downgrade(self));
         motion.connect_leave(move |_| {
             c.set_hover(false);
-            r.set_opacity(0.0);
+            // The selected book keeps its "⋯".
+            let selected = weak.upgrade().is_some_and(|l| l.items.borrow().get(l.selected.get()).is_some_and(|i| i.more == r));
+            r.set_opacity(if selected { 1.0 } else { 0.0 });
         });
         item.add_controller(motion);
         item.set_cursor_from_name(Some("pointer"));
@@ -1327,6 +1548,7 @@ impl Library {
         let items = self.items.borrow();
         for (i, item) in items.iter().enumerate() {
             item.cover.set_selected(i == index);
+            item.more.set_opacity(if i == index { 1.0 } else { 0.0 });
         }
         self.selected.set(index);
         let Some(item) = items.get(index) else { return };
@@ -1342,31 +1564,12 @@ impl Library {
         }
     }
 
-    /// Moves the selection: `dx` along the books, `dy` rows of the shelf (the card is a row of its own).
+    /// Moves the selection: `dx` along the books, `dy` rows through the card and the groups' shelves
+    /// (`library::step`).
     fn step(&self, dx: i32, dy: i32) {
-        let n = self.items.borrow().len();
-        if n == 0 {
-            return;
-        }
-        let i = self.selected.get();
-        let card = usize::from(self.card.get());
-        let columns = self.shelf.borrow().as_ref().map_or(1, |s| s.imp().columns.get().max(1));
-        let target = if dx != 0 {
-            (i as i32 + dx).clamp(0, n as i32 - 1) as usize
-        } else if dy > 0 {
-            if card == 1 && i == 0 {
-                1.min(n - 1)
-            } else if (i - card) / columns < (n - 1 - card) / columns {
-                (i + columns).min(n - 1)
-            } else {
-                i
-            }
-        } else if i < card + columns {
-            if card == 1 && i > 0 { 0 } else { i }
-        } else {
-            i - columns
-        };
-        self.select(target);
+        let mut groups: Vec<(usize, usize)> = if self.card.get() { vec![(1, 1)] } else { Vec::new() };
+        groups.extend(self.shelves.borrow().iter().map(|s| (s.children().len(), s.imp().columns.get().max(1))));
+        self.select(library::step(&groups, self.selected.get(), dx, dy));
     }
 
     fn open_book(&self, book: usize) {
@@ -1621,6 +1824,26 @@ impl Library {
             }
         });
 
+        // The book's menu (`menu`): its items carry the book's index.
+        let actions = gio::SimpleActionGroup::new();
+        let about = gio::SimpleAction::new("about", Some(glib::VariantTy::UINT32));
+        let weak = Rc::downgrade(self);
+        about.connect_activate(move |_, v| {
+            if let (Some(l), Some(book)) = (weak.upgrade(), v.and_then(|v| v.get::<u32>())) {
+                l.about(book as usize);
+            }
+        });
+        let remove = gio::SimpleAction::new("remove", Some(glib::VariantTy::UINT32));
+        let weak = Rc::downgrade(self);
+        remove.connect_activate(move |_, v| {
+            if let (Some(l), Some(book)) = (weak.upgrade(), v.and_then(|v| v.get::<u32>())) {
+                l.ask(book as usize);
+            }
+        });
+        actions.add_action(&about);
+        actions.add_action(&remove);
+        self.window.insert_action_group("lib", Some(&actions));
+
         // Keys by keyval; GTK also matches them in the first (Latin) layout group, so a Russian layout works. In the
         // capture phase, before the search field: a key the field needs (a letter, `Delete`, `Home`) goes on to it.
         let controller = gtk::ShortcutController::new();
@@ -1638,7 +1861,7 @@ impl Library {
             });
             controller.add_shortcut(gtk::Shortcut::new(gtk::ShortcutTrigger::parse_string(trigger), Some(action)));
         };
-        let asking = |l: &Rc<Library>| l.question.borrow().is_some();
+        let asking = |l: &Rc<Library>| l.question.borrow().is_some() || l.about.borrow().is_some();
         add(
             "h|KP_Left",
             true,
@@ -1729,7 +1952,40 @@ impl Library {
                 }
             }),
         );
-        add("Return|KP_Enter", false, Box::new(move |l| if asking(l) { l.answer(true) } else { l.open_selected() }));
+        add(
+            "Return|KP_Enter",
+            false,
+            Box::new(move |l| {
+                if l.about.borrow().is_some() {
+                    l.close_about(true)
+                } else if asking(l) {
+                    l.answer(true)
+                } else {
+                    l.open_selected()
+                }
+            }),
+        );
+        for (trigger, back) in [("Tab|KP_Tab", false), ("<Shift>Tab|ISO_Left_Tab|<Shift>ISO_Left_Tab", true)] {
+            add(
+                trigger,
+                false,
+                Box::new(move |l| {
+                    if !asking(l) && !l.searching.get() && !l.books.borrow().is_empty() {
+                        l.set_view(l.view.get().next(back));
+                    }
+                }),
+            );
+        }
+        add(
+            "i",
+            true,
+            Box::new(move |l| {
+                let book = l.items.borrow().get(l.selected.get()).map(|i| i.book);
+                if let Some(b) = book.filter(|_| !asking(l)) {
+                    l.about(b);
+                }
+            }),
+        );
         add(
             "Delete|KP_Delete|d",
             true,
@@ -1764,7 +2020,9 @@ impl Library {
             "Escape",
             false,
             Box::new(move |l| {
-                if asking(l) {
+                if l.about.borrow().is_some() {
+                    l.close_about(false);
+                } else if asking(l) {
                     l.answer(false);
                 } else if l.searching.get() {
                     l.set_searching(false);

@@ -75,6 +75,10 @@ struct LibraryBook {
     let progress: Float
     /// False for a book in the folder never opened.
     let opened: Bool
+    /// Empty when not in a series.
+    var series = ""
+    /// The number in the series; negative when none.
+    var number: Float = -1
 
     /// The library's books (`forzac_library_books`): reads the Books folder, so on a background queue with a state
     /// handle of its own.
@@ -85,7 +89,8 @@ struct LibraryBook {
             let path = String(cString: list[i].path)
             let title = String(cString: list[i].title)
             return LibraryBook(id: String(cString: list[i].id), path: path, title: title.isEmpty ? URL(fileURLWithPath: path).lastPathComponent : title,
-                               authors: String(cString: list[i].authors), progress: list[i].progress, opened: list[i].opened)
+                               authors: String(cString: list[i].authors), progress: list[i].progress, opened: list[i].opened,
+                               series: String(cString: list[i].series), number: list[i].number)
         }
     }
 }
@@ -417,19 +422,21 @@ final class PillButton: LayerView {
     }
 }
 
-/// A book on the window: the card or a shelf item, with its labels; a click opens it, under the pointer its cover lifts
-/// and its "×" shows.
+/// A book on the window: the card or a shelf item, with its labels; a click opens it, a right click or its "⋯" opens
+/// its menu; under the pointer its cover lifts and its "⋯" shows.
 final class LibraryItem: NSView {
     let index: Int
     let cover: CoverView
     let labels: [NSTextField]
-    let remove: NSTextField
+    let more: NSTextField
     let card: Bool
     let bar: LayerView?
     let fill: LayerView?
     let progress: Float
     var onOpen: (() -> Void)?
-    var onRemove: (() -> Void)?
+    var onMore: (() -> Void)?
+    /// The selected book keeps its "⋯".
+    var isSelected = false { didSet { more.alphaValue = isSelected ? 1 : 0 } }
 
     init(index: Int, cover: CoverView, labels: [NSTextField], card: Bool, progress: Float, palette: Palette) {
         self.index = index
@@ -437,9 +444,9 @@ final class LibraryItem: NSView {
         self.labels = labels
         self.card = card
         self.progress = progress
-        remove = label("×", interfaceFont(18), palette.muted)
-        remove.toolTip = tr("Remove from library")
-        remove.alphaValue = 0
+        more = label("⋯", interfaceFont(18), palette.muted)
+        more.toolTip = tr("More")
+        more.alphaValue = 0
         if card {
             bar = LayerView()
             fill = LayerView()
@@ -450,7 +457,7 @@ final class LibraryItem: NSView {
             fill = nil
         }
         super.init(frame: .zero)
-        for v in [cover as NSView, remove] + labels + [bar, fill].compactMap({ $0 }) {
+        for v in [cover as NSView, more] + labels + [bar, fill].compactMap({ $0 }) {
             v.translatesAutoresizingMaskIntoConstraints = true
             addSubview(v)
         }
@@ -463,19 +470,24 @@ final class LibraryItem: NSView {
 
     override func mouseEntered(with e: NSEvent) {
         cover.hover = true
-        remove.alphaValue = 1
+        more.alphaValue = 1
     }
 
     override func mouseExited(with e: NSEvent) {
         cover.hover = false
-        remove.alphaValue = 0
+        more.alphaValue = isSelected ? 1 : 0
     }
 
     override func mouseDown(with e: NSEvent) {}
 
     override func mouseUp(with e: NSEvent) {
         let at = convert(e.locationInWindow, from: nil)
-        if remove.frame.insetBy(dx: -6, dy: -6).contains(at) { onRemove?() } else if bounds.contains(at) { onOpen?() }
+        if more.frame.insetBy(dx: -6, dy: -6).contains(at) { onMore?() } else if bounds.contains(at) { onOpen?() }
+    }
+
+    override func rightMouseDown(with e: NSEvent) {
+        more.alphaValue = 1
+        onMore?()
     }
 
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
@@ -503,7 +515,7 @@ final class LibraryItem: NSView {
                     y += 12
                 }
                 l.frame = CGRect(x: x, y: y, width: i == 1 ? textWidth - 24 : textWidth, height: heights[i])
-                if i == 1 { remove.frame = CGRect(x: width - 18, y: y, width: 18, height: 22) }
+                if i == 1 { more.frame = CGRect(x: width - 18, y: y, width: 18, height: 22) }
                 y += heights[i] + 6
             }
             return max(138, y)
@@ -515,7 +527,7 @@ final class LibraryItem: NSView {
             let w = i == 0 ? width - 20 : width
             let height = ceil(l.cell!.cellSize(forBounds: CGRect(x: 0, y: 0, width: w, height: 1e4)).height)
             l.frame = CGRect(x: 0, y: y, width: w, height: height)
-            if i == 0 { remove.frame = CGRect(x: width - 14, y: y - 3, width: 14, height: 22) }
+            if i == 0 { more.frame = CGRect(x: width - 16, y: y - 3, width: 16, height: 22) }
             y += height + (i == 0 ? 2 : 4)
         }
         return y
@@ -551,6 +563,14 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     var onAddFolder: ((String) -> Void)?
     /// Folders being added; "Adding books… N of M" stands in place of the search button meanwhile.
     private var adding = 0
+    /// The view (`library-metadata`: 0 Recent, 1 Title, 2 Author, 3 Series), its tabs under the head, and the shown
+    /// groups as (books, columns) for moving the selection.
+    private var view: UInt32
+    private var tabs: [ClickLabel] = []
+    private let tabRule = LayerView()
+    private var groups: [(count: Int, heading: NSTextField?)] = []
+    /// "About the book" while it shows.
+    private var about: (view: AboutView, book: Int)?
     private let progressText: NSTextField
 
     private let scroll = NSScrollView()
@@ -583,6 +603,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         openButton = PillButton(tr("Open a book"), big: false, palette: palette)
         progressText = label("", interfaceFont(15), palette.muted)
         progressText.isHidden = true
+        view = forzac_library_view(state)
         container = DropView(palette: palette)
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1040, height: 760), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init()
@@ -604,7 +625,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         searchField.focusRingType = .none
         searchField.font = bookFont("PT Serif", 26)
         searchField.textColor = nsColor(palette.ink)
-        searchField.placeholderAttributedString = NSAttributedString(string: tr("Title or author"), attributes: [.font: bookFont("PT Serif", 26), .foregroundColor: nsColor(palette.muted)])
+        searchField.placeholderAttributedString = NSAttributedString(string: tr("Title, author or series"), attributes: [.font: bookFont("PT Serif", 26), .foregroundColor: nsColor(palette.muted)])
         searchField.delegate = self
         searchField.isHidden = true
         for b in [searchButton, closeButton] {
@@ -637,7 +658,16 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             self.showUpdate()
         }
         updateNotice()
-        for v in [brandIcon, brandName, searchField, searchButton, closeButton, openButton, progressText, updateText, updateClose] as [NSView] {
+        tabRule.layer!.backgroundColor = color(palette.line)
+        let viewNames = [tr("Recent"), tr("Title"), tr("Author"), tr("Series")]
+        for (i, name) in viewNames.enumerated() {
+            let tab = ClickLabel()
+            tab.stringValue = name
+            tab.font = interfaceFont(15, .medium)
+            tab.onClick = { [weak self] in self?.setView(UInt32(i)) }
+            tabs.append(tab)
+        }
+        for v in [brandIcon, brandName, searchField, searchButton, closeButton, openButton, progressText, updateText, updateClose, tabRule] + tabs as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = true
             content.addSubview(v)
         }
@@ -794,19 +824,25 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         brandIcon.isHidden = searching
         brandName.isHidden = searching
         searchField.isHidden = !searching
+        let showTabs = !empty && !searching
+        tabs.forEach { $0.isHidden = !showTabs }
+        tabRule.isHidden = !showTabs
         if empty { buildEmpty(); relayout(); return }
         var card: Int?
-        var order: [Int]
+        var arranged: [(heading: String?, books: [Int])]
         if searching {
             let query = searchField.stringValue
-            order = books.indices.compactMap { i -> (Int32, Int)? in
-                let r = forzac_library_rank(query, books[i].title, books[i].authors)
+            arranged = [(nil, books.indices.compactMap { i -> (Int32, Int)? in
+                let r = forzac_library_rank(query, books[i].title, books[i].authors, books[i].series)
                 return r < 0 ? nil : (r, i)
-            }.sorted { $0.0 < $1.0 }.map { $0.1 }
-        } else {
+            }.sorted { $0.0 < $1.0 }.map { $0.1 })]
+        } else if view == 0 {
             card = books.firstIndex { $0.opened && $0.progress < 0.999 }
-            order = books.indices.filter { $0 != card }
+            arranged = [(nil, books.indices.filter { $0 != card })]
+        } else {
+            arranged = arrange()
         }
+        let order = arranged.flatMap(\.books)
         if let c = card {
             let b = books[c]
             var labels = [label(tr("Continue reading").uppercased(), interfaceFont(12, .medium), palette.muted),
@@ -821,12 +857,21 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         let rule = LayerView()
         rule.layer!.backgroundColor = color(palette.line)
         let none = label(tr("No results"), interfaceFont(15), palette.muted)
-        for i in order {
-            let b = books[i]
-            var labels = [wrapping(b.title, interfaceFont(14, .medium), palette.ink, lines: 3)]
-            if !b.authors.isEmpty { labels.append(wrapping(b.authors, interfaceFont(13), palette.muted, lines: 2)) }
-            labels.append(label(share(b), interfaceFont(12), palette.muted))
-            items.append(item(i, labels: labels, card: false))
+        groups = []
+        for group in arranged {
+            let heading = group.heading.map { wrapping($0, bookFont("Literata", 19, bold: true), palette.ink, lines: 2) }
+            groups.append((group.books.count, heading))
+            if let heading { body.append(heading) }
+            for i in group.books {
+                let b = books[i]
+                var labels = [wrapping(b.title, interfaceFont(14, .medium), palette.ink, lines: 3)]
+                if !b.authors.isEmpty { labels.append(wrapping(b.authors, interfaceFont(13), palette.muted, lines: 2)) }
+                if !b.series.isEmpty && (view != 3 || searching) {
+                    labels.append(wrapping(seriesLabel(b), interfaceFont(13), palette.muted, lines: 1))
+                }
+                labels.append(label(share(b), interfaceFont(12), palette.muted))
+                items.append(item(i, labels: labels, card: false))
+            }
         }
         for v in items { body.append(v) }
         if hasCard && order.count > 0 { body.append(rule) }
@@ -834,7 +879,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         body.forEach { $0.translatesAutoresizingMaskIntoConstraints = true; content.addSubview($0) }
         bodyLayout = { [weak self] x, width in
             guard let self else { return 0 }
-            var y: CGFloat = 20 + 48 + 24
+            var y: CGFloat = 20 + 48 + 24 + (self.tabRule.isHidden ? 0 : self.tabRule.frame.maxY - 20 - 48)
             var shelf = self.items[...]
             if self.hasCard, let card = self.items.first {
                 let h = card.layout(width: width)
@@ -858,16 +903,26 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             let columns = max(1, Int((width + gap) / (minColumn + gap)))
             let column = (width - gap * CGFloat(columns - 1)) / CGFloat(columns)
             self.columns = columns
-            let shelfItems = Array(shelf)
-            for start in stride(from: 0, to: shelfItems.count, by: columns) {
-                let row = shelfItems[start..<min(start + columns, shelfItems.count)]
-                let heights = row.map { $0.layout(width: column) }
-                let rowHeight = heights.max() ?? 0
-                for (i, item) in row.enumerated() {
-                    item.frame = CGRect(x: x + CGFloat(i) * (column + gap), y: y, width: column, height: rowHeight)
-                    item.layout(width: column)
+            var shelfItems = Array(shelf)[...]
+            for (n, group) in self.groups.enumerated() {
+                if let heading = group.heading {
+                    if n > 0 { y += 4 }
+                    let h = ceil(heading.cell!.cellSize(forBounds: CGRect(x: 0, y: 0, width: width, height: 1e4)).height)
+                    heading.frame = CGRect(x: x, y: y, width: width, height: h)
+                    y += h + 16
                 }
-                y += rowHeight + 36
+                let groupItems = Array(shelfItems.prefix(group.count))
+                shelfItems = shelfItems.dropFirst(group.count)
+                for start in stride(from: 0, to: groupItems.count, by: columns) {
+                    let row = groupItems[start..<min(start + columns, groupItems.count)]
+                    let heights = row.map { $0.layout(width: column) }
+                    let rowHeight = heights.max() ?? 0
+                    for (i, item) in row.enumerated() {
+                        item.frame = CGRect(x: x + CGFloat(i) * (column + gap), y: y, width: column, height: rowHeight)
+                        item.layout(width: column)
+                    }
+                    y += rowHeight + 36
+                }
             }
             return y + 64 - 36
         }
@@ -878,8 +933,83 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     private func item(_ book: Int, labels: [NSTextField], card: Bool) -> LibraryItem {
         let item = LibraryItem(index: book, cover: coverView(book), labels: labels, card: card, progress: books[book].progress, palette: palette)
         item.onOpen = { [weak self] in self?.openBook(book) }
-        item.onRemove = { [weak self] in self?.ask(book) }
+        item.onMore = { [weak self, weak item] in if let item { self?.menu(book, at: item) } }
         return item
+    }
+
+    /// "Series · 2".
+    private func seriesLabel(_ b: LibraryBook) -> String {
+        guard b.number >= 0 else { return b.series }
+        return b.series + " · " + (b.number.rounded() == b.number ? String(Int(b.number)) : String(b.number))
+    }
+
+    /// The books in the chosen view's groups (`forzac_library_arrange`).
+    private func arrange() -> [(heading: String?, books: [Int])] {
+        let strings = books.map { (strdup($0.title), strdup($0.authors), strdup($0.series)) }
+        defer { strings.forEach { free($0.0); free($0.1); free($0.2) } }
+        let keys = zip(books, strings).map { ForzacBookKey(title: $1.0, authors: $1.1, series: $1.2, number: $0.number) }
+        guard let handle = forzac_library_arrange(keys, UInt32(keys.count), view) else { return [] }
+        defer { forzac_groups_free(handle) }
+        let g = forzac_groups(handle)!.pointee
+        return (0..<Int(g.count)).map { i in
+            let (start, end) = (Int(g.starts[i]), Int(g.starts[i + 1]))
+            return (g.headings[i].map { String(cString: $0) }, (start..<end).map { Int(g.books[$0]) })
+        }
+    }
+
+    /// Shows view `v` and remembers it.
+    private func setView(_ v: UInt32) {
+        view = v
+        _ = forzac_set_library_view(state, v)
+        selected = 0
+        rebuild()
+        content.scroll(.zero)
+    }
+
+    /// The book's menu at its "⋯": "About the book", "Remove from library".
+    private func menu(_ book: Int, at item: LibraryItem) {
+        let menu = NSMenu()
+        let about = NSMenuItem(title: tr("About the book"), action: #selector(menuAbout(_:)), keyEquivalent: "")
+        let remove = NSMenuItem(title: tr("Remove from library"), action: #selector(menuRemove(_:)), keyEquivalent: "")
+        for i in [about, remove] {
+            i.target = self
+            i.tag = book
+            menu.addItem(i)
+        }
+        menu.popUp(positioning: nil, at: CGPoint(x: item.more.frame.minX, y: item.more.frame.maxY), in: item)
+    }
+
+    @objc private func menuAbout(_ sender: NSMenuItem) { showAbout(sender.tag) }
+    @objc private func menuRemove(_ sender: NSMenuItem) { ask(sender.tag) }
+
+    /// "About the book": the file read on a background queue, then a sheet over the dimmed library.
+    private func showAbout(_ book: Int) {
+        guard about == nil, asking == nil, book < books.count else { return }
+        let path = books[book].path
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let doc = forzac_open(path, nil) else { return }
+            let handle = forzac_book_info(doc)!
+            let i = forzac_book_info_view(handle)!.pointee
+            let info = [i.title, i.authors, i.series, i.details, i.annotation].map { String(cString: $0!) }
+            forzac_book_info_free(handle)
+            forzac_close(doc)
+            DispatchQueue.main.async {
+                guard let self, self.about == nil, self.asking == nil else { return }
+                let sheet = AboutView(palette: self.palette, cover: self.coverView(book), info: info)
+                sheet.onAnswer = { [weak self] read in self?.closeAbout(read) }
+                sheet.frame = self.container.bounds
+                sheet.autoresizingMask = [.width, .height]
+                self.container.addSubview(sheet)
+                self.about = (sheet, book)
+            }
+        }
+    }
+
+    private func closeAbout(_ read: Bool) {
+        guard let (view, book) = about else { return }
+        view.removeFromSuperview()
+        about = nil
+        if read { openBook(book) }
     }
 
     private func share(_ b: LibraryBook) -> String {
@@ -978,6 +1108,15 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             updateClose.frame.origin = CGPoint(x: right - 4 - updateClose.frame.width, y: headY + (48 - updateClose.frame.height) / 2)
             updateText.frame.origin = CGPoint(x: updateClose.frame.minX - 6 - updateText.frame.width, y: headY + (48 - updateText.frame.height) / 2)
         }
+        // The views' tabs under the head, the chosen one in ink and underlined.
+        var tx = x
+        for (i, tab) in tabs.enumerated() {
+            tab.textColor = nsColor(UInt32(i) == view ? palette.ink : palette.muted)
+            tab.sizeToFit()
+            tab.frame.origin = CGPoint(x: tx, y: headY + 48 + 18)
+            tx += tab.frame.width + 24
+        }
+        tabRule.frame = CGRect(x: x, y: headY + 48 + 18 + (tabs.first?.frame.height ?? 20) + 8, width: inner, height: 1)
         let height = bodyLayout?(x, inner) ?? 0
         content.frame = CGRect(x: 0, y: 0, width: width, height: max(height, scroll.contentSize.height))
         asking?.view.frame = container.bounds
@@ -987,30 +1126,21 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     // MARK: Actions
 
     private func select(_ index: Int) {
-        for (i, item) in items.enumerated() { item.cover.selected = i == index }
+        for (i, item) in items.enumerated() {
+            item.cover.selected = i == index
+            item.isSelected = i == index
+        }
         selected = index
         guard index < items.count else { return }
         let f = items[index].frame.insetBy(dx: 0, dy: -24)
         content.scrollToVisible(f)
     }
 
-    /// Moves the selection: `dx` along the books, `dy` rows of the shelf (the card is a row of its own).
+    /// Moves the selection: `dx` along the books, `dy` rows through the card and the groups (`forzac_library_step`).
     private func step(dx: Int = 0, dy: Int = 0) {
-        let n = items.count
-        guard n > 0 else { return }
-        let i = selected
-        let card = hasCard ? 1 : 0
-        var target = i
-        if dx != 0 {
-            target = min(max(i + dx, 0), n - 1)
-        } else if dy > 0 {
-            if card == 1 && i == 0 { target = min(1, n - 1) } else if (i - card) / columns < (n - 1 - card) / columns { target = min(i + columns, n - 1) }
-        } else if i < card + columns {
-            if card == 1 && i > 0 { target = 0 }
-        } else {
-            target = i - columns
-        }
-        select(target)
+        var sizes: [UInt32] = hasCard ? [1, 1] : []
+        for g in groups { sizes += [UInt32(g.count), UInt32(columns)] }
+        select(Int(forzac_library_step(sizes, UInt32(sizes.count / 2), UInt32(selected), Int32(dx), Int32(dy))))
     }
 
     private func openBook(_ book: Int) {
@@ -1130,6 +1260,14 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         guard e.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return false }
         let typing = window.firstResponder is NSTextView && searching
         let code = e.keyCode == 0x4C ? 0x24 : e.keyCode
+        if about != nil {
+            switch code {
+            case 0x24: closeAbout(true)
+            case 0x35: closeAbout(false)
+            default: break
+            }
+            return true
+        }
         if asking != nil {
             switch code {
             case 0x24: answer(true)
@@ -1148,6 +1286,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         case (0x24, _): if selected < items.count { openBook(items[selected].index) }
         case (0x33, false), (0x75, false): if selected < items.count { ask(items[selected].index) }
         case (0x35, _): if searching { setSearching(false) } else { window.close() }
+        case (0x30, false): if !books.isEmpty { setView((view + (e.modifierFlags.contains(.shift) ? 3 : 1)) % 4) }
         default:
             guard !typing else { return false }
             switch e.shortcutKey {
@@ -1156,6 +1295,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             case 0x26: step(dy: 1)
             case 0x28: step(dy: -1)
             case 0x02: if selected < items.count { ask(items[selected].index) }
+            case 0x22: if selected < items.count { showAbout(items[selected].index) }
             case 0x2C: if !books.isEmpty && e.characters != "?" { setSearching(true) } else { return false }
             case 0x03 where e.modifierFlags.contains(.shift): showFolder()
             case 0x0C: window.close()
@@ -1243,6 +1383,101 @@ final class DropView: NSView {
         let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
         onDrop?(urls)
         return !urls.isEmpty
+    }
+}
+
+/// "About the book": a dimmed window with a sheet in the middle — the cover, the title, the authors, the series, the
+/// details and the annotation, "Close" and "Read". A click beside the sheet closes it.
+final class AboutView: NSView {
+    var onAnswer: ((Bool) -> Void)?
+    private let sheet = LayerView()
+    private let cover: CoverView
+    private let texts: [NSTextField]
+    private let annotation = NSScrollView()
+    private let annotationText: NSTextField
+    private let buttons: [PillButton]
+
+    /// `info`: title, authors, series, details, annotation; empty ones are left out.
+    init(palette: Palette, cover: CoverView, info: [String]) {
+        self.cover = cover
+        let styles: [(NSFont, UInt32)] = [(bookFont("Literata", 22, bold: true), palette.ink), (interfaceFont(15), palette.ink),
+                                          (interfaceFont(14), palette.muted), (interfaceFont(14), palette.muted)]
+        texts = zip(info.prefix(4), styles).filter { !$0.0.isEmpty }.map { wrapping($0.0, $0.1.0, $0.1.1) }
+        annotationText = wrapping(info[4], bookFont("Literata", 15), palette.ink)
+        let close = PillButton(tr("Close"), big: false, palette: palette)
+        let read = PillButton(tr("Read"), big: false, palette: palette)
+        close.layer!.backgroundColor = nil
+        close.layer!.borderWidth = 1
+        close.layer!.borderColor = color(palette.line)
+        close.title.textColor = nsColor(palette.ink)
+        read.title.textColor = nsColor(palette.sheet)
+        buttons = [close, read]
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer!.backgroundColor = color(0x000000, alpha: 0.2)
+        sheet.translatesAutoresizingMaskIntoConstraints = true
+        sheet.layer!.backgroundColor = color(palette.sheet)
+        sheet.layer!.cornerRadius = 22
+        addSubview(sheet)
+        close.onClick = { [weak self] in self?.onAnswer?(false) }
+        read.onClick = { [weak self] in self?.onAnswer?(true) }
+        let document = FlippedView()
+        document.addSubview(annotationText)
+        annotationText.translatesAutoresizingMaskIntoConstraints = true
+        annotation.documentView = document
+        annotation.drawsBackground = false
+        annotation.hasVerticalScroller = true
+        annotation.autohidesScrollers = true
+        annotation.isHidden = info[4].isEmpty
+        for v in [cover as NSView, annotation] + texts + buttons as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = true
+            sheet.addSubview(v)
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+
+    override func layout() {
+        super.layout()
+        let width = min(bounds.width - 48, 600)
+        let inner = width - 56
+        let m = CoverView.margin
+        cover.frame = CGRect(x: 28 - m, y: 28 - m, width: 100 + 2 * m, height: 150 + 2 * m)
+        let textX: CGFloat = 28 + 100 + 20
+        let textWidth = width - textX - 28
+        let heights = texts.map { ceil($0.cell!.cellSize(forBounds: CGRect(x: 0, y: 0, width: textWidth, height: 1e4)).height) }
+        let textHeight: CGFloat = heights.reduce(0, +) + CGFloat(max(texts.count - 1, 0)) * 6
+        var y: CGFloat = 28 + max(0, (150 - textHeight) / 2)
+        for (t, h) in zip(texts, heights) {
+            t.frame = CGRect(x: textX, y: y, width: textWidth, height: h)
+            y += h + 6
+        }
+        y = max(28 + 150, y - 6) + 20
+        if !annotation.isHidden {
+            let h = ceil(annotationText.cell!.cellSize(forBounds: CGRect(x: 0, y: 0, width: inner - 16, height: 1e4)).height)
+            annotationText.frame = CGRect(x: 0, y: 0, width: inner - 16, height: h)
+            annotation.documentView!.frame = CGRect(x: 0, y: 0, width: inner, height: h)
+            let shown = min(h, 260, max(bounds.height - y - 48 - 28 - 120, 60))
+            annotation.frame = CGRect(x: 28, y: y, width: inner, height: shown)
+            y += shown + 20
+        }
+        let half = (inner - 12) / 2
+        for (i, button) in buttons.enumerated() {
+            button.frame = CGRect(x: 28 + CGFloat(i) * (half + 12), y: y, width: half, height: 48)
+            button.layer!.cornerRadius = 24
+            button.title.sizeToFit()
+            button.title.frame.origin = CGPoint(x: (half - button.title.frame.width) / 2, y: (48 - button.title.frame.height) / 2)
+        }
+        let height = y + 48 + 28
+        sheet.frame = CGRect(x: (bounds.width - width) / 2, y: max((bounds.height - height) / 2, 16), width: width, height: height)
+    }
+
+    override func mouseDown(with e: NSEvent) {}
+
+    override func mouseUp(with e: NSEvent) {
+        if !sheet.frame.contains(convert(e.locationInWindow, from: nil)) { onAnswer?(false) }
     }
 }
 

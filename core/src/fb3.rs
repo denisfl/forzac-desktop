@@ -123,6 +123,46 @@ fn read_meta(book: &mut Book, description: &[u8], core: Option<&[u8]>) {
                             book.annotation = paragraphs(&mut xml)?;
                             depth -= 1;
                         }
+                        "sequence" if depth == 2 => {
+                            let number = attr(&attrs, "number").map(str::to_owned);
+                            let mut name = String::new();
+                            children(&mut xml, |xml, child, _| {
+                                if child == "title" {
+                                    name = main_title(xml)?;
+                                    Ok(())
+                                } else {
+                                    xml.skip()
+                                }
+                            })?;
+                            if book.series.is_none() {
+                                book.series = crate::model::Series::parse(&name, number.as_deref());
+                            }
+                            depth -= 1;
+                        }
+                        "fb3-classification" if depth == 2 => {
+                            children(&mut xml, |xml, child, _| {
+                                if child != "subject" {
+                                    return xml.skip();
+                                }
+                                let subject = collapse(&xml.text()?);
+                                if !subject.is_empty() && !book.genres.contains(&subject) {
+                                    book.genres.push(subject);
+                                }
+                                Ok(())
+                            })?;
+                            depth -= 1;
+                        }
+                        "written" if depth == 2 => {
+                            children(&mut xml, |xml, child, attrs| {
+                                if child != "date" {
+                                    return xml.skip();
+                                }
+                                let value = attr(attrs, "value").and_then(crate::model::year_in);
+                                book.year = value.or_else(|| xml.text().ok().as_deref().and_then(crate::model::year_in));
+                                if value.is_some() { xml.skip() } else { Ok(()) }
+                            })?;
+                            depth -= 1;
+                        }
                         "subject" if attr(&attrs, "link") == Some("author") => {
                             if let Some(author) = author(&mut xml)? {
                                 book.authors.push(author);

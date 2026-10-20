@@ -7,7 +7,9 @@ fn fb2(body: &str, rest: &str) -> String {
         r##"<?xml version="1.0" encoding="utf-8"?>
 <FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" xmlns:l="http://www.w3.org/1999/xlink">
  <description><title-info><author><first-name>Анна</first-name><last-name>Ахматова</last-name></author>
-  <book-title>Книга</book-title><lang>ru</lang>
+  <genre>sf_social</genre><genre>unknown_code</genre><genre>SF_SOCIAL</genre>
+  <book-title>Книга</book-title><date value="1962-01-01">весна 1962</date><lang>ru</lang>
+  <sequence name="Полдень, XXII век &quot;Мир&quot;" number="2"><sequence name="Вложенная"/></sequence><sequence name="Вторая" number="1"/>
   <annotation><p>Первая строка.</p><p>Вторая.</p></annotation>
   <coverpage><image l:href="#cover.jpg"/></coverpage></title-info></description>
  <body>{body}</body>
@@ -36,6 +38,18 @@ fn metadata() {
     assert_eq!(b.language.as_deref(), Some("ru"));
     assert_eq!(b.annotation.as_deref(), Some("Первая строка.\nВторая."));
     assert_eq!(b.cover.as_deref(), Some("cover.jpg"));
+    assert_eq!(b.series, Some(Series { name: "Полдень, XXII век \"Мир\"".into(), number: Some(2.0) }), "the first sequence");
+    assert_eq!(b.genres, ["Social science fiction"], "by name, once; unknown codes left out");
+    assert_eq!(b.year, Some(1962));
+}
+
+#[test]
+fn year_from_the_paper_edition() {
+    let b = book("<section><p>Текст</p></section>", "");
+    assert_eq!(b.year, Some(1962));
+    let text = fb2("<section><p>Текст</p></section>", "").replace(r#"<date value="1962-01-01">весна 1962</date>"#, "");
+    let text = text.replace("</title-info>", "</title-info><publish-info><year>2004</year></publish-info>");
+    assert_eq!(parse(text.as_bytes()).unwrap().year, Some(2004));
 }
 
 #[test]

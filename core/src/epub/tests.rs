@@ -43,9 +43,13 @@ impl Epub<'_> {
                 <dc:title>Книга &amp; тест</dc:title>
                 <dc:creator opf:role="aut">Иван  Петров</dc:creator>
                 <dc:creator opf:role="trl">Переводчик</dc:creator>
+                <dc:creator opf:role="aut">Clear, James</dc:creator>
                 <dc:language>ru</dc:language>
                 <dc:description>&lt;p&gt;О книге.&lt;/p&gt;</dc:description>
                 <meta name="cover" content="cover-img"/>
+                <meta name="calibre:series" content="Плоский мир"/><meta name="calibre:series_index" content="3.0"/>
+                <dc:subject>Фэнтези</dc:subject><dc:subject>Юмор</dc:subject><dc:subject>Фэнтези</dc:subject>
+                <dc:date>1987-11-12T00:00:00+00:00</dc:date>
               </metadata>
               <manifest>{manifest}
                 <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
@@ -114,11 +118,36 @@ fn link<'b>(book: &'b Book, text: &StyledText, label: &str) -> Option<&'b LinkTa
 fn metadata() {
     let b = book(docs(&[("a.xhtml", "<p>Текст</p>")]));
     assert_eq!(b.title, "Книга & тест");
-    assert_eq!(b.authors, ["Иван Петров"]);
+    assert_eq!(b.authors, ["Иван Петров", "James Clear"], "a name written for sorting turned back");
     assert_eq!(b.language.as_deref(), Some("ru"));
     assert_eq!(b.annotation.as_deref(), Some("О книге."));
     assert_eq!(b.cover.as_deref(), Some("OPS/img/cover.jpg"));
     assert_eq!(b.images.keys().collect::<Vec<_>>(), ["OPS/img/cover.jpg"]);
+    assert_eq!(b.series, Some(crate::model::Series { name: "Плоский мир".into(), number: Some(3.0) }));
+    assert_eq!(b.genres, ["Фэнтези", "Юмор"]);
+    assert_eq!(b.year, Some(1987));
+}
+
+#[test]
+fn epub3_collection_is_the_series() {
+    let opf = r##"<?xml version="1.0" encoding="utf-8"?>
+        <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+          <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>T</dc:title><dc:language>en</dc:language>
+            <meta property="belongs-to-collection" id="c1">Discworld</meta>
+            <meta refines="#c1" property="collection-type">series</meta>
+            <meta refines="#c1" property="group-position">2.5</meta></metadata>
+          <manifest><item id="p1" href="p1.xhtml" media-type="application/xhtml+xml"/></manifest>
+          <spine><itemref idref="p1"/></spine>
+        </package>"##;
+    let page = xhtml("<p>Text.</p>");
+    let b = parse(&zip(&[
+        ("META-INF/container.xml", CONTAINER_XML.as_bytes()),
+        ("OPS/content.opf", opf.as_bytes()),
+        ("OPS/p1.xhtml", page.as_bytes()),
+    ]))
+    .unwrap();
+    let series = b.series.unwrap();
+    assert_eq!((series.name.as_str(), series.number_label().as_deref()), ("Discworld", Some("2.5")));
 }
 
 #[test]

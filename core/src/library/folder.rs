@@ -128,8 +128,10 @@ fn read_file(name: String, meta: &std::fs::Metadata, path: &Path) -> (Cached, Op
     let (size, mtime) = (meta.len(), mtime(meta));
     let bytes = std::fs::read(path).ok();
     match bytes.as_deref().and_then(|b| crate::parse(b).ok().map(|book| (book, legacy_id(b)))) {
-        Some((b, old)) => (Cached { name, size, mtime, id: b.id, title: b.title, authors: b.authors.join(", ") }, Some(old)),
-        None => (Cached { name, size, mtime, id: String::new(), title: String::new(), authors: String::new() }, None),
+        Some((b, old)) => {
+            (Cached { name, size, mtime, id: b.id, title: b.title, authors: b.authors.join(", "), series: b.series }, Some(old))
+        }
+        None => (Cached { name, size, mtime, ..Cached::default() }, None),
     }
 }
 
@@ -183,7 +185,8 @@ pub fn scan(folder: &Path, store: &mut Store) -> Vec<Entry> {
         .iter()
         .filter_map(|e| {
             let path = if e.path.is_file() { e.path.clone() } else { in_folder(&e.id)? };
-            Some(Entry { path, ..e.clone() })
+            let series = files.iter().find(|f| f.id == e.id).and_then(|f| f.series.clone());
+            Some(Entry { path, series, ..e.clone() })
         })
         .collect();
     remembered.sort_by_key(|e| std::cmp::Reverse(e.opened));
@@ -197,9 +200,8 @@ pub fn scan(folder: &Path, store: &mut Store) -> Vec<Entry> {
         path: folder.join(&f.name),
         title: f.title.clone(),
         authors: f.authors.clone(),
-        position: Default::default(),
-        progress: 0.0,
-        opened: 0,
+        series: f.series.clone(),
+        ..Entry::default()
     }));
     remembered
 }
@@ -239,7 +241,7 @@ fn copy_in(src: &Path, bytes: &[u8], id: String, folder: &Path) -> Result<Cached
         return Err(crate::Error::Unavailable);
     }
     let (size, mtime) = std::fs::metadata(&path).map(|m| (m.len(), mtime(&m))).unwrap_or_default();
-    Ok(Cached { name, size, mtime, id, title: book.title, authors: book.authors.join(", ") })
+    Ok(Cached { name, size, mtime, id, title: book.title, authors: book.authors.join(", "), series: book.series })
 }
 
 /// What adding a folder did ([`import_folder`]).

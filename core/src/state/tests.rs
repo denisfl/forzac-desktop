@@ -197,7 +197,7 @@ fn ids_are_renamed_everywhere() {
     store.set_bookmarks(&old, &[at(0, 1, 0)]).unwrap();
     store.set_quotes(&old, &[(at(0, 1, 0), at(0, 1, 4))]).unwrap();
     store.set_bookmarks(&new, &[at(0, 3, 0)]).unwrap();
-    let cached = Cached { name: "a.fb2".into(), size: 1, mtime: 1, id: old.id.clone(), title: "A".into(), authors: String::new() };
+    let cached = Cached { name: "a.fb2".into(), size: 1, mtime: 1, id: old.id.clone(), title: "A".into(), ..Cached::default() };
     store.set_files(vec![cached]).unwrap();
 
     let ids = HashMap::from([(old.id.clone(), new.id.clone())]);
@@ -244,6 +244,7 @@ fn a_thousand_books_read_and_write_quickly() {
                     position: at(i % 40, i % 300, i),
                     progress: 0.5,
                     opened: i as u64,
+                    series: None,
                 });
             }
         })
@@ -288,6 +289,7 @@ fn cached(name: &str, id: &str) -> Cached {
         id: id.into(),
         title: "Война\tи мир".into(),
         authors: "Лев Толстой".into(),
+        series: Series::parse("Эпопеи", Some("1.5")),
     }
 }
 
@@ -313,8 +315,9 @@ fn a_state_without_file_lines_and_damaged_file_lines() {
     let store = Store::open(&file);
     assert!(store.files().is_empty());
     assert_eq!(store.entries().len(), 1, "a 0.9.0 state reads as before");
-    let good = "file\ta.fb2\t10\t20\tid\tT\tA";
-    std::fs::write(&file, format!("{HEADER}\nfile\tb.fb2\tten\t20\tid\tT\tA\nfile\tc.fb2\t10\n{good}\n")).unwrap();
+    let good = "file\ta.fb2\t10\t20\tid\tT\tA\tS\t2";
+    let old = "file\td.fb2\t10\t20\tid\tT\tA"; // 0.11: no series, read again
+    std::fs::write(&file, format!("{HEADER}\nfile\tb.fb2\tten\t20\tid\tT\tA\t\t\nfile\tc.fb2\t10\n{old}\n{good}\n")).unwrap();
     let mut store = Store::open(&file);
     assert_eq!(store.files().iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["a.fb2"]);
     store.set_setting("theme", "Dark").unwrap();

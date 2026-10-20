@@ -14,7 +14,8 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 
 use crate::model::{
-    Block, Book, Chapter, Image, Kind, LinkTarget, Locator, Note, Style, StyleRange, StyledText, Table, TableCell, TocEntry,
+    Block, Book, Chapter, Image, Kind, LinkTarget, Locator, Note, Series, Style, StyleRange, StyledText, Table, TableCell, TocEntry,
+    year_in,
 };
 use crate::typography;
 
@@ -176,7 +177,8 @@ impl<'a> Fb2Reader<'a> {
                         }
                         match name.as_str() {
                             "title-info" => self.read_title_info()?,
-                            "document-info" | "publish-info" | "custom-info" | "stylesheet" => self.skip()?,
+                            "publish-info" => self.read_publish_info()?,
+                            "document-info" | "custom-info" | "stylesheet" => self.skip()?,
                             "body" => self.read_body(attr(&attrs, "name"))?,
                             "binary" => self.read_binary(&attrs)?,
                             _ => {} // descend: `description` holds `title-info`
@@ -278,7 +280,7 @@ impl<'a> Fb2Reader<'a> {
     // region description
 
     fn read_title_info(&mut self) -> Res<()> {
-        self.for_each_child(|r, name, _| {
+        self.for_each_child(|r, name, attrs| {
             match name {
                 "book-title" => r.book.title = r.read_plain_text()?,
                 "author" => {
@@ -288,6 +290,25 @@ impl<'a> Fb2Reader<'a> {
                     }
                 }
                 "lang" => r.book.language = Some(r.read_plain_text()?).filter(|l| !l.is_empty()),
+                "sequence" => {
+                    if r.book.series.is_none() {
+                        r.book.series = Series::parse(&unescape(attr(attrs, "name").unwrap_or_default()), attr(attrs, "number"));
+                    }
+                    r.skip()?;
+                }
+                "genre" => {
+                    let code = r.read_plain_text()?;
+                    if let Some(name) = crate::i18n::fb2_genre(&code)
+                        && !r.book.genres.iter().any(|g| g == name)
+                    {
+                        r.book.genres.push(name.to_owned());
+                    }
+                }
+                "date" => {
+                    let value = attr(attrs, "value").map(str::to_owned);
+                    let text = r.read_plain_text()?;
+                    r.book.year = value.as_deref().and_then(year_in).or_else(|| year_in(&text));
+                }
                 "coverpage" => r.for_each_child(|r, name, attrs| {
                     if name == "image" && r.book.cover.is_none() {
                         r.book.cover = image_id(attrs);
@@ -310,6 +331,19 @@ impl<'a> Fb2Reader<'a> {
                 _ => r.skip()?,
             }
             Ok(())
+        })
+    }
+
+    /// The year of the paper edition, when `title-info` gave none.
+    fn read_publish_info(&mut self) -> Res<()> {
+        self.for_each_child(|r, name, _| {
+            if name == "year" {
+                let year = year_in(&r.read_plain_text()?);
+                r.book.year = r.book.year.or(year);
+                Ok(())
+            } else {
+                r.skip()
+            }
         })
     }
 
@@ -811,6 +845,11 @@ pub(crate) fn read_fb3_body(xml: &[u8], images: &HashMap<String, String>) -> Res
 
 fn attr<'v>(attrs: &'v [(String, String)], name: &str) -> Option<&'v str> {
     attrs.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+}
+
+/// The few entities a series' name may carry in a raw attribute.
+fn unescape(s: &str) -> String {
+    s.replace("&quot;", "\"").replace("&apos;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 }
 
 /// `l:href`, `xlink:href`: the namespace prefix varies, so only the local name counts.

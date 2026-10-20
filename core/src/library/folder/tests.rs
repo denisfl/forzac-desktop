@@ -293,7 +293,7 @@ fn old_state(home: &Path, folder: &Path, books: &[&Path]) -> Store {
         s.set_quotes(&book, &[(at, Locator { offset: 5, ..at })]).unwrap();
         let meta = std::fs::metadata(path).unwrap();
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
-        files.push(Cached { name, size: meta.len(), mtime: mtime(&meta), id: book.id, title: book.title, authors: String::new() });
+        files.push(Cached { name, size: meta.len(), mtime: mtime(&meta), id: book.id, title: book.title, ..Cached::default() });
     }
     s.set_files(files).unwrap();
     s

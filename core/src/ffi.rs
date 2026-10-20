@@ -1589,6 +1589,10 @@ pub struct ForzacRecent {
     pub id: *const c_char,
     /// False for a book in the Books folder that was never opened.
     pub opened: bool,
+    /// The series' name, empty when none.
+    pub series: *const c_char,
+    /// The number in the series; negative when none.
+    pub number: f32,
 }
 
 impl State {
@@ -1596,11 +1600,14 @@ impl State {
     fn publish(&mut self, books: Vec<crate::state::Entry>, count: *mut u32) -> *const ForzacRecent {
         self.recent_strings = books
             .iter()
-            .flat_map(|e| [cstring(&e.path.to_string_lossy()), cstring(&e.title), cstring(&e.authors), cstring(&e.id)])
+            .flat_map(|e| {
+                let series = e.series.as_ref().map_or("", |s| s.name.as_str());
+                [cstring(&e.path.to_string_lossy()), cstring(&e.title), cstring(&e.authors), cstring(&e.id), cstring(series)]
+            })
             .collect();
         self.recent = books
             .iter()
-            .zip(self.recent_strings.chunks(4))
+            .zip(self.recent_strings.chunks(5))
             .map(|(e, s)| ForzacRecent {
                 path: s[0].as_ptr(),
                 title: s[1].as_ptr(),
@@ -1608,6 +1615,8 @@ impl State {
                 progress: e.progress,
                 id: s[3].as_ptr(),
                 opened: e.opened > 0,
+                series: s[4].as_ptr(),
+                number: e.series.as_ref().and_then(|s| s.number).unwrap_or(-1.0),
             })
             .collect();
         unsafe { *count = self.recent.len() as u32 };
@@ -1849,11 +1858,176 @@ pub unsafe extern "C" fn forzac_update_dismiss(state: *mut State) -> bool {
 /// How a book matches the library's search `query` (lower first); -1 when it does not.
 ///
 /// # Safety
-/// The three must be valid NUL-terminated strings.
+/// The four must be valid NUL-terminated strings.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn forzac_library_rank(query: *const c_char, title: *const c_char, authors: *const c_char) -> i32 {
+pub unsafe extern "C" fn forzac_library_rank(
+    query: *const c_char,
+    title: *const c_char,
+    authors: *const c_char,
+    series: *const c_char,
+) -> i32 {
     let (query, title, authors) = unsafe { (str(query), str(title), str(authors)) };
-    crate::library::rank(&query, &title, &authors).map_or(-1, |r| r as i32)
+    let series = unsafe { str(series) };
+    crate::library::rank(&query, &title, &authors, &series).map_or(-1, |r| r as i32)
+}
+
+/// A book as the library's views sort it (`library::arrange`).
+#[repr(C)]
+pub struct ForzacBookKey {
+    pub title: *const c_char,
+    pub authors: *const c_char,
+    /// Empty when none.
+    pub series: *const c_char,
+    /// Negative when none.
+    pub number: f32,
+}
+
+/// The groups of a view: `count` groups, group `i` holds `books[starts[i]..starts[i + 1]]` (indices into the books
+/// given) under `headings[i]` (null for none); `starts` has `count + 1` entries.
+#[repr(C)]
+pub struct ForzacGroups {
+    pub count: u32,
+    pub starts: *const u32,
+    pub headings: *const *const c_char,
+    pub books: *const u32,
+}
+
+/// What [`forzac_library_arrange`] returned, alive until [`forzac_groups_free`].
+pub struct Groups {
+    view: ForzacGroups,
+    _starts: Vec<u32>,
+    _headings: Vec<*const c_char>,
+    _strings: Vec<CString>,
+    _books: Vec<u32>,
+}
+
+/// The `n` `books` in `view` (0 Recent, 1 Title, 2 Author, 3 Series; `library::arrange`); free with
+/// [`forzac_groups_free`].
+///
+/// # Safety
+/// `books` points at `n` keys with valid NUL-terminated strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_library_arrange(books: *const ForzacBookKey, n: u32, view: u32) -> *mut Groups {
+    let keys = if n == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(books, n as usize) } };
+    let entries: Vec<crate::state::Entry> = keys
+        .iter()
+        .map(|k| crate::state::Entry {
+            title: unsafe { str(k.title) }.into_owned(),
+            authors: unsafe { str(k.authors) }.into_owned(),
+            series: crate::model::Series::parse(&unsafe { str(k.series) }, (k.number >= 0.0).then(|| k.number.to_string()).as_deref()),
+            ..Default::default()
+        })
+        .collect();
+    let view = crate::library::View::ALL.get(view as usize).copied().unwrap_or_default();
+    let groups = crate::library::arrange(&entries, view);
+    let strings: Vec<CString> = groups.iter().map(|g| cstring(g.heading.as_deref().unwrap_or(""))).collect();
+    let headings: Vec<*const c_char> =
+        groups.iter().zip(&strings).map(|(g, s)| if g.heading.is_some() { s.as_ptr() } else { std::ptr::null() }).collect();
+    let mut starts = vec![0u32];
+    let mut ordered = Vec::new();
+    for g in &groups {
+        ordered.extend(g.books.iter().map(|&i| i as u32));
+        starts.push(ordered.len() as u32);
+    }
+    let view = ForzacGroups { count: groups.len() as u32, starts: starts.as_ptr(), headings: headings.as_ptr(), books: ordered.as_ptr() };
+    Box::into_raw(Box::new(Groups { view, _starts: starts, _headings: headings, _strings: strings, _books: ordered }))
+}
+
+/// The groups' view of `groups`.
+///
+/// # Safety
+/// `groups` from [`forzac_library_arrange`], not freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_groups(groups: *const Groups) -> *const ForzacGroups {
+    &unsafe { &*groups }.view
+}
+
+/// # Safety
+/// `groups` from [`forzac_library_arrange`], or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_groups_free(groups: *mut Groups) {
+    if !groups.is_null() {
+        drop(unsafe { Box::from_raw(groups) });
+    }
+}
+
+/// The library's remembered view (0 Recent, 1 Title, 2 Author, 3 Series).
+///
+/// # Safety
+/// `state` from [`forzac_state_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_library_view(state: *const State) -> u32 {
+    crate::library::View::from_key(unsafe { &*state }.store.setting(crate::library::VIEW)) as u32
+}
+
+/// Remembers the library's view; false when the state cannot be written.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_set_library_view(state: *mut State, view: u32) -> bool {
+    let view = crate::library::View::ALL.get(view as usize).copied().unwrap_or_default();
+    unsafe { &mut *state }.store.set_setting(crate::library::VIEW, view.key()).is_ok()
+}
+
+/// The selection moved through `n` laid-out groups, `sizes` holding (books, columns) pairs (`library::step`).
+///
+/// # Safety
+/// `sizes` points at `2 * n` numbers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_library_step(sizes: *const u32, n: u32, at: u32, dx: i32, dy: i32) -> u32 {
+    let sizes = if n == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(sizes, 2 * n as usize) } };
+    let groups: Vec<(usize, usize)> = sizes.chunks(2).map(|p| (p[0] as usize, p[1] as usize)).collect();
+    crate::library::step(&groups, at as usize, dx, dy) as u32
+}
+
+/// "About the book" (`library::BookInfo`); strings valid until [`forzac_book_info_free`].
+#[repr(C)]
+pub struct ForzacBookInfo {
+    pub title: *const c_char,
+    pub authors: *const c_char,
+    pub series: *const c_char,
+    pub details: *const c_char,
+    pub annotation: *const c_char,
+}
+
+pub struct BookInfo {
+    view: ForzacBookInfo,
+    _strings: [CString; 5],
+}
+
+/// The information on `doc` for "About the book"; free with [`forzac_book_info_free`].
+///
+/// # Safety
+/// `doc` from [`forzac_open`], not closed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_book_info(doc: *const Document) -> *mut BookInfo {
+    let info = crate::library::book_info(&unsafe { &*doc }.book);
+    let strings = [info.title, info.authors, info.series, info.details, info.annotation].map(|s| cstring(&s));
+    let view = ForzacBookInfo {
+        title: strings[0].as_ptr(),
+        authors: strings[1].as_ptr(),
+        series: strings[2].as_ptr(),
+        details: strings[3].as_ptr(),
+        annotation: strings[4].as_ptr(),
+    };
+    Box::into_raw(Box::new(BookInfo { view, _strings: strings }))
+}
+
+/// # Safety
+/// `info` from [`forzac_book_info`], not freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_book_info_view(info: *const BookInfo) -> *const ForzacBookInfo {
+    &unsafe { &*info }.view
+}
+
+/// # Safety
+/// `info` from [`forzac_book_info`], or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_book_info_free(info: *mut BookInfo) {
+    if !info.is_null() {
+        drop(unsafe { Box::from_raw(info) });
+    }
 }
 
 /// A generated cover's look (`library::CoverStyle`).

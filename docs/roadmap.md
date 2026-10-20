@@ -20,8 +20,8 @@ later, syncing with the Android app through Dropbox-like services. `update-check
 ## After 0.11.0 — a library and syncing, after Calibre
 
 Agreed with the maintainer on 2026-10-20: "follow calibre-ebook.com — a library and syncing data with readers". In this
-order; the library's screens (17–19) are designed after the UX review (`docs/ux-review.md`). Done: `book-identity`
-and `folder-import` (2026-10-20).
+order; the library's screens (17–19) are designed after the UX review (`docs/ux-review.md`). Done: `book-identity`,
+`folder-import` and `library-metadata` (2026-10-20).
 
 | # | Change | What | Done when | Size |
 |---|---|---|---|---|

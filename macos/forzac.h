@@ -88,6 +88,8 @@ typedef struct {
     float progress;
     const char *id;
     bool opened;            // false: in the Books folder, never opened
+    const char *series;     // empty: not in a series
+    float number;           // in the series; negative: none
 } ForzacRecent;
 
 // A generated cover: cloth or marbled paper (forzac_marble with `seed`) under `cloth`, a spine, the title's size
@@ -316,7 +318,42 @@ const char *forzac_added_message(ForzacState *state, ForzacAdded added, const ch
 
 // The library: search rank (lower first, -1 no match), generated covers, the empty state's sample page (lines: head,
 // title, subtitle, folio, paragraphs; valid for good).
-int32_t forzac_library_rank(const char *query, const char *title, const char *authors);
+int32_t forzac_library_rank(const char *query, const char *title, const char *authors, const char *series);
+
+// The library's views (library-metadata): forzac_library_arrange groups `n` books for `view` (0 Recent, 1 Title,
+// 2 Author, 3 Series); group i holds books[starts[i]..starts[i + 1]] under headings[i] (null: none). forzac_library_step
+// moves the selection through `n` laid-out groups given as (books, columns) pairs. forzac_book_info reads "About the
+// book" from an open document.
+typedef struct {
+    const char *title;
+    const char *authors;
+    const char *series;     // empty: none
+    float number;           // negative: none
+} ForzacBookKey;
+typedef struct ForzacGroupsHandle ForzacGroupsHandle;
+typedef struct {
+    uint32_t count;
+    const uint32_t *starts;
+    const char *const *headings;
+    const uint32_t *books;
+} ForzacGroups;
+ForzacGroupsHandle *forzac_library_arrange(const ForzacBookKey *books, uint32_t n, uint32_t view);
+const ForzacGroups *forzac_groups(const ForzacGroupsHandle *groups);
+void forzac_groups_free(ForzacGroupsHandle *groups);
+uint32_t forzac_library_step(const uint32_t *sizes, uint32_t n, uint32_t at, int32_t dx, int32_t dy);
+uint32_t forzac_library_view(const ForzacState *state);
+bool forzac_set_library_view(ForzacState *state, uint32_t view);
+typedef struct ForzacBookInfoHandle ForzacBookInfoHandle;
+typedef struct {
+    const char *title;
+    const char *authors;
+    const char *series;
+    const char *details;    // genres · year · language
+    const char *annotation;
+} ForzacBookInfo;
+ForzacBookInfoHandle *forzac_book_info(const ForzacDocument *doc);
+const ForzacBookInfo *forzac_book_info_view(const ForzacBookInfoHandle *info);
+void forzac_book_info_free(ForzacBookInfoHandle *info);
 ForzacCoverStyle forzac_cover_style(const char *id, const char *title);
 void forzac_marble(int32_t seed, uint32_t width, uint32_t height, uint8_t *out);
 const char *forzac_sample_page(void);

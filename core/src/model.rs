@@ -18,6 +18,12 @@ pub struct Book {
     pub annotation: Option<String>,
     /// Image id of the cover, if the book names one.
     pub cover: Option<String>,
+    /// The series the book belongs to, if it names one.
+    pub series: Option<Series>,
+    /// Genres: FB2's codes by their English names (`i18n::genre`), EPUB's and FB3's subjects as written.
+    pub genres: Vec<String>,
+    /// The year it was written or published.
+    pub year: Option<u32>,
     pub chapters: Vec<Chapter>,
     /// Footnotes and comments by id.
     pub notes: HashMap<String, Note>,
@@ -27,6 +33,38 @@ pub struct Book {
     pub toc: Vec<TocEntry>,
     /// Images by id (in FB2 the `<binary>` id).
     pub images: HashMap<String, Image>,
+}
+
+/// A series and the book's number in it.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Series {
+    pub name: String,
+    /// May be fractional ("2.5"); none when the book gives no number.
+    pub number: Option<f32>,
+}
+
+impl Series {
+    /// `name` and `number` as books write them; none for an empty name. A number that is not one is dropped.
+    pub fn parse(name: &str, number: Option<&str>) -> Option<Series> {
+        let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+        let number = number.and_then(|n| n.trim().replace(',', ".").parse::<f32>().ok()).filter(|n| n.is_finite() && *n >= 0.0);
+        (!name.is_empty()).then_some(Series { name, number })
+    }
+
+    /// The number as shown: "2", "2.5".
+    pub fn number_label(&self) -> Option<String> {
+        self.number.map(|n| if n.fract() == 0.0 { format!("{}", n as u32) } else { format!("{n}") })
+    }
+}
+
+/// The first year (four digits, 1000–2999) in `text`: "1962-01-01", "1962", "c. 1962".
+pub fn year_in(text: &str) -> Option<u32> {
+    let bytes = text.as_bytes();
+    (0..bytes.len().saturating_sub(3)).find_map(|i| {
+        let run = &bytes[i..i + 4];
+        let bounded = (i == 0 || !bytes[i - 1].is_ascii_digit()) && bytes.get(i + 4).is_none_or(|b| !b.is_ascii_digit());
+        (bounded && run.iter().all(u8::is_ascii_digit) && (b'1'..=b'2').contains(&run[0])).then(|| text[i..i + 4].parse().ok()).flatten()
+    })
 }
 
 impl Book {
@@ -368,6 +406,18 @@ pub struct Locator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn years_and_series_as_books_write_them() {
+        assert_eq!(year_in("1962-01-01"), Some(1962));
+        assert_eq!(year_in("c. 1962, 2nd ed. 1970"), Some(1962));
+        assert_eq!(year_in("12345"), None);
+        assert_eq!(year_in("0999"), None);
+        assert_eq!(Series::parse("  Мир   Полудня ", Some("3,5")).unwrap(), Series { name: "Мир Полудня".into(), number: Some(3.5) });
+        assert_eq!(Series::parse("X", Some("abc")).unwrap().number, None);
+        assert_eq!(Series::parse(" ", Some("1")), None);
+        assert_eq!(Series::parse("X", Some("4.0")).unwrap().number_label().as_deref(), Some("4"));
+    }
 
     #[test]
     fn contents_without_a_toc_list_every_chapter() {

@@ -33,6 +33,9 @@ struct Opf {
     authors: Vec<String>,
     language: Option<String>,
     description: Option<String>,
+    series: Option<crate::model::Series>,
+    genres: Vec<String>,
+    year: Option<u32>,
     items: Vec<Item>,
     /// Spine documents and whether they are in the reading flow (`linear` not "no").
     spine: Vec<(String, bool)>,
@@ -190,6 +193,9 @@ pub(crate) fn read(archive: &HashMap<String, Vec<u8>>) -> Result<Book, Error> {
         authors: opf.authors,
         language: opf.language,
         annotation: opf.description,
+        series: opf.series,
+        genres: opf.genres,
+        year: opf.year,
         cover: opf.cover.filter(|c| files.contains_key(c.as_str())),
         chapters,
         notes,
@@ -257,6 +263,11 @@ fn read_opf(files: &HashMap<&str, &[u8]>) -> Result<Opf, Error> {
     let mut spine = Vec::new();
     let mut ncx_id = None;
     let mut guide_cover = None;
+    // Calibre's series (EPUB 2) or EPUB 3's collections with their position, by the collection's id.
+    let (mut calibre_series, mut calibre_index) = (None::<String>, None::<String>);
+    let mut collections: Vec<(Option<String>, String)> = Vec::new();
+    let mut positions: HashMap<String, String> = HashMap::new();
+    let (mut genres, mut year) = (Vec::<String>::new(), None);
     walk(bytes, |xml, name, attrs| match name {
         "title" if title.is_empty() => title = xml.text().unwrap_or_default(),
         "creator" => {
@@ -268,9 +279,28 @@ fn read_opf(files: &HashMap<&str, &[u8]>) -> Result<Opf, Error> {
         }
         "language" if language.is_none() => language = Some(xml.text().unwrap_or_default()).filter(|l| !l.is_empty()),
         "description" if description.is_none() => description = Some(strip_tags(&xml.text().unwrap_or_default())).filter(|d| !d.is_empty()),
+        "subject" => {
+            let subject = collapse(&xml.text().unwrap_or_default());
+            if !subject.is_empty() && !genres.contains(&subject) {
+                genres.push(subject);
+            }
+        }
+        "date" if year.is_none() => year = crate::model::year_in(&xml.text().unwrap_or_default()),
         "meta" => {
-            if attr(attrs, "name") == Some("cover") {
-                cover_id = attr(attrs, "content").map(str::to_owned);
+            match attr(attrs, "name") {
+                Some("cover") => cover_id = attr(attrs, "content").map(str::to_owned),
+                Some("calibre:series") => calibre_series = attr(attrs, "content").map(str::to_owned),
+                Some("calibre:series_index") => calibre_index = attr(attrs, "content").map(str::to_owned),
+                _ => {}
+            }
+            match (attr(attrs, "property"), attr(attrs, "refines")) {
+                (Some("belongs-to-collection"), _) => {
+                    collections.push((attr(attrs, "id").map(str::to_owned), xml.text().unwrap_or_default()))
+                }
+                (Some("group-position"), Some(refines)) => {
+                    positions.insert(refines.trim_start_matches('#').to_owned(), xml.text().unwrap_or_default());
+                }
+                _ => {}
             }
             if let (Some(refines), Some("role")) = (attr(attrs, "refines"), attr(attrs, "property")) {
                 roles.insert(refines.trim_start_matches('#').to_owned(), xml.text().unwrap_or_default());
@@ -304,7 +334,7 @@ fn read_opf(files: &HashMap<&str, &[u8]>) -> Result<Opf, Error> {
     let chosen = if authored.is_empty() { creators.iter().collect() } else { authored };
     let mut authors: Vec<String> = Vec::new();
     for (name, _) in chosen {
-        let name = collapse(name);
+        let name = first_last(&collapse(name));
         if !name.is_empty() && !authors.contains(&name) {
             authors.push(name);
         }
@@ -324,7 +354,14 @@ fn read_opf(files: &HashMap<&str, &[u8]>) -> Result<Opf, Error> {
         .find(|i| Some(&i.id) == ncx_id.as_ref())
         .or_else(|| items.iter().find(|i| i.media_type == "application/x-dtbncx+xml"))
         .map(|i| i.path.clone());
-    Ok(Opf { title: collapse(&title), authors, language: language.map(|l| l.trim().to_owned()), description, items, spine, ncx, cover })
+    let series = match calibre_series {
+        Some(name) => crate::model::Series::parse(&name, calibre_index.as_deref()),
+        None => collections
+            .into_iter()
+            .find_map(|(id, name)| crate::model::Series::parse(&name, id.and_then(|id| positions.get(&id)).map(String::as_str))),
+    };
+    let language = language.map(|l| l.trim().to_owned());
+    Ok(Opf { title: collapse(&title), authors, language, description, series, genres, year, items, spine, ncx, cover })
 }
 
 /// The image type of a manifest item: its declared `image/*` type (SVG is read as a document), or, when the manifest
@@ -647,6 +684,14 @@ fn walk(data: &[u8], mut f: impl FnMut(&mut Xml, &str, &[(String, String)])) {
             Ev::Start(name, attrs) => f(&mut xml, &name, &attrs),
             _ => {}
         }
+    }
+}
+
+/// "Clear, James" (a creator written for sorting) as "James Clear"; any other name as it is.
+fn first_last(name: &str) -> String {
+    match name.split_once(", ") {
+        Some((last, first)) if !last.contains([' ', ',']) && !first.contains(',') && !first.is_empty() => format!("{first} {last}"),
+        _ => name.to_owned(),
     }
 }
 

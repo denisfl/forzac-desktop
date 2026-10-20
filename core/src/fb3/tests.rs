@@ -22,7 +22,10 @@ const DESCRIPTION: &str = r#"<?xml version="1.0" encoding="UTF-8"?><fb3-descript
     <fb3-relations><subject id='a' link='author'><title><main>М. Р. Сапин</main></title><first-name>М.</first-name><last-name>Сапин</last-name></subject>
     <subject id='b' link='author'><first-name>Дмитрий</first-name><last-name>Никитюк</last-name></subject>
     <subject id='c' link='translator'><title><main>Переводчик</main></title></subject></fb3-relations>
-    <lang>ru</lang><annotation><p>О книге.</p><p>Второй абзац.</p></annotation></fb3-description>"#;
+    <sequence number="7"><title><main>Учебная литература</main></title></sequence>
+    <fb3-classification><subject>медицина</subject><subject>анатомия</subject><target-audience age-min="16"/></fb3-classification>
+    <lang>ru</lang><written><date value="2011-01-01">2011</date></written>
+    <annotation><p>О книге.</p><p>Второй абзац.</p></annotation></fb3-description>"#;
 
 fn body(content: &str) -> String {
     format!(
@@ -65,6 +68,9 @@ fn metadata_and_cover() {
     assert_eq!(book.authors, ["М. Р. Сапин", "Дмитрий Никитюк"], "title/main, else names; not translators");
     assert_eq!(book.language.as_deref(), Some("ru"));
     assert_eq!(book.annotation.as_deref(), Some("О книге.\nВторой абзац."));
+    assert_eq!(book.series, Some(crate::model::Series { name: "Учебная литература".into(), number: Some(7.0) }));
+    assert_eq!(book.genres, ["медицина", "анатомия"]);
+    assert_eq!(book.year, Some(2011));
     assert_eq!(book.cover.as_deref(), Some("fb3/img/cover.jpg"));
     let cover = &book.images["fb3/img/cover.jpg"];
     assert_eq!((cover.content_type.as_str(), cover.bytes.as_slice()), ("image/jpeg", b"COVER".as_slice()));

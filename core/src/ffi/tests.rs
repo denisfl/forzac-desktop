@@ -474,6 +474,47 @@ fn adding_a_folder_through_the_c_functions() {
 }
 
 #[test]
+fn views_steps_and_information_through_the_c_functions() {
+    let (titles, authors, series) = (
+        [c("Стажёры"), c("Полдень"), c("Бесы")],
+        [c("А. Стругацкий"), c("А. Стругацкий"), c("Ф. Достоевский")],
+        [c("Мир"), c("Мир"), c("")],
+    );
+    let keys: Vec<ForzacBookKey> = (0..3)
+        .map(|i| ForzacBookKey {
+            title: titles[i].as_ptr(),
+            authors: authors[i].as_ptr(),
+            series: series[i].as_ptr(),
+            number: [4.0, 2.0, -1.0][i],
+        })
+        .collect();
+    unsafe {
+        let handle = forzac_library_arrange(keys.as_ptr(), 3, 3);
+        let g = &*forzac_groups(handle);
+        assert_eq!(g.count, 2);
+        let starts = std::slice::from_raw_parts(g.starts, 3);
+        let books = std::slice::from_raw_parts(g.books, 3);
+        assert_eq!((starts, books), (&[0, 2, 3][..], &[1, 0, 2][..]), "the series in its order, then the rest");
+        let headings = std::slice::from_raw_parts(g.headings, 2);
+        assert_eq!(string(headings[0]).as_deref(), Some("Мир"));
+        forzac_groups_free(handle);
+        let recent = forzac_library_arrange(keys.as_ptr(), 3, 0);
+        assert!((*(*forzac_groups(recent)).headings).is_null(), "Recent has no heading");
+        forzac_groups_free(recent);
+
+        let sizes = [1u32, 1, 2, 6];
+        assert_eq!(forzac_library_step(sizes.as_ptr(), 2, 0, 0, 1), 1);
+
+        let path = book_file();
+        let doc = forzac_open(c(path.to_str().unwrap()).as_ptr(), std::ptr::null_mut());
+        let info = forzac_book_info(doc);
+        assert!(!string((*forzac_book_info_view(info)).title).unwrap().is_empty());
+        forzac_book_info_free(info);
+        forzac_close(doc);
+    }
+}
+
+#[test]
 fn a_spread_window_paginates_half_pages() {
     let path = book_file();
     let doc = unsafe { forzac_open(c(path.to_str().unwrap()).as_ptr(), std::ptr::null_mut()) };
