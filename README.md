@@ -62,7 +62,8 @@ Without a file, Forzac shows the library: the folder's books with their covers, 
 (`Enter` opens one, `/` searches, `F` shows the Books folder, `d` removes a book: its file goes to the Trash, its
 bookmarks and highlights stay for when it is put back). Tabs sort and group it by title, author, series or shelf
 (`Tab`); a book's "⋯" menu shows its details, edits them (kept by Forzac, the file is not changed) and puts it on
-shelves; a dropped folder or `Ctrl+Shift+O` adds a whole folder of books. The state is kept in
+shelves, and "Send to Kindle" converts it to MOBI and copies it onto a Kindle connected by cable (one older than 2024,
+which shows as a disk); a dropped folder or `Ctrl+Shift+O` adds a whole folder of books. The state is kept in
 `$XDG_DATA_HOME/forzac/state` on Linux and `~/Library/Application Support/Forzac/state` on macOS, cover thumbnails in
 `$XDG_CACHE_HOME/forzac/covers` and `~/Library/Caches/Forzac/covers`.
 

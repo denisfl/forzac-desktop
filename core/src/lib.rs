@@ -10,6 +10,7 @@ pub mod ffi;
 pub mod fonts;
 pub mod hyphen;
 pub mod i18n;
+pub mod kindle;
 pub mod knuth_plass;
 mod language;
 pub mod layout;

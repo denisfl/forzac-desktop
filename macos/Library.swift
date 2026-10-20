@@ -587,6 +587,8 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     private let headMenuButton = FlatButton(IconView(Icons.ellipsis, size: 20))
     /// Changes the Books folder (the app runs it): the chosen path and whether to move the books.
     var onChangeFolder: ((String, Bool) -> Void)?
+    /// Sends a book to the Kindle (the app runs it): its path and title.
+    var onSendToKindle: ((String, String) -> Void)?
     private let closeButton = FlatButton(IconView(Icons.x, size: 20))
     private let openButton: PillButton
     /// "Version N is out — download ×" (`update-check`), in the head when it fits.
@@ -1001,8 +1003,9 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         shelves.addItem(new)
         let shelf = NSMenuItem(title: tr("Add to shelf"), action: nil, keyEquivalent: "")
         shelf.submenu = shelves
+        let kindle = NSMenuItem(title: tr("Send to Kindle"), action: #selector(menuKindle(_:)), keyEquivalent: "")
         let remove = NSMenuItem(title: tr("Remove from library"), action: #selector(menuRemove(_:)), keyEquivalent: "")
-        for i in [about, edit, shelf, remove] {
+        for i in [about, edit, shelf, kindle, remove] {
             i.target = i === shelf ? nil : self
             i.tag = book
             menu.addItem(i)
@@ -1012,6 +1015,11 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
 
     @objc private func menuAbout(_ sender: NSMenuItem) { showAbout(sender.tag) }
     @objc private func menuRemove(_ sender: NSMenuItem) { ask(sender.tag) }
+
+    @objc private func menuKindle(_ sender: NSMenuItem) {
+        guard sender.tag < books.count else { return }
+        onSendToKindle?(books[sender.tag].path, books[sender.tag].title)
+    }
 
     /// "Edit…": the file read on a background queue, then the form in an alert; the file is never changed.
     @objc private func menuEdit(_ sender: NSMenuItem) {

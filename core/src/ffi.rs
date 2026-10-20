@@ -1798,6 +1798,22 @@ pub unsafe extern "C" fn forzac_change_books_folder(
     true
 }
 
+/// "Send to Kindle" (`kindle::send_to_kindle`) for the book at `path` titled `title`, with the reader's edits from
+/// `state`; the message for the reader, valid until the next call on `state`. Off the main thread, with a state handle
+/// of its own.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`]; `path` and `title` valid NUL-terminated strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_send_to_kindle(state: *mut State, path: *const c_char, title: *const c_char) -> *const c_char {
+    let state = unsafe { &mut *state };
+    let path = PathBuf::from(unsafe { str(path) }.into_owned());
+    let edits = std::fs::read(&path).map(|b| state.store.edits_of(&crate::state::book_id(&b))).unwrap_or_default();
+    let message = crate::kindle::send_to_kindle(&path, &edits, &unsafe { str(title) });
+    state.message = cstring(&message);
+    state.message.as_ptr()
+}
+
 /// The message after adding the folder named `name` (`library::Added::message`), or null when every book found was
 /// added; valid until the next call on `state`.
 ///

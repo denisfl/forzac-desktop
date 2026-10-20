@@ -320,6 +320,9 @@ const char *forzac_added_message(ForzacState *state, ForzacAdded added, const ch
 // background queue with a state handle of its own. False when `path` is not a writable folder; `*message` is what to
 // tell the reader (null: nothing), valid until the next call on `state`.
 bool forzac_change_books_folder(ForzacState *state, const char *path, bool move, const char **message);
+// "Send to Kindle" (send-to-kindle): converts the book and writes it onto the Kindle connected as a disk; returns the
+// message for the reader, valid until the next call on `state`. On a background queue with a state handle of its own.
+const char *forzac_send_to_kindle(ForzacState *state, const char *path, const char *title);
 
 // The library: search rank (lower first, -1 no match), generated covers, the empty state's sample page (lines: head,
 // title, subtitle, folio, paragraphs; valid for good).

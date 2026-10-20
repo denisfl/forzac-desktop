@@ -527,6 +527,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.library = library
                 library.onAddFolder = { [weak self] path in self?.importFolder(path) }
                 library.onChangeFolder = { [weak self] path, move in self?.changeBooksFolder(to: path, moving: move) }
+                library.onSendToKindle = { [weak self] path, title in self?.sendToKindle(path, title: title) }
                 if !measuring { self.checkUpdate(state) }
                 // Closing the library with no book open quits (the app stays after its last book window: the library follows).
                 NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: library.window, queue: .main) { [weak self] _ in
@@ -624,6 +625,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     alert.messageText = message
                     alert.beginSheetModal(for: library.window)
                 }
+            }
+        }
+    }
+
+    /// "Send to Kindle" (`send-to-kindle`) on the background queue, then the message in the library.
+    func sendToKindle(_ path: String, title: String) {
+        importQueue.async { [weak self] in
+            guard let worker = self?.worker else { return }
+            let message = String(cString: forzac_send_to_kindle(worker, path, title))
+            DispatchQueue.main.async {
+                guard let library = self?.library else { return }
+                let alert = NSAlert()
+                alert.messageText = message
+                alert.beginSheetModal(for: library.window)
             }
         }
     }

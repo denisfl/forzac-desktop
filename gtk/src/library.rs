@@ -1359,6 +1359,7 @@ impl Library {
         section.append(Some(tr("New shelf…")), Some(&format!("lib.newshelf(uint32 {book})")));
         shelves.append_section(None, &section);
         model.append_submenu(Some(tr("Add to shelf")), &shelves);
+        model.append(Some(tr("Send to Kindle")), Some(&format!("lib.kindle(uint32 {book})")));
         model.append(Some(tr("Remove from library")), Some(&format!("lib.remove(uint32 {book})")));
         self.window.insert_action_group("shelf", Some(&actions));
         let popover = gtk::PopoverMenu::from_model(Some(&model));
@@ -1616,6 +1617,28 @@ impl Library {
         }
         self.rebuild();
         self.select(book.min(self.items.borrow().len().saturating_sub(1)));
+    }
+
+    /// "Send to Kindle" (`send-to-kindle`): converted and written in the background, then the message.
+    fn send_to_kindle(self: &Rc<Self>, book: usize) {
+        let Some(b) = self.books.borrow().get(book).cloned() else { return };
+        let edits = self.store.borrow().edits_of(&b.id);
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let (path, title) = (b.path.clone(), b.title.clone());
+            let message = gio::spawn_blocking(move || forzac_core::kindle::send_to_kindle(&path, &edits, &title))
+                .await
+                .unwrap_or_else(|_| tr("Couldn't write to the Kindle.").to_owned());
+            if let Some(l) = weak.upgrade() {
+                gtk::AlertDialog::builder()
+                    .message(message)
+                    .buttons([tr("Close")])
+                    .cancel_button(0)
+                    .modal(true)
+                    .build()
+                    .show(Some(&l.window));
+            }
+        });
     }
 
     /// The views' tabs, the chosen one marked; hidden while searching or without books.
@@ -2152,6 +2175,14 @@ impl Library {
             }
         });
         actions.add_action(&edit);
+        let kindle = gio::SimpleAction::new("kindle", Some(glib::VariantTy::UINT32));
+        let weak = Rc::downgrade(self);
+        kindle.connect_activate(move |_, v| {
+            if let (Some(l), Some(book)) = (weak.upgrade(), v.and_then(|v| v.get::<u32>())) {
+                l.send_to_kindle(book as usize);
+            }
+        });
+        actions.add_action(&kindle);
         let newshelf = gio::SimpleAction::new("newshelf", Some(glib::VariantTy::UINT32));
         let weak = Rc::downgrade(self);
         newshelf.connect_activate(move |_, v| {
