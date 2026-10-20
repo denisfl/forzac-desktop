@@ -223,11 +223,13 @@ impl Settings {
     /// The page for a window of `width` × `height` logical pixels: half the window in a spread.
     pub fn page_style(&self, width: f32, height: f32) -> PageStyle {
         let (measure, min_margin) = self.margins.column();
-        let width = if self.spread(width, height) { width / 2.0 } else { width };
+        let spread = self.spread(width, height);
+        let width = if spread { width / 2.0 } else { width };
         PageStyle {
             line_height: self.spacing.em(),
             justify: self.align == Align::Justified,
             family: self.family,
+            spread,
             ..PageStyle::column(width, height, self.text_size(), measure, min_margin)
         }
     }

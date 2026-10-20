@@ -874,13 +874,14 @@ impl PageView {
         out
     }
 
-    /// Where the ribbon of the page or spread shown hangs, when it is marked: the offset of the page holding the first
-    /// bookmark on the spread.
+    /// Where the ribbon of the page or spread shown hangs, when it is marked: the offset of the page, on a spread of the
+    /// right page.
     fn ribbon_dx(s: &mut State, h: f32) -> Option<f32> {
         let (from, to) = Self::shown_range(s, h)?;
-        let first = *s.bookmarks.iter().find(|m| from <= **m && **m < to)?;
-        let right = match (s.mode, Self::shown_pages(s).get(1), &s.layout) {
-            (Mode::Slide, Some(&(page, dx)), Some(layout)) => (first >= layout.page_start(page)).then_some(dx),
+        s.bookmarks.iter().find(|m| from <= **m && **m < to)?;
+        // On a spread over the right page, in its outer margin: never in the gutter.
+        let right = match (s.mode, Self::shown_pages(s).get(1)) {
+            (Mode::Slide, Some(&(_, dx))) => Some(dx),
             _ => None,
         };
         Some(right.unwrap_or_else(|| Self::page_dx(s, s.page)))

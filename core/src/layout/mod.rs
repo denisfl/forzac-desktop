@@ -34,6 +34,8 @@ pub struct PageStyle {
     pub line_height: f32,
     pub justify: bool,
     pub family: Family,
+    /// A page of a two-page spread (`Settings::spread`): the left page's head is the book's title.
+    pub spread: bool,
 }
 
 impl PageStyle {
@@ -56,6 +58,7 @@ impl PageStyle {
             line_height: 1.62,
             justify: true,
             family: Family::PtSerif,
+            spread: false,
         }
     }
 

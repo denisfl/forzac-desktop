@@ -479,6 +479,24 @@ fn book_pages_are_the_chapters_pages() {
 }
 
 #[test]
+fn heads_of_a_spread() {
+    let single = PageStyle::for_window(600.0, 500.0, 20.0);
+    let spread = PageStyle { spread: true, ..single };
+    let mut b = book((0..20).map(|_| paragraph(TEXT)).collect());
+    b.title = "Одноэтажная Америка".into();
+    b.chapters[0].title = Some("Глава 1".into());
+    let mut t = typesetter(single);
+    let ch = paginate(&b, 0, &single, &mut t);
+    assert!(ch.pages.len() >= 4);
+    let font = t.font_of(Face::Regular);
+    let (book_title, chapter) = (t.shaper.shape(font, "Одноэтажная Америка").len(), t.shaper.shape(font, "Глава 1").len());
+    let head = |page: &PageContent| page.runs.iter().find(|r| r.ink == Ink::Secondary).unwrap().glyphs.len();
+    assert_eq!(head(&ch.render(2, &spread, &mut t)), book_title, "a left page: the book");
+    assert_eq!(head(&ch.render(3, &spread, &mut t)), chapter, "a right page: the chapter");
+    assert_eq!(head(&ch.render(2, &single, &mut t)), chapter, "a single page: the chapter");
+}
+
+#[test]
 fn foot_with_book_pages() {
     let style = PageStyle::for_window(600.0, 500.0, 20.0);
     let mut b = book((0..12).map(|_| paragraph(TEXT)).collect());

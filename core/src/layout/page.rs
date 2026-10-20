@@ -59,6 +59,8 @@ pub struct ChapterLayout {
     pub pages: Vec<Page>,
     /// The chapter's title, for the running head.
     title: Option<String>,
+    /// The book's title, for the running head of a spread's left page.
+    book_title: Option<String>,
     position: Position,
     /// The model block index of each block layout.
     block_index: Vec<usize>,
@@ -122,8 +124,8 @@ impl ChapterLayout {
         self.pages[i].slices.iter().map(|s| s.top + height(s)).fold(0.0, f32::max)
     }
 
-    /// What to draw on page `i`: the text, the running head (the chapter's title, not on its first page) and the foot
-    /// (the page in the chapter and the position in the book).
+    /// What to draw on page `i`: the text, the running head (the chapter's title, not on its first page; on a spread's
+    /// left page the book's title) and the foot (the page in the chapter and the position in the book).
     pub fn render(&self, i: usize, style: &PageStyle, typesetter: &mut Typesetter) -> PageContent {
         self.render_numbered(i, style, typesetter, None)
     }
@@ -134,8 +136,10 @@ impl ChapterLayout {
         let mut out = self.render_body(i, style);
         let size = style.text_size * 0.7;
         let width = style.text_width();
+        // Every chapter starts on a spread's left page: its even pages are left pages.
+        let head = if style.spread && i.is_multiple_of(2) { &self.book_title } else { &self.title };
         if i > 0
-            && let Some(title) = &self.title
+            && let Some(title) = head
         {
             let y = style.margin_top / 2.0 + size * 0.35;
             out.runs.push(label(typesetter, title, Ink::Secondary, size, style.width / 2.0, y, width));
@@ -678,12 +682,14 @@ fn paginate_from(book: &Book, chapter: usize, style: &PageStyle, typesetter: &mu
     let flow_height = y + lh * 2.0;
 
     let title = book.chapters[chapter].title.clone();
+    let book_title = Some(book.title.clone()).filter(|t| !t.is_empty());
     let block_index = laid.iter().map(|(i, _)| *i).collect();
     ChapterLayout {
         chapter,
         blocks: laid.into_iter().map(|(_, l)| l).collect(),
         pages,
         title,
+        book_title,
         position,
         block_index,
         flow,
