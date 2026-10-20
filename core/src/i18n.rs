@@ -280,6 +280,7 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("zoom, fit", "масштаб, целиком"),
     ("move", "сдвиг"),
     ("Forzac is free. Support it: forzac.truenrth.app", "Форзац бесплатный. Поддержать: forzac.truenrth.app"),
+    ("Made by Denis Fedosov-Ledovskikh", "Сделал Денис Федосов-Ледовских"),
     // The app and its windows.
     ("Forzac", "Форзац"),
     ("{title} — Forzac", "{title} — Форзац"),

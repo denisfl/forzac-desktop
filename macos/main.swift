@@ -517,6 +517,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    /// The standard About panel with the author and the support line; the site in it links to the site's support section.
+    @objc func showAbout(_ sender: Any?) {
+        let centred = NSMutableParagraphStyle()
+        centred.alignment = .center
+        let text = tr("Made by Denis Fedosov-Ledovskikh") + "\n\n" + tr("Forzac is free. Support it: forzac.truenrth.app")
+        let credits = NSMutableAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+                                                                           .foregroundColor: NSColor.labelColor, .paragraphStyle: centred])
+        if let site = text.range(of: "forzac.truenrth.app") {
+            credits.addAttribute(.link, value: URL(string: "https://forzac.truenrth.app/#support")!, range: NSRange(site, in: text))
+        }
+        NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     /// File › Show the Books folder: opens it in Finder (made first when missing).
     @objc func showBooksFolder(_ sender: Any?) {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -689,7 +703,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return i
         }
         submenu(tr("Forzac"), [
-            item(tr("About Forzac"), #selector(NSApplication.orderFrontStandardAboutPanel(_:)), target: NSApp),
+            item(tr("About Forzac"), #selector(showAbout(_:))),
             .separator(),
             item(tr("Settings…"), #selector(showSettings(_:)), ","),
             .separator(),
