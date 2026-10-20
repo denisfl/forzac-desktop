@@ -245,6 +245,7 @@ fn a_thousand_books_read_and_write_quickly() {
                     progress: 0.5,
                     opened: i as u64,
                     series: None,
+                    shelves: Vec::new(),
                 });
             }
         })
@@ -305,6 +306,24 @@ fn file_lines_survive_a_restart_and_other_writes() {
     let store = Store::open(&file);
     assert_eq!(store.files(), files);
     assert_eq!(store.entries().len(), 1);
+}
+
+#[test]
+fn shelves_are_kept_by_id() {
+    let file = dir().join("state");
+    let mut store = Store::open(&file);
+    store.set_shelf("a", " Летом ", true).unwrap();
+    store.set_shelf("b", "летом", true).unwrap();
+    store.set_shelf("b", "Работа", true).unwrap();
+    store.set_shelf("a", "", true).unwrap();
+    let mut store = Store::open(&file);
+    assert_eq!(store.shelves_of("b"), ["Летом", "Работа"], "an existing shelf's spelling");
+    assert_eq!(store.shelf_names(), ["Летом", "Работа"]);
+    store.set_shelf("b", "РАБОТА", false).unwrap();
+    store.forget("a").unwrap();
+    let store = Store::open(&file);
+    assert_eq!(store.shelf_names(), ["Летом"], "a shelf without books is gone");
+    assert_eq!(store.shelves_of("a"), ["Летом"], "kept when the book is forgotten");
 }
 
 #[test]

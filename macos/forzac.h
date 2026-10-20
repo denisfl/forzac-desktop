@@ -90,6 +90,7 @@ typedef struct {
     bool opened;            // false: in the Books folder, never opened
     const char *series;     // empty: not in a series
     float number;           // in the series; negative: none
+    const char *shelves;    // the reader's shelves it is on, one per line
 } ForzacRecent;
 
 // A generated cover: cloth or marbled paper (forzac_marble with `seed`) under `cloth`, a spine, the title's size
@@ -321,7 +322,7 @@ const char *forzac_added_message(ForzacState *state, ForzacAdded added, const ch
 int32_t forzac_library_rank(const char *query, const char *title, const char *authors, const char *series);
 
 // The library's views (library-metadata): forzac_library_arrange groups `n` books for `view` (0 Recent, 1 Title,
-// 2 Author, 3 Series); group i holds books[starts[i]..starts[i + 1]] under headings[i] (null: none). forzac_library_step
+// 2 Author, 3 Series, 4 Shelves); group i holds books[starts[i]..starts[i + 1]] under headings[i] (null: none). forzac_library_step
 // moves the selection through `n` laid-out groups given as (books, columns) pairs. forzac_book_info reads "About the
 // book" from an open document.
 typedef struct {
@@ -329,6 +330,9 @@ typedef struct {
     const char *authors;
     const char *series;     // empty: none
     float number;           // negative: none
+    float progress;
+    bool opened;
+    const char *shelves;    // one per line
 } ForzacBookKey;
 typedef struct ForzacGroupsHandle ForzacGroupsHandle;
 typedef struct {
@@ -342,6 +346,10 @@ const ForzacGroups *forzac_groups(const ForzacGroupsHandle *groups);
 void forzac_groups_free(ForzacGroupsHandle *groups);
 uint32_t forzac_library_step(const uint32_t *sizes, uint32_t n, uint32_t at, int32_t dx, int32_t dy);
 uint32_t forzac_library_view(const ForzacState *state);
+// The shelves (library-shelves): every shelf with a book on it, one per line (valid until the next call on `state`);
+// putting a book on a shelf or taking it off.
+const char *forzac_shelf_names(ForzacState *state);
+bool forzac_set_shelf(ForzacState *state, const char *id, const char *name, bool on);
 bool forzac_set_library_view(ForzacState *state, uint32_t view);
 typedef struct ForzacBookInfoHandle ForzacBookInfoHandle;
 typedef struct {

@@ -186,7 +186,7 @@ pub fn scan(folder: &Path, store: &mut Store) -> Vec<Entry> {
         .filter_map(|e| {
             let path = if e.path.is_file() { e.path.clone() } else { in_folder(&e.id)? };
             let series = files.iter().find(|f| f.id == e.id).and_then(|f| f.series.clone());
-            Some(Entry { path, series, ..e.clone() })
+            Some(Entry { path, series, shelves: store.shelves_of(&e.id).to_vec(), ..e.clone() })
         })
         .collect();
     remembered.sort_by_key(|e| std::cmp::Reverse(e.opened));
@@ -201,6 +201,7 @@ pub fn scan(folder: &Path, store: &mut Store) -> Vec<Entry> {
         title: f.title.clone(),
         authors: f.authors.clone(),
         series: f.series.clone(),
+        shelves: store.shelves_of(&f.id).to_vec(),
         ..Entry::default()
     }));
     remembered

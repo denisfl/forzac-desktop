@@ -82,3 +82,12 @@ thread, with the Books folder (`books-folder`).
 - **WHEN** a book with two highlights was removed to the Trash in 0.11.0, this version starts, and then the file is
   put back into the Books folder
 - **THEN** the library shows the book, and opening it shows both highlights
+
+### Requirement: Shelves are kept
+The shelves a book is on SHALL be kept in the state by the book's id, written when they change; other processes'
+writes SHALL survive as for positions. Removing a book from the library SHALL keep its shelves, as it keeps its
+bookmarks and highlights.
+
+#### Scenario: Put back from the Trash
+- **WHEN** a book on "Летом" is removed from the library and its file is put back into the Books folder
+- **THEN** the book is on "Летом" again

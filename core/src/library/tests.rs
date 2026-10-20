@@ -121,8 +121,32 @@ fn views_sort_and_group() {
     assert_eq!(heads, [Some("Борис Акунин".into()), Some("А. Стругацкий".into()), Some("Фило В. .".into())], "initials are not surnames");
     assert_eq!(View::from_key(Some("series")), View::Series);
     assert_eq!(View::from_key(None), View::Recent);
-    assert_eq!(View::Series.next(false), View::Recent);
-    assert_eq!(View::Recent.next(true), View::Series);
+    assert_eq!(View::Shelves.next(false), View::Recent);
+    assert_eq!(View::Recent.next(true), View::Shelves);
+}
+
+#[test]
+fn the_shelves_view() {
+    crate::i18n::set_language(Language::English);
+    let mut books = vec![entry("Б", "", None), entry("А", "", None), entry("В", "", None), entry("Г", "", None)];
+    books[0].opened = 1;
+    books[0].progress = 0.4;
+    books[1].opened = 1;
+    books[1].progress = 1.0;
+    books[0].shelves = vec!["Летом".into()];
+    books[2].shelves = vec!["летом".into(), "Работа".into()];
+    let groups = shown(&books, &arrange(&books, View::Shelves));
+    assert_eq!(
+        groups,
+        [
+            (Some("Reading".into()), vec!["Б".into()]),
+            (Some("Not started".into()), vec!["В".into(), "Г".into()]),
+            (Some("Finished".into()), vec!["А".into()]),
+            (Some("Летом".into()), vec!["Б".into(), "В".into()]),
+            (Some("Работа".into()), vec!["В".into()]),
+        ],
+        "a book under every shelf it is on; names without case"
+    );
 }
 
 #[test]

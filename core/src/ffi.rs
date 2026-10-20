@@ -1577,6 +1577,8 @@ pub struct State {
     path: CString,
     /// The message after adding a folder, as last returned.
     message: CString,
+    /// The shelf names, as last returned.
+    shelf_names: CString,
 }
 
 /// A book of the library.
@@ -1593,6 +1595,8 @@ pub struct ForzacRecent {
     pub series: *const c_char,
     /// The number in the series; negative when none.
     pub number: f32,
+    /// The reader's shelves it is on, one per line.
+    pub shelves: *const c_char,
 }
 
 impl State {
@@ -1602,12 +1606,20 @@ impl State {
             .iter()
             .flat_map(|e| {
                 let series = e.series.as_ref().map_or("", |s| s.name.as_str());
-                [cstring(&e.path.to_string_lossy()), cstring(&e.title), cstring(&e.authors), cstring(&e.id), cstring(series)]
+                let shelves = e.shelves.join("\n");
+                [
+                    cstring(&e.path.to_string_lossy()),
+                    cstring(&e.title),
+                    cstring(&e.authors),
+                    cstring(&e.id),
+                    cstring(series),
+                    cstring(&shelves),
+                ]
             })
             .collect();
         self.recent = books
             .iter()
-            .zip(self.recent_strings.chunks(5))
+            .zip(self.recent_strings.chunks(6))
             .map(|(e, s)| ForzacRecent {
                 path: s[0].as_ptr(),
                 title: s[1].as_ptr(),
@@ -1617,6 +1629,7 @@ impl State {
                 opened: e.opened > 0,
                 series: s[4].as_ptr(),
                 number: e.series.as_ref().and_then(|s| s.number).unwrap_or(-1.0),
+                shelves: s[5].as_ptr(),
             })
             .collect();
         unsafe { *count = self.recent.len() as u32 };
@@ -1637,6 +1650,7 @@ pub unsafe extern "C" fn forzac_state_open(path: *const c_char) -> *mut State {
         recent_strings: Vec::new(),
         notice: CString::default(),
         message: CString::default(),
+        shelf_names: CString::default(),
         path: CString::default(),
     }))
 }
@@ -1880,6 +1894,10 @@ pub struct ForzacBookKey {
     pub series: *const c_char,
     /// Negative when none.
     pub number: f32,
+    pub progress: f32,
+    pub opened: bool,
+    /// The reader's shelves it is on, one per line.
+    pub shelves: *const c_char,
 }
 
 /// The groups of a view: `count` groups, group `i` holds `books[starts[i]..starts[i + 1]]` (indices into the books
@@ -1901,7 +1919,7 @@ pub struct Groups {
     _books: Vec<u32>,
 }
 
-/// The `n` `books` in `view` (0 Recent, 1 Title, 2 Author, 3 Series; `library::arrange`); free with
+/// The `n` `books` in `view` (0 Recent, 1 Title, 2 Author, 3 Series, 4 Shelves; `library::arrange`); free with
 /// [`forzac_groups_free`].
 ///
 /// # Safety
@@ -1915,6 +1933,9 @@ pub unsafe extern "C" fn forzac_library_arrange(books: *const ForzacBookKey, n: 
             title: unsafe { str(k.title) }.into_owned(),
             authors: unsafe { str(k.authors) }.into_owned(),
             series: crate::model::Series::parse(&unsafe { str(k.series) }, (k.number >= 0.0).then(|| k.number.to_string()).as_deref()),
+            progress: k.progress,
+            opened: u64::from(k.opened),
+            shelves: unsafe { str(k.shelves) }.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect(),
             ..Default::default()
         })
         .collect();
@@ -1951,7 +1972,28 @@ pub unsafe extern "C" fn forzac_groups_free(groups: *mut Groups) {
     }
 }
 
-/// The library's remembered view (0 Recent, 1 Title, 2 Author, 3 Series).
+/// Every shelf with a book on it, A to Z, one per line (`Store::shelf_names`); valid until the next call on `state`.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_shelf_names(state: *mut State) -> *const c_char {
+    let state = unsafe { &mut *state };
+    state.shelf_names = cstring(&state.store.shelf_names().join("\n"));
+    state.shelf_names.as_ptr()
+}
+
+/// Puts the book `id` on the shelf `name` or takes it off (`Store::set_shelf`); false when the state cannot be written.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`]; `id` and `name` valid NUL-terminated strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_set_shelf(state: *mut State, id: *const c_char, name: *const c_char, on: bool) -> bool {
+    let (id, name) = unsafe { (str(id), str(name)) };
+    unsafe { &mut *state }.store.set_shelf(&id, &name, on).is_ok()
+}
+
+/// The library's remembered view (0 Recent, 1 Title, 2 Author, 3 Series, 4 Shelves).
 ///
 /// # Safety
 /// `state` from [`forzac_state_open`].

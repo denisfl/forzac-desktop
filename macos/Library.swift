@@ -79,6 +79,8 @@ struct LibraryBook {
     var series = ""
     /// The number in the series; negative when none.
     var number: Float = -1
+    /// The reader's shelves it is on (`library-shelves`).
+    var shelves: [String] = []
 
     /// The library's books (`forzac_library_books`): reads the Books folder, so on a background queue with a state
     /// handle of its own.
@@ -90,7 +92,8 @@ struct LibraryBook {
             let title = String(cString: list[i].title)
             return LibraryBook(id: String(cString: list[i].id), path: path, title: title.isEmpty ? URL(fileURLWithPath: path).lastPathComponent : title,
                                authors: String(cString: list[i].authors), progress: list[i].progress, opened: list[i].opened,
-                               series: String(cString: list[i].series), number: list[i].number)
+                               series: String(cString: list[i].series), number: list[i].number,
+                               shelves: String(cString: list[i].shelves).split(separator: "\n").map(String.init))
         }
     }
 }
@@ -563,7 +566,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     var onAddFolder: ((String) -> Void)?
     /// Folders being added; "Adding books… N of M" stands in place of the search button meanwhile.
     private var adding = 0
-    /// The view (`library-metadata`: 0 Recent, 1 Title, 2 Author, 3 Series), its tabs under the head, and the shown
+    /// The view (`library-metadata`: 0 Recent, 1 Title, 2 Author, 3 Series, 4 Shelves), its tabs under the head, and the shown
     /// groups as (books, columns) for moving the selection.
     private var view: UInt32
     private var tabs: [ClickLabel] = []
@@ -659,7 +662,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         }
         updateNotice()
         tabRule.layer!.backgroundColor = color(palette.line)
-        let viewNames = [tr("Recent"), tr("Title"), tr("Author"), tr("Series")]
+        let viewNames = [tr("Recent"), tr("Title"), tr("Author"), tr("Series"), tr("Shelves")]
         for (i, name) in viewNames.enumerated() {
             let tab = ClickLabel()
             tab.stringValue = name
@@ -945,9 +948,11 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
 
     /// The books in the chosen view's groups (`forzac_library_arrange`).
     private func arrange() -> [(heading: String?, books: [Int])] {
-        let strings = books.map { (strdup($0.title), strdup($0.authors), strdup($0.series)) }
-        defer { strings.forEach { free($0.0); free($0.1); free($0.2) } }
-        let keys = zip(books, strings).map { ForzacBookKey(title: $1.0, authors: $1.1, series: $1.2, number: $0.number) }
+        let strings = books.map { (strdup($0.title), strdup($0.authors), strdup($0.series), strdup($0.shelves.joined(separator: "\n"))) }
+        defer { strings.forEach { free($0.0); free($0.1); free($0.2); free($0.3) } }
+        let keys = zip(books, strings).map {
+            ForzacBookKey(title: $1.0, authors: $1.1, series: $1.2, number: $0.number, progress: $0.progress, opened: $0.opened, shelves: $1.3)
+        }
         guard let handle = forzac_library_arrange(keys, UInt32(keys.count), view) else { return [] }
         defer { forzac_groups_free(handle) }
         let g = forzac_groups(handle)!.pointee
@@ -970,9 +975,27 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     private func menu(_ book: Int, at item: LibraryItem) {
         let menu = NSMenu()
         let about = NSMenuItem(title: tr("About the book"), action: #selector(menuAbout(_:)), keyEquivalent: "")
-        let remove = NSMenuItem(title: tr("Remove from library"), action: #selector(menuRemove(_:)), keyEquivalent: "")
-        for i in [about, remove] {
+        // "Add to shelf": every shelf, checked when the book is on it, then "New shelf…".
+        let shelves = NSMenu()
+        let names = String(cString: forzac_shelf_names(state)).split(separator: "\n").map(String.init)
+        for name in names {
+            let on = books[book].shelves.contains { $0.lowercased() == name.lowercased() }
+            let i = NSMenuItem(title: name, action: #selector(menuShelf(_:)), keyEquivalent: "")
+            i.state = on ? .on : .off
+            i.representedObject = (book, name, !on)
             i.target = self
+            shelves.addItem(i)
+        }
+        if !names.isEmpty { shelves.addItem(.separator()) }
+        let new = NSMenuItem(title: tr("New shelf…"), action: #selector(menuNewShelf(_:)), keyEquivalent: "")
+        new.target = self
+        new.tag = book
+        shelves.addItem(new)
+        let shelf = NSMenuItem(title: tr("Add to shelf"), action: nil, keyEquivalent: "")
+        shelf.submenu = shelves
+        let remove = NSMenuItem(title: tr("Remove from library"), action: #selector(menuRemove(_:)), keyEquivalent: "")
+        for i in [about, shelf, remove] {
+            i.target = i === shelf ? nil : self
             i.tag = book
             menu.addItem(i)
         }
@@ -981,6 +1004,41 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
 
     @objc private func menuAbout(_ sender: NSMenuItem) { showAbout(sender.tag) }
     @objc private func menuRemove(_ sender: NSMenuItem) { ask(sender.tag) }
+
+    @objc private func menuShelf(_ sender: NSMenuItem) {
+        guard let (book, name, on) = sender.representedObject as? (Int, String, Bool) else { return }
+        setShelf(book, name, on)
+    }
+
+    /// "New shelf": the name asked in an alert; the book goes on that shelf.
+    @objc private func menuNewShelf(_ sender: NSMenuItem) {
+        let alert = NSAlert()
+        alert.messageText = tr("New shelf")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.placeholderString = tr("Shelf name")
+        alert.accessoryView = field
+        alert.addButton(withTitle: tr("Add"))
+        alert.addButton(withTitle: tr("Cancel"))
+        alert.window.initialFirstResponder = field
+        let book = sender.tag
+        alert.beginSheetModal(for: window) { [weak self] response in
+            if response == .alertFirstButtonReturn { self?.setShelf(book, field.stringValue, true) }
+        }
+    }
+
+    /// Puts `book` on the shelf `name` or takes it off (`forzac_set_shelf`), and shows it.
+    private func setShelf(_ book: Int, _ name: String, _ on: Bool) {
+        let name = name.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard book < books.count, !name.isEmpty, forzac_set_shelf(state, books[book].id, name, on) else { return }
+        let existing = String(cString: forzac_shelf_names(state)).split(separator: "\n").map(String.init)
+        let spelt = existing.first { $0.lowercased() == name.lowercased() } ?? name
+        let id = books[book].id
+        for i in books.indices where books[i].id == id {
+            books[i].shelves.removeAll { $0.lowercased() == name.lowercased() }
+            if on { books[i].shelves.append(spelt) }
+        }
+        if view == 4 { rebuild() }
+    }
 
     /// "About the book": the file read on a background queue, then a sheet over the dimmed library.
     private func showAbout(_ book: Int) {
@@ -1286,7 +1344,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         case (0x24, _): if selected < items.count { openBook(items[selected].index) }
         case (0x33, false), (0x75, false): if selected < items.count { ask(items[selected].index) }
         case (0x35, _): if searching { setSearching(false) } else { window.close() }
-        case (0x30, false): if !books.isEmpty { setView((view + (e.modifierFlags.contains(.shift) ? 3 : 1)) % 4) }
+        case (0x30, false): if !books.isEmpty { setView((view + (e.modifierFlags.contains(.shift) ? 4 : 1)) % 5) }
         default:
             guard !typing else { return false }
             switch e.shortcutKey {

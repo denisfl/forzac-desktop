@@ -480,12 +480,16 @@ fn views_steps_and_information_through_the_c_functions() {
         [c("А. Стругацкий"), c("А. Стругацкий"), c("Ф. Достоевский")],
         [c("Мир"), c("Мир"), c("")],
     );
+    let no_shelves = c("");
     let keys: Vec<ForzacBookKey> = (0..3)
         .map(|i| ForzacBookKey {
             title: titles[i].as_ptr(),
             authors: authors[i].as_ptr(),
             series: series[i].as_ptr(),
             number: [4.0, 2.0, -1.0][i],
+            progress: 0.0,
+            opened: false,
+            shelves: no_shelves.as_ptr(),
         })
         .collect();
     unsafe {

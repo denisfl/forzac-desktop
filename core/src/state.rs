@@ -7,6 +7,7 @@
 //! book<TAB>id<TAB>chapter<TAB>block<TAB>offset<TAB>progress<TAB>opened<TAB>path<TAB>title<TAB>authors
 //! bookmark<TAB>id<TAB>chapter<TAB>block<TAB>offset
 //! quote<TAB>id<TAB>chapter<TAB>block<TAB>offset<TAB>chapter<TAB>block<TAB>offset
+//! shelf<TAB>id<TAB>name
 //! file<TAB>name<TAB>size<TAB>mtime<TAB>id<TAB>title<TAB>authors<TAB>series<TAB>number
 //! ```
 //!
@@ -43,6 +44,8 @@ pub struct Entry {
     pub opened: u64,
     /// From the Books folder's cache (`library::scan`), not kept in `book` lines.
     pub series: Option<Series>,
+    /// The reader's shelves it is on, from `shelf` lines (`library::scan`).
+    pub shelves: Vec<String>,
 }
 
 /// What a file in the Books folder holds, as last read.
@@ -75,6 +78,8 @@ struct Saved {
     quotes: BTreeMap<String, Vec<(Locator, Locator)>>,
     /// The Books folder's files, by name.
     files: Vec<Cached>,
+    /// The reader's shelves by book id, in the order put on.
+    shelves: BTreeMap<String, Vec<String>>,
 }
 
 impl Store {
@@ -113,6 +118,7 @@ impl Store {
             progress: if finished { 1.0 } else { progress(book, at) },
             opened: now(),
             series: book.series.clone(),
+            shelves: Vec::new(),
         };
         self.write(|saved| {
             saved.books.retain(|e| e.id != entry.id && e.path != entry.path);
@@ -175,6 +181,43 @@ impl Store {
         })
     }
 
+    /// The shelves the book `id` is on.
+    pub fn shelves_of(&self, id: &str) -> &[String] {
+        self.saved.shelves.get(id).map_or(&[], Vec::as_slice)
+    }
+
+    /// Every shelf with a book on it, A to Z, each once whatever its case (the first spelling kept).
+    pub fn shelf_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        for name in self.saved.shelves.values().flatten() {
+            if !names.iter().any(|n| n.to_lowercase() == name.to_lowercase()) {
+                names.push(name.clone());
+            }
+        }
+        names.sort_by_key(|n| n.to_lowercase().replace('ё', "е"));
+        names
+    }
+
+    /// Puts the book `id` on the shelf `name` (trimmed; an existing shelf's spelling whatever the case) or takes it
+    /// off. An empty name changes nothing.
+    pub fn set_shelf(&mut self, id: &str, name: &str, on: bool) -> io::Result<()> {
+        let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+        if name.is_empty() {
+            return Ok(());
+        }
+        let name = self.shelf_names().into_iter().find(|n| n.to_lowercase() == name.to_lowercase()).unwrap_or(name);
+        self.write(|saved| {
+            let shelves = saved.shelves.entry(id.to_owned()).or_default();
+            shelves.retain(|s| s.to_lowercase() != name.to_lowercase());
+            if on {
+                shelves.push(name.clone());
+            }
+            if shelves.is_empty() {
+                saved.shelves.remove(id);
+            }
+        })
+    }
+
     /// Up to `n` books whose files still exist, the last opened first.
     pub fn recent(&self, n: usize) -> Vec<&Entry> {
         let mut books = self.books();
@@ -227,6 +270,7 @@ impl Store {
         let used = s.books.iter().any(|e| old(&e.id))
             || s.bookmarks.keys().any(old)
             || s.quotes.keys().any(old)
+            || s.shelves.keys().any(old)
             || s.files.iter().any(|f| old(&f.id));
         if !used {
             return Ok(());
@@ -258,6 +302,10 @@ impl Store {
                     all.extend(quotes);
                     all.sort();
                     all.dedup();
+                }
+                if let Some(shelves) = saved.shelves.remove(old) {
+                    let all = saved.shelves.entry(new.clone()).or_default();
+                    all.extend(shelves.into_iter().filter(|s| !all.contains(s)).collect::<Vec<_>>());
                 }
             }
         })
@@ -296,6 +344,11 @@ impl Store {
                     b.block,
                     b.offset
                 );
+            }
+        }
+        for (id, shelves) in &saved.shelves {
+            for name in shelves {
+                let _ = writeln!(text, "shelf\t{}\t{}", escape(id), escape(name));
             }
         }
         for f in &saved.files {
@@ -369,7 +422,14 @@ fn read(path: &Path) -> Saved {
                     progress,
                     opened,
                     series: None,
+                    shelves: Vec::new(),
                 });
+            }
+            Some("shelf") if f.len() == 3 && !f[2].trim().is_empty() => {
+                let shelves = saved.shelves.entry(f[1].clone()).or_default();
+                if !shelves.contains(&f[2]) {
+                    shelves.push(f[2].clone());
+                }
             }
             Some("file") if f.len() == 9 => {
                 let (Ok(size), Ok(mtime)) = (f[2].parse::<u64>(), f[3].parse::<u64>()) else { continue };

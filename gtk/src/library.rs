@@ -632,6 +632,8 @@ struct Book {
     /// False for a book in the folder never opened.
     opened: bool,
     series: Option<Series>,
+    /// The reader's shelves it is on (`library-shelves`).
+    shelves: Vec<String>,
 }
 
 impl Book {
@@ -644,12 +646,21 @@ impl Book {
             progress: e.progress,
             opened: e.opened > 0,
             series: e.series.clone(),
+            shelves: e.shelves.clone(),
         }
     }
 
     /// The key the views sort it by (`library::arrange`).
     fn entry(&self) -> Entry {
-        Entry { title: self.title.clone(), authors: self.authors.clone(), series: self.series.clone(), ..Entry::default() }
+        Entry {
+            title: self.title.clone(),
+            authors: self.authors.clone(),
+            series: self.series.clone(),
+            progress: self.progress,
+            opened: u64::from(self.opened),
+            shelves: self.shelves.clone(),
+            ..Entry::default()
+        }
     }
 }
 
@@ -792,6 +803,8 @@ pub struct Library {
     /// Folders dropped while one is being added.
     waiting: RefCell<Vec<PathBuf>>,
     question: RefCell<Option<(gtk::Widget, usize)>>,
+    /// The new shelf's question while it shows: its sheet, the book and the name field.
+    naming: RefCell<Option<(gtk::Widget, usize, gtk::Entry)>>,
     /// Covers being loaded or made; `settled` runs when none is left after the first frame.
     pending: Cell<usize>,
     first_frame: Cell<Option<Instant>>,
@@ -924,6 +937,7 @@ impl Library {
             adding: Cell::new(false),
             waiting: RefCell::default(),
             question: RefCell::default(),
+            naming: RefCell::default(),
             pending: Cell::new(0),
             first_frame: Cell::new(None),
             settled: RefCell::default(),
@@ -1311,7 +1325,29 @@ impl Library {
     fn menu(self: &Rc<Self>, book: usize, anchor: &gtk::Button) {
         let model = gio::Menu::new();
         model.append(Some(tr("About the book")), Some(&format!("lib.about(uint32 {book})")));
+        // "Add to shelf": a checked item per shelf, its action made for this menu.
+        let shelves = gio::Menu::new();
+        let actions = gio::SimpleActionGroup::new();
+        let Some(id) = self.books.borrow().get(book).map(|b| b.id.clone()) else { return };
+        let names = self.store.borrow().shelf_names();
+        for (i, name) in names.into_iter().enumerate() {
+            let on = self.store.borrow().shelves_of(&id).iter().any(|s| s.to_lowercase() == name.to_lowercase());
+            let action = gio::SimpleAction::new_stateful(&format!("s{i}"), None, &on.to_variant());
+            shelves.append(Some(&name), Some(&format!("shelf.s{i}")));
+            let (weak, id) = (Rc::downgrade(self), id.clone());
+            action.connect_activate(move |_, _| {
+                if let Some(l) = weak.upgrade() {
+                    l.set_shelf(&id, &name, !on);
+                }
+            });
+            actions.add_action(&action);
+        }
+        let section = gio::Menu::new();
+        section.append(Some(tr("New shelf…")), Some(&format!("lib.newshelf(uint32 {book})")));
+        shelves.append_section(None, &section);
+        model.append_submenu(Some(tr("Add to shelf")), &shelves);
         model.append(Some(tr("Remove from library")), Some(&format!("lib.remove(uint32 {book})")));
+        self.window.insert_action_group("shelf", Some(&actions));
         let popover = gtk::PopoverMenu::from_model(Some(&model));
         popover.set_parent(anchor);
         popover.set_has_arrow(false);
@@ -1320,6 +1356,76 @@ impl Library {
             glib::idle_add_local_once(move || p.unparent());
         });
         popover.popup();
+    }
+
+    /// Puts the book `id` on the shelf `name` or takes it off, and shows it.
+    fn set_shelf(self: &Rc<Self>, id: &str, name: &str, on: bool) {
+        if let Err(e) = self.store.borrow_mut().set_shelf(id, name, on) {
+            eprintln!("cannot save the reading state: {e}");
+            return;
+        }
+        let shelves = self.store.borrow().shelves_of(id).to_vec();
+        for b in self.books.borrow_mut().iter_mut().filter(|b| b.id == id) {
+            b.shelves = shelves.clone();
+        }
+        if self.view.get() == View::Shelves {
+            self.rebuild();
+        }
+    }
+
+    /// "New shelf": a sheet at the window's bottom with the name field, "Cancel" and "Add".
+    fn ask_shelf(self: &Rc<Self>, book: usize) {
+        if self.naming.borrow().is_some() || self.question.borrow().is_some() || self.about.borrow().is_some() {
+            return;
+        }
+        let backdrop = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        backdrop.add_css_class("backdrop");
+        let sheet = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        sheet.add_css_class("question");
+        sheet.set_valign(gtk::Align::End);
+        sheet.set_halign(gtk::Align::Center);
+        sheet.set_vexpand(true);
+        sheet.set_size_request(self.window.width().min(560), -1);
+        sheet.append(&label(tr("New shelf"), "question-title"));
+        let entry = gtk::Entry::builder().placeholder_text(tr("Shelf name")).build();
+        sheet.append(&entry);
+        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        buttons.set_homogeneous(true);
+        buttons.set_margin_top(8);
+        let cancel = gtk::Button::builder().label(tr("Cancel")).focusable(false).hexpand(true).build();
+        let add = gtk::Button::builder().label(tr("Add")).focusable(false).hexpand(true).build();
+        cancel.add_css_class("sheet-button");
+        add.add_css_class("sheet-button");
+        add.add_css_class("filled");
+        buttons.append(&cancel);
+        buttons.append(&add);
+        sheet.append(&buttons);
+        backdrop.append(&sheet);
+        let weak = Rc::downgrade(self);
+        cancel.connect_clicked(move |_| {
+            if let Some(l) = weak.upgrade() {
+                l.name_shelf(false);
+            }
+        });
+        let weak = Rc::downgrade(self);
+        add.connect_clicked(move |_| {
+            if let Some(l) = weak.upgrade() {
+                l.name_shelf(true);
+            }
+        });
+        self.overlay.add_overlay(&backdrop);
+        entry.grab_focus();
+        *self.naming.borrow_mut() = Some((backdrop.upcast(), book, entry));
+    }
+
+    /// Closes the new shelf's question; puts the book on the named shelf when `add`.
+    fn name_shelf(self: &Rc<Self>, add: bool) {
+        let Some((sheet, book, entry)) = self.naming.borrow_mut().take() else { return };
+        self.overlay.remove_overlay(&sheet);
+        let id = self.books.borrow().get(book).map(|b| b.id.clone());
+        if let Some(id) = id.filter(|_| add) {
+            self.set_shelf(&id, &entry.text(), true);
+        }
     }
 
     /// The views' tabs, the chosen one marked; hidden while searching or without books.
@@ -1840,8 +1946,16 @@ impl Library {
                 l.ask(book as usize);
             }
         });
+        let newshelf = gio::SimpleAction::new("newshelf", Some(glib::VariantTy::UINT32));
+        let weak = Rc::downgrade(self);
+        newshelf.connect_activate(move |_, v| {
+            if let (Some(l), Some(book)) = (weak.upgrade(), v.and_then(|v| v.get::<u32>())) {
+                l.ask_shelf(book as usize);
+            }
+        });
         actions.add_action(&about);
         actions.add_action(&remove);
+        actions.add_action(&newshelf);
         self.window.insert_action_group("lib", Some(&actions));
 
         // Keys by keyval; GTK also matches them in the first (Latin) layout group, so a Russian layout works. In the
@@ -1853,7 +1967,7 @@ impl Library {
             let action = gtk::CallbackAction::new(move |_, _| {
                 let Some(l) = weak.upgrade() else { return glib::Propagation::Proceed };
                 // The field's text widget, not the entry itself, has the focus while searching.
-                if typing && l.searching.get() {
+                if typing && (l.searching.get() || l.naming.borrow().is_some()) {
                     return glib::Propagation::Proceed;
                 }
                 f(&l);
@@ -1861,7 +1975,7 @@ impl Library {
             });
             controller.add_shortcut(gtk::Shortcut::new(gtk::ShortcutTrigger::parse_string(trigger), Some(action)));
         };
-        let asking = |l: &Rc<Library>| l.question.borrow().is_some() || l.about.borrow().is_some();
+        let asking = |l: &Rc<Library>| l.question.borrow().is_some() || l.about.borrow().is_some() || l.naming.borrow().is_some();
         add(
             "h|KP_Left",
             true,
@@ -1956,7 +2070,9 @@ impl Library {
             "Return|KP_Enter",
             false,
             Box::new(move |l| {
-                if l.about.borrow().is_some() {
+                if l.naming.borrow().is_some() {
+                    l.name_shelf(true)
+                } else if l.about.borrow().is_some() {
                     l.close_about(true)
                 } else if asking(l) {
                     l.answer(true)
@@ -2020,7 +2136,9 @@ impl Library {
             "Escape",
             false,
             Box::new(move |l| {
-                if l.about.borrow().is_some() {
+                if l.naming.borrow().is_some() {
+                    l.name_shelf(false);
+                } else if l.about.borrow().is_some() {
                     l.close_about(false);
                 } else if asking(l) {
                     l.answer(false);

@@ -161,10 +161,11 @@ pub enum View {
     Title,
     Author,
     Series,
+    Shelves,
 }
 
 impl View {
-    pub const ALL: [View; 4] = [View::Recent, View::Title, View::Author, View::Series];
+    pub const ALL: [View; 5] = [View::Recent, View::Title, View::Author, View::Series, View::Shelves];
 
     /// The tab's name in the interface language.
     pub fn label(self) -> &'static str {
@@ -173,6 +174,7 @@ impl View {
             View::Title => tr("Title"),
             View::Author => tr("Author"),
             View::Series => tr("Series"),
+            View::Shelves => tr("Shelves"),
         }
     }
 
@@ -182,7 +184,7 @@ impl View {
     }
 
     pub fn key(self) -> &'static str {
-        ["recent", "title", "author", "series"][self as usize]
+        ["recent", "title", "author", "series", "shelves"][self as usize]
     }
 
     /// The next view (`Tab`), or the previous one (`Shift+Tab`), round.
@@ -223,7 +225,8 @@ fn shown_title(e: &Entry) -> String {
 
 /// `books` (last opened first, as `scan` gives them) in `view`: Recent as they are; Title A to Z; Author under each first
 /// author, authors by surname ([`surname`]), books by series and number, then title, no author last; Series
-/// under each series, books by number (unnumbered last), books outside a series last.
+/// under each series, books by number (unnumbered last), books outside a series last; Shelves: Reading, Not started and
+/// Finished when not empty, then the reader's shelves A to Z, a book under every shelf it is on.
 pub fn arrange(books: &[Entry], view: View) -> Vec<Group> {
     let title = |i: usize| sort_key(&shown_title(&books[i]));
     let in_series = |i: usize| books[i].series.as_ref().map(|s| (sort_key(&s.name), s.number.unwrap_or(f32::MAX)));
@@ -234,6 +237,25 @@ pub fn arrange(books: &[Entry], view: View) -> Vec<Group> {
     let all: Vec<usize> = (0..books.len()).collect();
     match view {
         View::Recent => vec![Group { heading: None, books: all }],
+        View::Shelves => {
+            let shelf = |heading: &str, books: Vec<usize>| Group {
+                heading: Some(heading.to_owned()),
+                books: by(books, &|i| (title(i), 0.0, String::new())),
+            };
+            let reading = all.iter().copied().filter(|&i| books[i].opened > 0 && books[i].progress < FINISHED).collect();
+            let fresh = all.iter().copied().filter(|&i| books[i].opened == 0).collect();
+            let finished = all.iter().copied().filter(|&i| books[i].opened > 0 && books[i].progress >= FINISHED).collect();
+            let mut groups = vec![shelf(tr("Reading"), reading), shelf(tr("Not started"), fresh), shelf(tr("Finished"), finished)];
+            groups.retain(|g| !g.books.is_empty());
+            let mut names: Vec<&String> = books.iter().flat_map(|e| &e.shelves).collect();
+            names.sort_by_key(|n| sort_key(n));
+            names.dedup_by_key(|n| sort_key(n));
+            for name in names {
+                let on = all.iter().copied().filter(|&i| books[i].shelves.iter().any(|s| sort_key(s) == sort_key(name))).collect();
+                groups.push(shelf(name, on));
+            }
+            groups
+        }
         View::Title => vec![Group { heading: None, books: by(all, &|i| (title(i), 0.0, String::new())) }],
         View::Author | View::Series => {
             let head = |i: usize| -> Option<String> {
