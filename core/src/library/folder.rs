@@ -130,7 +130,9 @@ fn folder_files(folder: &Path, store: &mut Store) -> Vec<Cached> {
 
 /// The library: the remembered books whose files exist (a renamed file in the folder found by its id), the last
 /// opened first, then the folder's books never opened, the newest file first, as `opened == 0`. One entry per id.
+/// Reads the state file first: the handle may be one kept for a background queue while another saves positions.
 pub fn scan(folder: &Path, store: &mut Store) -> Vec<Entry> {
+    store.reload();
     let files = folder_files(folder, store);
     let in_folder = |id: &str| files.iter().find(|f| f.id == id).map(|f| folder.join(&f.name));
     let mut remembered: Vec<Entry> = store

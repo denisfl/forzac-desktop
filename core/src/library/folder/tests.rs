@@ -257,3 +257,21 @@ fn the_library_moves_in_once_with_its_marks() {
     books_folder(&home, Language::English, &mut s).unwrap();
     assert_eq!(names(&folder).len(), 3);
 }
+
+#[test]
+fn the_scan_sees_what_another_handle_wrote() {
+    // The macOS shell keeps a second handle for its background queue; the main one saves positions.
+    let home = home();
+    let folder = home.join("Books");
+    let (a, b) = (write(&folder.join("a.fb2"), &fb2("A", "", "a")), write(&folder.join("b.fb2"), &fb2("B", "", "b")));
+    let mut worker = store(&home);
+    let mut main = store(&home);
+    let book = |p: &Path| crate::parse(&std::fs::read(p).unwrap()).unwrap();
+    main.save_position(&book(&a), &a, Locator::default(), false).unwrap();
+    assert_eq!(titles(&scan(&folder, &mut worker)), ["A", "B"]);
+    std::thread::sleep(std::time::Duration::from_millis(1100)); // `opened` is in seconds
+    main.save_position(&book(&b), &b, Locator::default(), false).unwrap();
+    let books = scan(&folder, &mut worker);
+    assert_eq!(titles(&books), ["B", "A"], "the book opened last first");
+    assert!(books[0].opened > 0);
+}
