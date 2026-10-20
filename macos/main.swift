@@ -397,6 +397,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        matchShortcutsInAnyLayout()
         // `--menus`: the menus' titles, to check the interface language, then quit.
         if args.contains("--menus") {
             for top in NSApp.mainMenu?.items ?? [] {

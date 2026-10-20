@@ -1,6 +1,7 @@
 // What the Mac shell's views share: the palette, fonts from the core's ids, drawing a typeset page, the icons.
 
 import AppKit
+import Carbon
 import CoreText
 import QuartzCore
 
@@ -336,4 +337,34 @@ extension NSEvent {
         if let c = charactersIgnoringModifiers?.lowercased().first, let code = keyCodes[c] { return code }
         return keyCode
     }
+}
+
+/// The menus' ⌘ shortcuts in a non-Latin layout (Russian): the menus match a key equivalent on the characters typed
+/// without modifiers, Cyrillic there ("б" for ⌘,). A ⌘ key press with non-ASCII characters is offered to the menus once
+/// more as the current ASCII-capable layout's key at the same place, Shift kept.
+func matchShortcutsInAnyLayout() {
+    NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
+        guard e.modifierFlags.contains(.command), let typed = e.charactersIgnoringModifiers, !typed.isEmpty,
+              !typed.unicodeScalars.allSatisfy(\.isASCII), let latin = latinKey(e.keyCode, shift: e.modifierFlags.contains(.shift)),
+              let again = NSEvent.keyEvent(with: .keyDown, location: e.locationInWindow, modifierFlags: e.modifierFlags, timestamp: e.timestamp,
+                                           windowNumber: e.windowNumber, context: nil, characters: latin, charactersIgnoringModifiers: latin,
+                                           isARepeat: e.isARepeat, keyCode: e.keyCode)
+        else { return e }
+        return NSApp.mainMenu?.performKeyEquivalent(with: again) == true ? nil : e
+    }
+}
+
+/// The character of `code` in the current ASCII-capable keyboard layout.
+private func latinKey(_ code: UInt16, shift: Bool) -> String? {
+    guard let source = TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue(),
+          let raw = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return nil }
+    let data = Unmanaged<CFData>.fromOpaque(raw).takeUnretainedValue()
+    guard let bytes = CFDataGetBytePtr(data) else { return nil }
+    var dead: UInt32 = 0, length = 0, chars = [UniChar](repeating: 0, count: 4)
+    let status = bytes.withMemoryRebound(to: UCKeyboardLayout.self, capacity: 1) {
+        UCKeyTranslate($0, code, UInt16(kUCKeyActionDown), shift ? UInt32(shiftKey >> 8) & 0xFF : 0, UInt32(LMGetKbdType()),
+                       OptionBits(kUCKeyTranslateNoDeadKeysMask), &dead, chars.count, &length, &chars)
+    }
+    guard status == noErr, length > 0 else { return nil }
+    return String(utf16CodeUnits: chars, count: length)
 }
