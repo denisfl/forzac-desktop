@@ -14,7 +14,7 @@ depends=(gtk4 fontconfig perl-file-mimeinfo)
 makedepends=(cargo)
 install=forzac.install
 source=("$pkgname-$pkgver.tar.gz::https://github.com/denisfl/forzac-desktop/archive/v$pkgver.tar.gz")
-sha256sums=('5e8eee04c02ec47526681732630c888d3c04f441fc6ef3700af1fe3b52aa5c7b')
+sha256sums=('fe0ffbffab957d3f140634dcc070ee5c3850ec7dc7c13f3e9f5b702297e0be53')
 
 build() {
   cd "forzac-desktop-$pkgver"
