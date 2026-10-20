@@ -2,7 +2,7 @@
 # The release archives (scripts/package-linux.sh) copied to /usr. At publication: updpkgsums, then
 # makepkg --printsrcinfo > .SRCINFO.
 pkgname=forzac-bin
-pkgver=0.10.1
+pkgver=0.10.2
 pkgrel=1
 pkgdesc="Offline FB2 and EPUB reader with book-quality typesetting (release build)"
 arch=(x86_64 aarch64)
@@ -18,8 +18,8 @@ _release=https://github.com/denisfl/forzac-desktop/releases/download/v$pkgver
 # The release files have no version in their names (stable download links); saved under one here.
 source_x86_64=("forzac-$pkgver-linux-x86_64.tar.gz::$_release/forzac-linux-x86_64.tar.gz")
 source_aarch64=("forzac-$pkgver-linux-aarch64.tar.gz::$_release/forzac-linux-aarch64.tar.gz")
-sha256sums_x86_64=('2d218531c81c3989d628ca446c378abc9cb00497ec2390db5688794214f27011')
-sha256sums_aarch64=('81cf2467cf843610523ff001528d0dbe0aaa00c57d179b2164cac24ace808d46')
+sha256sums_x86_64=('4038fd8a0febba2d2c97a83a967977be51771b0f1ce271aa994c739c833c8b13')
+sha256sums_aarch64=('99de028182661949620e9e7a7c673a127760dc9f779c7639fb7a4bc2d8501de6')
 
 package() {
   install -d "$pkgdir/usr"
