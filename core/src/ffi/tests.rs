@@ -511,9 +511,23 @@ fn views_steps_and_information_through_the_c_functions() {
 
         let path = book_file();
         let doc = forzac_open(c(path.to_str().unwrap()).as_ptr(), std::ptr::null_mut());
-        let info = forzac_book_info(doc);
-        assert!(!string((*forzac_book_info_view(info)).title).unwrap().is_empty());
+        let state = forzac_state_open(c(path.with_file_name("edits-state").to_str().unwrap()).as_ptr());
+        let fields = forzac_edit_fields(state, doc);
+        let f = &*forzac_fields_view(fields);
+        let (title, empty) = (c("Своё название"), c(""));
+        let saved =
+            ForzacFields { title: title.as_ptr(), authors: f.authors, series: empty.as_ptr(), number: empty.as_ptr(), genres: f.genres };
+        assert!(forzac_save_edits(state, doc, saved));
+        forzac_fields_free(fields);
+        let info = forzac_book_info(state, doc);
+        assert_eq!(string((*forzac_book_info_view(info)).title).as_deref(), Some("Своё название"));
         forzac_book_info_free(info);
+        let id = c(&(&*doc).book.id);
+        assert!(forzac_reset_edits(state, id.as_ptr()));
+        let info = forzac_book_info(state, doc);
+        assert_ne!(string((*forzac_book_info_view(info)).title).as_deref(), Some("Своё название"), "the book's own again");
+        forzac_book_info_free(info);
+        forzac_state_close(state);
         forzac_close(doc);
     }
 }

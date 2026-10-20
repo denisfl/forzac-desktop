@@ -309,6 +309,26 @@ fn file_lines_survive_a_restart_and_other_writes() {
 }
 
 #[test]
+fn edits_are_kept_by_id() {
+    let file = dir().join("state");
+    let mut store = Store::open(&file);
+    let edits = Edits {
+        title: Some("Своё\tназвание".into()),
+        authors: None,
+        series: Some(Series::parse("Мир", Some("2.5"))),
+        genres: Some(vec!["Фэнтези".into(), "Юмор".into()]),
+    };
+    store.set_edits("a", edits.clone()).unwrap();
+    store.set_edits("b", Edits { series: Some(None), ..Edits::default() }).unwrap();
+    store.forget("a").unwrap();
+    let mut store = Store::open(&file);
+    assert_eq!(store.edits_of("a"), edits, "a round trip; kept when the book is forgotten");
+    assert_eq!(store.edits_of("b").series, Some(None), "no series");
+    store.set_edits("a", Edits::default()).unwrap();
+    assert!(Store::open(&file).edits_of("a").is_empty());
+}
+
+#[test]
 fn shelves_are_kept_by_id() {
     let file = dir().join("state");
     let mut store = Store::open(&file);

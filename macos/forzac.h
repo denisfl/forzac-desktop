@@ -359,9 +359,26 @@ typedef struct {
     const char *details;    // genres · year · language
     const char *annotation;
 } ForzacBookInfo;
-ForzacBookInfoHandle *forzac_book_info(const ForzacDocument *doc);
+ForzacBookInfoHandle *forzac_book_info(const ForzacState *state, const ForzacDocument *doc);
 const ForzacBookInfo *forzac_book_info_view(const ForzacBookInfoHandle *info);
 void forzac_book_info_free(ForzacBookInfoHandle *info);
+
+// Editing a book's details (metadata-editing): forzac_edit_fields fills the "Edit…" form for an open document with
+// the details as the library shows them; forzac_save_edits keeps what the form changes (the file is not touched);
+// forzac_reset_edits drops the book's edits.
+typedef struct ForzacFieldsHandle ForzacFieldsHandle;
+typedef struct {
+    const char *title;
+    const char *authors;    // comma-separated
+    const char *series;
+    const char *number;
+    const char *genres;     // comma-separated
+} ForzacFields;
+ForzacFieldsHandle *forzac_edit_fields(const ForzacState *state, const ForzacDocument *doc);
+const ForzacFields *forzac_fields_view(const ForzacFieldsHandle *fields);
+void forzac_fields_free(ForzacFieldsHandle *fields);
+bool forzac_save_edits(ForzacState *state, const ForzacDocument *doc, ForzacFields fields);
+bool forzac_reset_edits(ForzacState *state, const char *id);
 ForzacCoverStyle forzac_cover_style(const char *id, const char *title);
 void forzac_marble(int32_t seed, uint32_t width, uint32_t height, uint8_t *out);
 const char *forzac_sample_page(void);

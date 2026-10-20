@@ -186,7 +186,9 @@ pub fn scan(folder: &Path, store: &mut Store) -> Vec<Entry> {
         .filter_map(|e| {
             let path = if e.path.is_file() { e.path.clone() } else { in_folder(&e.id)? };
             let series = files.iter().find(|f| f.id == e.id).and_then(|f| f.series.clone());
-            Some(Entry { path, series, shelves: store.shelves_of(&e.id).to_vec(), ..e.clone() })
+            let mut entry = Entry { path, series, shelves: store.shelves_of(&e.id).to_vec(), ..e.clone() };
+            store.edits_of(&e.id).apply(&mut entry);
+            Some(entry)
         })
         .collect();
     remembered.sort_by_key(|e| std::cmp::Reverse(e.opened));
@@ -195,14 +197,18 @@ pub fn scan(folder: &Path, store: &mut Store) -> Vec<Entry> {
     let mut new: Vec<(&Cached, u64)> =
         files.iter().filter(|f| !f.id.is_empty() && seen.insert(f.id.clone())).map(|f| (f, f.mtime)).collect();
     new.sort_by_key(|(_, t)| std::cmp::Reverse(*t));
-    remembered.extend(new.into_iter().map(|(f, _)| Entry {
-        id: f.id.clone(),
-        path: folder.join(&f.name),
-        title: f.title.clone(),
-        authors: f.authors.clone(),
-        series: f.series.clone(),
-        shelves: store.shelves_of(&f.id).to_vec(),
-        ..Entry::default()
+    remembered.extend(new.into_iter().map(|(f, _)| {
+        let mut entry = Entry {
+            id: f.id.clone(),
+            path: folder.join(&f.name),
+            title: f.title.clone(),
+            authors: f.authors.clone(),
+            series: f.series.clone(),
+            shelves: store.shelves_of(&f.id).to_vec(),
+            ..Entry::default()
+        };
+        store.edits_of(&f.id).apply(&mut entry);
+        entry
     }));
     remembered
 }

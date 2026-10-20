@@ -2038,13 +2038,15 @@ pub struct BookInfo {
     _strings: [CString; 5],
 }
 
-/// The information on `doc` for "About the book"; free with [`forzac_book_info_free`].
+/// The information on `doc` for "About the book", with the reader's edits from `state`; free with
+/// [`forzac_book_info_free`].
 ///
 /// # Safety
-/// `doc` from [`forzac_open`], not closed.
+/// `state` from [`forzac_state_open`]; `doc` from [`forzac_open`], not closed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn forzac_book_info(doc: *const Document) -> *mut BookInfo {
-    let info = crate::library::book_info(&unsafe { &*doc }.book);
+pub unsafe extern "C" fn forzac_book_info(state: *const State, doc: *const Document) -> *mut BookInfo {
+    let book = &unsafe { &*doc }.book;
+    let info = crate::library::book_info(book, &unsafe { &*state }.store.edits_of(&book.id));
     let strings = [info.title, info.authors, info.series, info.details, info.annotation].map(|s| cstring(&s));
     let view = ForzacBookInfo {
         title: strings[0].as_ptr(),
@@ -2070,6 +2072,86 @@ pub unsafe extern "C" fn forzac_book_info_free(info: *mut BookInfo) {
     if !info.is_null() {
         drop(unsafe { Box::from_raw(info) });
     }
+}
+
+/// The "Edit…" form's text (`library::Fields`); strings valid until [`forzac_fields_free`].
+#[repr(C)]
+pub struct ForzacFields {
+    pub title: *const c_char,
+    pub authors: *const c_char,
+    pub series: *const c_char,
+    pub number: *const c_char,
+    pub genres: *const c_char,
+}
+
+pub struct Fields {
+    view: ForzacFields,
+    _strings: [CString; 5],
+}
+
+/// The form for `doc` filled with its details as the library shows them (`library::fields`); free with
+/// [`forzac_fields_free`].
+///
+/// # Safety
+/// `state` from [`forzac_state_open`]; `doc` from [`forzac_open`], not closed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_edit_fields(state: *const State, doc: *const Document) -> *mut Fields {
+    let book = &unsafe { &*doc }.book;
+    let f = crate::library::fields(book, &unsafe { &*state }.store.edits_of(&book.id));
+    let strings = [f.title, f.authors, f.series, f.number, f.genres].map(|s| cstring(&s));
+    let view = ForzacFields {
+        title: strings[0].as_ptr(),
+        authors: strings[1].as_ptr(),
+        series: strings[2].as_ptr(),
+        number: strings[3].as_ptr(),
+        genres: strings[4].as_ptr(),
+    };
+    Box::into_raw(Box::new(Fields { view, _strings: strings }))
+}
+
+/// # Safety
+/// `fields` from [`forzac_edit_fields`], not freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_fields_view(fields: *const Fields) -> *const ForzacFields {
+    &unsafe { &*fields }.view
+}
+
+/// # Safety
+/// `fields` from [`forzac_edit_fields`], or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_fields_free(fields: *mut Fields) {
+    if !fields.is_null() {
+        drop(unsafe { Box::from_raw(fields) });
+    }
+}
+
+/// Keeps the edits the form `fields` makes to `doc` (`library::edits_from`); false when the state cannot be written.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`]; `doc` from [`forzac_open`], not closed; `fields`' strings valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_save_edits(state: *mut State, doc: *const Document, fields: ForzacFields) -> bool {
+    let book = &unsafe { &*doc }.book;
+    let s = |p: *const c_char| unsafe { str(p) }.into_owned();
+    let form = crate::library::Fields {
+        title: s(fields.title),
+        authors: s(fields.authors),
+        series: s(fields.series),
+        number: s(fields.number),
+        genres: s(fields.genres),
+    };
+    let edits = crate::library::edits_from(book, &form);
+    unsafe { &mut *state }.store.set_edits(&book.id, edits).is_ok()
+}
+
+/// Drops the reader's edits of the book `id`; false when the state cannot be written.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`]; `id` a valid NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_reset_edits(state: *mut State, id: *const c_char) -> bool {
+    let id = unsafe { str(id) };
+    unsafe { &mut *state }.store.set_edits(&id, crate::state::Edits::default()).is_ok()
 }
 
 /// A generated cover's look (`library::CoverStyle`).

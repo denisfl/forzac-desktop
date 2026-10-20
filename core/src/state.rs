@@ -8,6 +8,7 @@
 //! bookmark<TAB>id<TAB>chapter<TAB>block<TAB>offset
 //! quote<TAB>id<TAB>chapter<TAB>block<TAB>offset<TAB>chapter<TAB>block<TAB>offset
 //! shelf<TAB>id<TAB>name
+//! edit<TAB>id<TAB>title|authors|series|number|genres<TAB>value
 //! file<TAB>name<TAB>size<TAB>mtime<TAB>id<TAB>title<TAB>authors<TAB>series<TAB>number
 //! ```
 //!
@@ -48,6 +49,36 @@ pub struct Entry {
     pub shelves: Vec<String>,
 }
 
+/// A book's details as the reader edited them (`metadata-editing`); `None`: the book's own.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Edits {
+    pub title: Option<String>,
+    /// Joined by ", " as `Entry::authors`.
+    pub authors: Option<String>,
+    /// `Some(None)`: no series.
+    pub series: Option<Option<Series>>,
+    pub genres: Option<Vec<String>>,
+}
+
+impl Edits {
+    pub fn is_empty(&self) -> bool {
+        *self == Edits::default()
+    }
+
+    /// `entry` with these edits.
+    pub fn apply(&self, entry: &mut Entry) {
+        if let Some(title) = &self.title {
+            entry.title.clone_from(title);
+        }
+        if let Some(authors) = &self.authors {
+            entry.authors.clone_from(authors);
+        }
+        if let Some(series) = &self.series {
+            entry.series.clone_from(series);
+        }
+    }
+}
+
 /// What a file in the Books folder holds, as last read.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Cached {
@@ -80,6 +111,8 @@ struct Saved {
     files: Vec<Cached>,
     /// The reader's shelves by book id, in the order put on.
     shelves: BTreeMap<String, Vec<String>>,
+    /// The reader's edits by book id.
+    edits: BTreeMap<String, Edits>,
 }
 
 impl Store {
@@ -218,6 +251,22 @@ impl Store {
         })
     }
 
+    /// The reader's edits of the book `id`.
+    pub fn edits_of(&self, id: &str) -> Edits {
+        self.saved.edits.get(id).cloned().unwrap_or_default()
+    }
+
+    /// Replaces the edits of the book `id`; empty edits drop them.
+    pub fn set_edits(&mut self, id: &str, edits: Edits) -> io::Result<()> {
+        self.write(|saved| {
+            if edits.is_empty() {
+                saved.edits.remove(id);
+            } else {
+                saved.edits.insert(id.to_owned(), edits.clone());
+            }
+        })
+    }
+
     /// Up to `n` books whose files still exist, the last opened first.
     pub fn recent(&self, n: usize) -> Vec<&Entry> {
         let mut books = self.books();
@@ -271,6 +320,7 @@ impl Store {
             || s.bookmarks.keys().any(old)
             || s.quotes.keys().any(old)
             || s.shelves.keys().any(old)
+            || s.edits.keys().any(old)
             || s.files.iter().any(|f| old(&f.id));
         if !used {
             return Ok(());
@@ -302,6 +352,9 @@ impl Store {
                     all.extend(quotes);
                     all.sort();
                     all.dedup();
+                }
+                if let Some(edits) = saved.edits.remove(old) {
+                    saved.edits.entry(new.clone()).or_insert(edits);
                 }
                 if let Some(shelves) = saved.shelves.remove(old) {
                     let all = saved.shelves.entry(new.clone()).or_default();
@@ -349,6 +402,27 @@ impl Store {
         for (id, shelves) in &saved.shelves {
             for name in shelves {
                 let _ = writeln!(text, "shelf\t{}\t{}", escape(id), escape(name));
+            }
+        }
+        for (id, e) in &saved.edits {
+            let id = escape(id);
+            let mut line = |field: &str, value: &str| {
+                let _ = writeln!(text, "edit\t{id}\t{field}\t{}", escape(value));
+            };
+            if let Some(title) = &e.title {
+                line("title", title);
+            }
+            if let Some(authors) = &e.authors {
+                line("authors", authors);
+            }
+            if let Some(series) = &e.series {
+                line("series", series.as_ref().map_or("", |s| s.name.as_str()));
+                if let Some(n) = series.as_ref().and_then(|s| s.number) {
+                    line("number", &n.to_string());
+                }
+            }
+            if let Some(genres) = &e.genres {
+                line("genres", &genres.join("\n"));
             }
         }
         for f in &saved.files {
@@ -424,6 +498,22 @@ fn read(path: &Path) -> Saved {
                     series: None,
                     shelves: Vec::new(),
                 });
+            }
+            Some("edit") if f.len() == 4 => {
+                let e = saved.edits.entry(f[1].clone()).or_default();
+                match f[2].as_str() {
+                    "title" => e.title = Some(f[3].clone()),
+                    "authors" => e.authors = Some(f[3].clone()),
+                    "series" => e.series = Some(Series::parse(&f[3], None)),
+                    // After its `series` line.
+                    "number" => {
+                        if let Some(Some(s)) = &mut e.series {
+                            s.number = f[3].parse().ok();
+                        }
+                    }
+                    "genres" => e.genres = Some(f[3].split('\n').filter(|g| !g.is_empty()).map(str::to_owned).collect()),
+                    _ => {}
+                }
             }
             Some("shelf") if f.len() == 3 && !f[2].trim().is_empty() => {
                 let shelves = saved.shelves.entry(f[1].clone()).or_default();

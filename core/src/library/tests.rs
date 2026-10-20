@@ -181,8 +181,53 @@ fn a_books_information() {
         language: Some("en-GB".into()),
         ..Book::default()
     };
-    let info = book_info(&book);
+    let info = book_info(&book, &Edits::default());
     assert_eq!(info.series, "Discworld · 4");
     assert_eq!(info.details, "Fantasy, Humour · 1987 · English");
-    assert_eq!(book_info(&Book { title: "T".into(), ..Book::default() }).details, "");
+    assert_eq!(book_info(&Book { title: "T".into(), ..Book::default() }, &Edits::default()).details, "");
+}
+
+#[test]
+fn editing_a_books_details() {
+    crate::i18n::set_language(Language::English);
+    let book = Book {
+        title: "MORT".into(),
+        authors: vec!["Pratchett, Terry".into()],
+        series: Some(Series { name: "Discworld".into(), number: Some(4.0) }),
+        genres: vec!["Fantasy".into()],
+        ..Book::default()
+    };
+    let own = fields(&book, &Edits::default());
+    assert_eq!(
+        own,
+        Fields {
+            title: "MORT".into(),
+            authors: "Pratchett, Terry".into(),
+            series: "Discworld".into(),
+            number: "4".into(),
+            genres: "Fantasy".into()
+        }
+    );
+    assert_eq!(edits_from(&book, &own), Edits::default(), "nothing changed, nothing kept");
+    let form = Fields {
+        title: " Mort ".into(),
+        authors: "Terry Pratchett,  ".into(),
+        series: "".into(),
+        number: "4".into(),
+        genres: "Fantasy, Humour".into(),
+    };
+    let edits = edits_from(&book, &form);
+    assert_eq!(edits.title.as_deref(), Some("Mort"));
+    assert_eq!(edits.authors.as_deref(), Some("Terry Pratchett"));
+    assert_eq!(edits.series, Some(None), "an empty series is no series");
+    assert_eq!(edits.genres, Some(vec!["Fantasy".into(), "Humour".into()]));
+    let blank = Fields { title: "".into(), authors: "".into(), ..own.clone() };
+    assert_eq!(edits_from(&book, &blank), Edits::default(), "an empty title or authors is the book's own");
+    let shown = fields(&book, &edits);
+    assert_eq!((shown.title.as_str(), shown.series.as_str()), ("Mort", ""));
+    let info = book_info(&book, &edits);
+    assert_eq!((info.authors.as_str(), info.series.as_str()), ("Terry Pratchett", ""));
+    let mut entry = Entry { title: "MORT".into(), ..Entry::default() };
+    edits.apply(&mut entry);
+    assert_eq!(entry.title, "Mort");
 }

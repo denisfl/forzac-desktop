@@ -765,6 +765,9 @@ const STATIC_CSS: &str = "
     .forzac-library .about-annotation { font-family: 'Literata'; font-size: 15px; line-height: 1.5; }
 ";
 
+/// The "Edit…" form: its sheet, the book, its fields and the parsed book (its own details).
+type EditForm = (gtk::Widget, usize, [gtk::Entry; 5], forzac_core::Book);
+
 /// The library window and what it shows.
 pub struct Library {
     pub window: gtk::ApplicationWindow,
@@ -805,6 +808,8 @@ pub struct Library {
     question: RefCell<Option<(gtk::Widget, usize)>>,
     /// The new shelf's question while it shows: its sheet, the book and the name field.
     naming: RefCell<Option<(gtk::Widget, usize, gtk::Entry)>>,
+    /// The "Edit…" form while it shows.
+    editing: RefCell<Option<EditForm>>,
     /// Covers being loaded or made; `settled` runs when none is left after the first frame.
     pending: Cell<usize>,
     first_frame: Cell<Option<Instant>>,
@@ -938,6 +943,7 @@ impl Library {
             waiting: RefCell::default(),
             question: RefCell::default(),
             naming: RefCell::default(),
+            editing: RefCell::default(),
             pending: Cell::new(0),
             first_frame: Cell::new(None),
             settled: RefCell::default(),
@@ -1325,6 +1331,7 @@ impl Library {
     fn menu(self: &Rc<Self>, book: usize, anchor: &gtk::Button) {
         let model = gio::Menu::new();
         model.append(Some(tr("About the book")), Some(&format!("lib.about(uint32 {book})")));
+        model.append(Some(tr("Edit…")), Some(&format!("lib.edit(uint32 {book})")));
         // "Add to shelf": a checked item per shelf, its action made for this menu.
         let shelves = gio::Menu::new();
         let actions = gio::SimpleActionGroup::new();
@@ -1428,6 +1435,98 @@ impl Library {
         }
     }
 
+    /// "Edit…": the book's file read in the background, then the form as a sheet at the window's bottom.
+    fn edit(self: &Rc<Self>, book: usize) {
+        if self.editing.borrow().is_some() || self.question.borrow().is_some() || self.about.borrow().is_some() {
+            return;
+        }
+        let Some(path) = self.books.borrow().get(book).map(|b| b.path.clone()) else { return };
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let parsed = gio::spawn_blocking(move || forzac_core::open(&path).ok()).await.ok().flatten();
+            let (Some(l), Some(parsed)) = (weak.upgrade(), parsed) else { return };
+            if l.editing.borrow().is_none() && l.question.borrow().is_none() && l.about.borrow().is_none() {
+                l.show_edit(book, parsed);
+            }
+        });
+    }
+
+    fn show_edit(self: &Rc<Self>, book: usize, parsed: forzac_core::Book) {
+        let form = library::fields(&parsed, &self.store.borrow().edits_of(&parsed.id));
+        let backdrop = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        backdrop.add_css_class("backdrop");
+        let sheet = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        sheet.add_css_class("question");
+        sheet.set_valign(gtk::Align::End);
+        sheet.set_halign(gtk::Align::Center);
+        sheet.set_vexpand(true);
+        sheet.set_size_request(self.window.width().min(560), -1);
+        sheet.append(&label(tr("Edit the book"), "question-title"));
+        let grid = gtk::Grid::builder().row_spacing(8).column_spacing(12).build();
+        let values = [&form.title, &form.authors, &form.series, &form.number, &form.genres];
+        let names = [tr("Title"), tr("Authors"), tr("Series"), tr("Number"), tr("Genres")];
+        let entries: [gtk::Entry; 5] = std::array::from_fn(|i| {
+            let name = label(names[i], "question-body");
+            name.set_valign(gtk::Align::Center);
+            let entry = gtk::Entry::builder().text(values[i].as_str()).hexpand(true).build();
+            grid.attach(&name, 0, i as i32, 1, 1);
+            grid.attach(&entry, 1, i as i32, 1, 1);
+            entry
+        });
+        sheet.append(&grid);
+        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        buttons.set_homogeneous(true);
+        buttons.set_margin_top(8);
+        let own = gtk::Button::builder().label(tr("From the book")).focusable(false).hexpand(true).build();
+        let cancel = gtk::Button::builder().label(tr("Cancel")).focusable(false).hexpand(true).build();
+        let save = gtk::Button::builder().label(tr("Save")).focusable(false).hexpand(true).build();
+        for b in [&own, &cancel, &save] {
+            b.add_css_class("sheet-button");
+            buttons.append(b);
+        }
+        save.add_css_class("filled");
+        sheet.append(&buttons);
+        backdrop.append(&sheet);
+        for (button, answer) in [(&own, Some(false)), (&cancel, None), (&save, Some(true))] {
+            let weak = Rc::downgrade(self);
+            button.connect_clicked(move |_| {
+                if let Some(l) = weak.upgrade() {
+                    l.close_edit(answer);
+                }
+            });
+        }
+        self.overlay.add_overlay(&backdrop);
+        entries[0].grab_focus();
+        *self.editing.borrow_mut() = Some((backdrop.upcast(), book, entries, parsed));
+    }
+
+    /// Closes the form: `Some(true)` keeps what it changes, `Some(false)` drops the book's edits, `None` changes nothing.
+    fn close_edit(self: &Rc<Self>, answer: Option<bool>) {
+        let Some((sheet, book, entries, parsed)) = self.editing.borrow_mut().take() else { return };
+        self.overlay.remove_overlay(&sheet);
+        let Some(save) = answer else { return };
+        let edits = if save {
+            let text = |i: usize| entries[i].text().to_string();
+            let form = library::Fields { title: text(0), authors: text(1), series: text(2), number: text(3), genres: text(4) };
+            library::edits_from(&parsed, &form)
+        } else {
+            forzac_core::state::Edits::default()
+        };
+        if let Err(e) = self.store.borrow_mut().set_edits(&parsed.id, edits.clone()) {
+            eprintln!("cannot save the reading state: {e}");
+            return;
+        }
+        // The library's book as it now reads: the file's details with the edits.
+        let shown = library::fields(&parsed, &edits);
+        for b in self.books.borrow_mut().iter_mut().filter(|b| b.id == parsed.id) {
+            b.title = shown.title.clone();
+            b.authors = shown.authors.clone();
+            b.series = Series::parse(&shown.series, Some(&shown.number));
+        }
+        self.rebuild();
+        self.select(book.min(self.items.borrow().len().saturating_sub(1)));
+    }
+
     /// The views' tabs, the chosen one marked; hidden while searching or without books.
     fn show_tabs(self: &Rc<Self>, visible: bool) {
         while let Some(child) = self.tabs.first_child() {
@@ -1466,10 +1565,12 @@ impl Library {
         if self.about.borrow().is_some() || self.question.borrow().is_some() {
             return;
         }
-        let Some(path) = self.books.borrow().get(book).map(|b| b.path.clone()) else { return };
+        let Some((path, id)) = self.books.borrow().get(book).map(|b| (b.path.clone(), b.id.clone())) else { return };
+        let edits = self.store.borrow().edits_of(&id);
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
-            let info = gio::spawn_blocking(move || forzac_core::open(&path).ok().map(|b| library::book_info(&b))).await.ok().flatten();
+            let info =
+                gio::spawn_blocking(move || forzac_core::open(&path).ok().map(|b| library::book_info(&b, &edits))).await.ok().flatten();
             let (Some(l), Some(info)) = (weak.upgrade(), info) else { return };
             if l.about.borrow().is_none() && l.question.borrow().is_none() {
                 l.show_about(book, info);
@@ -1946,6 +2047,14 @@ impl Library {
                 l.ask(book as usize);
             }
         });
+        let edit = gio::SimpleAction::new("edit", Some(glib::VariantTy::UINT32));
+        let weak = Rc::downgrade(self);
+        edit.connect_activate(move |_, v| {
+            if let (Some(l), Some(book)) = (weak.upgrade(), v.and_then(|v| v.get::<u32>())) {
+                l.edit(book as usize);
+            }
+        });
+        actions.add_action(&edit);
         let newshelf = gio::SimpleAction::new("newshelf", Some(glib::VariantTy::UINT32));
         let weak = Rc::downgrade(self);
         newshelf.connect_activate(move |_, v| {
@@ -1967,7 +2076,7 @@ impl Library {
             let action = gtk::CallbackAction::new(move |_, _| {
                 let Some(l) = weak.upgrade() else { return glib::Propagation::Proceed };
                 // The field's text widget, not the entry itself, has the focus while searching.
-                if typing && (l.searching.get() || l.naming.borrow().is_some()) {
+                if typing && (l.searching.get() || l.naming.borrow().is_some() || l.editing.borrow().is_some()) {
                     return glib::Propagation::Proceed;
                 }
                 f(&l);
@@ -1975,7 +2084,9 @@ impl Library {
             });
             controller.add_shortcut(gtk::Shortcut::new(gtk::ShortcutTrigger::parse_string(trigger), Some(action)));
         };
-        let asking = |l: &Rc<Library>| l.question.borrow().is_some() || l.about.borrow().is_some() || l.naming.borrow().is_some();
+        let asking = |l: &Rc<Library>| {
+            l.question.borrow().is_some() || l.about.borrow().is_some() || l.naming.borrow().is_some() || l.editing.borrow().is_some()
+        };
         add(
             "h|KP_Left",
             true,
@@ -2070,7 +2181,9 @@ impl Library {
             "Return|KP_Enter",
             false,
             Box::new(move |l| {
-                if l.naming.borrow().is_some() {
+                if l.editing.borrow().is_some() {
+                    l.close_edit(Some(true))
+                } else if l.naming.borrow().is_some() {
                     l.name_shelf(true)
                 } else if l.about.borrow().is_some() {
                     l.close_about(true)
@@ -2136,7 +2249,9 @@ impl Library {
             "Escape",
             false,
             Box::new(move |l| {
-                if l.naming.borrow().is_some() {
+                if l.editing.borrow().is_some() {
+                    l.close_edit(None);
+                } else if l.naming.borrow().is_some() {
                     l.name_shelf(false);
                 } else if l.about.borrow().is_some() {
                     l.close_about(false);

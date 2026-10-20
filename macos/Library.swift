@@ -975,6 +975,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     private func menu(_ book: Int, at item: LibraryItem) {
         let menu = NSMenu()
         let about = NSMenuItem(title: tr("About the book"), action: #selector(menuAbout(_:)), keyEquivalent: "")
+        let edit = NSMenuItem(title: tr("Edit…"), action: #selector(menuEdit(_:)), keyEquivalent: "")
         // "Add to shelf": every shelf, checked when the book is on it, then "New shelf…".
         let shelves = NSMenu()
         let names = String(cString: forzac_shelf_names(state)).split(separator: "\n").map(String.init)
@@ -994,7 +995,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         let shelf = NSMenuItem(title: tr("Add to shelf"), action: nil, keyEquivalent: "")
         shelf.submenu = shelves
         let remove = NSMenuItem(title: tr("Remove from library"), action: #selector(menuRemove(_:)), keyEquivalent: "")
-        for i in [about, shelf, remove] {
+        for i in [about, edit, shelf, remove] {
             i.target = i === shelf ? nil : self
             i.tag = book
             menu.addItem(i)
@@ -1004,6 +1005,75 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
 
     @objc private func menuAbout(_ sender: NSMenuItem) { showAbout(sender.tag) }
     @objc private func menuRemove(_ sender: NSMenuItem) { ask(sender.tag) }
+
+    /// "Edit…": the file read on a background queue, then the form in an alert; the file is never changed.
+    @objc private func menuEdit(_ sender: NSMenuItem) {
+        let book = sender.tag
+        guard book < books.count else { return }
+        let path = books[book].path
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let doc = forzac_open(path, nil) else { return }
+            DispatchQueue.main.async {
+                guard let self else { forzac_close(doc); return }
+                self.showEdit(book, doc)
+            }
+        }
+    }
+
+    /// The form for `doc` (`forzac_edit_fields`): Title, Authors, Series, Number, Genres; "Save", "Cancel", "From the
+    /// book". Closes `doc` when answered.
+    private func showEdit(_ book: Int, _ doc: OpaquePointer) {
+        let handle = forzac_edit_fields(state, doc)!
+        let f = forzac_fields_view(handle)!.pointee
+        let values = [f.title, f.authors, f.series, f.number, f.genres].map { String(cString: $0!) }
+        forzac_fields_free(handle)
+        let names = [tr("Title"), tr("Authors"), tr("Series"), tr("Number"), tr("Genres")]
+        let fields = values.map { value -> NSTextField in
+            let field = NSTextField(string: value)
+            field.widthAnchor.constraint(equalToConstant: 280).isActive = true
+            return field
+        }
+        let grid = NSGridView(views: zip(names, fields).map { [NSTextField(labelWithString: $0), $1] })
+        grid.rowSpacing = 8
+        grid.column(at: 0).xPlacement = .trailing
+        grid.frame.size = grid.fittingSize
+        let alert = NSAlert()
+        alert.messageText = tr("Edit the book")
+        alert.accessoryView = grid
+        alert.addButton(withTitle: tr("Save"))
+        alert.addButton(withTitle: tr("Cancel"))
+        alert.addButton(withTitle: tr("From the book"))
+        alert.window.initialFirstResponder = fields[0]
+        let id = books[book].id
+        alert.beginSheetModal(for: window) { [weak self] response in
+            defer { forzac_close(doc) }
+            guard let self else { return }
+            switch response {
+            case .alertFirstButtonReturn:
+                let c = fields.map { strdup($0.stringValue) }
+                defer { c.forEach { free($0) } }
+                _ = forzac_save_edits(self.state, doc, ForzacFields(title: c[0], authors: c[1], series: c[2], number: c[3], genres: c[4]))
+            case .alertThirdButtonReturn:
+                _ = forzac_reset_edits(self.state, id)
+            default:
+                return
+            }
+            // The library's book as it now reads.
+            let shown = forzac_edit_fields(self.state, doc)!
+            let v = forzac_fields_view(shown)!.pointee
+            let (title, authors, series, number) = (String(cString: v.title), String(cString: v.authors), String(cString: v.series), String(cString: v.number))
+            forzac_fields_free(shown)
+            for i in self.books.indices where self.books[i].id == id {
+                let b = self.books[i]
+                var edited = LibraryBook(id: b.id, path: b.path, title: title, authors: authors, progress: b.progress, opened: b.opened)
+                edited.series = series
+                edited.number = Float(number) ?? -1
+                edited.shelves = b.shelves
+                self.books[i] = edited
+            }
+            self.rebuild()
+        }
+    }
 
     @objc private func menuShelf(_ sender: NSMenuItem) {
         guard let (book, name, on) = sender.representedObject as? (Int, String, Bool) else { return }
@@ -1046,13 +1116,14 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         let path = books[book].path
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let doc = forzac_open(path, nil) else { return }
-            let handle = forzac_book_info(doc)!
-            let i = forzac_book_info_view(handle)!.pointee
-            let info = [i.title, i.authors, i.series, i.details, i.annotation].map { String(cString: $0!) }
-            forzac_book_info_free(handle)
-            forzac_close(doc)
             DispatchQueue.main.async {
+                defer { forzac_close(doc) }
                 guard let self, self.about == nil, self.asking == nil else { return }
+                // The reader's edits come from the main handle, so on the main queue.
+                let handle = forzac_book_info(self.state, doc)!
+                let i = forzac_book_info_view(handle)!.pointee
+                let info = [i.title, i.authors, i.series, i.details, i.annotation].map { String(cString: $0!) }
+                forzac_book_info_free(handle)
                 let sheet = AboutView(palette: self.palette, cover: self.coverView(book), info: info)
                 sheet.onAnswer = { [weak self] read in self?.closeAbout(read) }
                 sheet.frame = self.container.bounds

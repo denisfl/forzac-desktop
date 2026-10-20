@@ -4,8 +4,8 @@
 //! state's sample page (the web reader's). The Books folder is in `folder.rs`.
 
 use crate::i18n::{Language, language, tr};
-use crate::model::Book;
-use crate::state::Entry;
+use crate::model::{Book, Series};
+use crate::state::{Edits, Entry};
 
 mod folder;
 pub use folder::*;
@@ -378,7 +378,9 @@ pub fn language_name(tag: &str) -> Option<&'static str> {
     })
 }
 
-pub fn book_info(book: &Book) -> BookInfo {
+/// "About the book" for `book` with the reader's `edits`.
+pub fn book_info(book: &Book, edits: &Edits) -> BookInfo {
+    let book = &edited(book, edits);
     let series = book.series.as_ref().map_or(String::new(), |s| match s.number_label() {
         Some(n) => format!("{} · {n}", s.name),
         None => s.name.clone(),
@@ -398,6 +400,62 @@ pub fn book_info(book: &Book) -> BookInfo {
         series,
         details: details.join(" · "),
         annotation: book.annotation.clone().unwrap_or_default(),
+    }
+}
+
+/// `book`'s details with the reader's `edits` (the chapters are not copied).
+fn edited(book: &Book, edits: &Edits) -> Book {
+    Book {
+        title: edits.title.clone().unwrap_or_else(|| book.title.clone()),
+        authors: edits.authors.as_ref().map_or_else(|| book.authors.clone(), |a| a.split(", ").map(str::to_owned).collect()),
+        series: edits.series.clone().unwrap_or_else(|| book.series.clone()),
+        genres: edits.genres.clone().unwrap_or_else(|| book.genres.clone()),
+        year: book.year,
+        language: book.language.clone(),
+        annotation: book.annotation.clone(),
+        ..Book::default()
+    }
+}
+
+/// The "Edit…" form's text: authors and genres separated by commas, the number as typed.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Fields {
+    pub title: String,
+    pub authors: String,
+    pub series: String,
+    pub number: String,
+    pub genres: String,
+}
+
+/// The form for `book` filled with its details as the library shows them (`edits` applied).
+pub fn fields(book: &Book, edits: &Edits) -> Fields {
+    let book = edited(book, edits);
+    let series = book.series.as_ref();
+    Fields {
+        title: book.title.clone(),
+        authors: book.authors.join(", "),
+        series: series.map_or(String::new(), |s| s.name.clone()),
+        number: series.and_then(Series::number_label).unwrap_or_default(),
+        genres: book.genres.iter().map(|g| crate::i18n::genre_name(g)).collect::<Vec<_>>().join(", "),
+    }
+}
+
+/// The edits `form` makes to `book`: only the fields that differ from the book's own; an empty title or authors is the
+/// book's own, an empty series no series.
+pub fn edits_from(book: &Book, form: &Fields) -> Edits {
+    let words = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let list = |s: &str| s.split(',').map(words).filter(|w| !w.is_empty()).collect::<Vec<_>>();
+    let own = fields(book, &Edits::default());
+    let title = words(&form.title);
+    let authors = list(&form.authors).join(", ");
+    let series = Series::parse(&form.series, Some(&form.number));
+    let genres = list(&form.genres);
+    let own_genres = list(&own.genres);
+    Edits {
+        title: (!title.is_empty() && title != own.title).then_some(title),
+        authors: (!authors.is_empty() && authors != own.authors).then_some(authors),
+        series: (series != book.series).then_some(series),
+        genres: (genres != own_genres).then_some(genres),
     }
 }
 
