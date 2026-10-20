@@ -2,7 +2,7 @@
 # The release archives (scripts/package-linux.sh) copied to /usr. At publication: updpkgsums, then
 # makepkg --printsrcinfo > .SRCINFO.
 pkgname=forzac-bin
-pkgver=0.10.2
+pkgver=0.11.0
 pkgrel=1
 pkgdesc="Offline FB2 and EPUB reader with book-quality typesetting (release build)"
 arch=(x86_64 aarch64)
