@@ -543,7 +543,6 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     private let searchField = NSTextField()
     private let searchButton = FlatButton(IconView(Icons.search, size: 20))
     private let closeButton = FlatButton(IconView(Icons.x, size: 20))
-    private let folderButton = FlatButton(IconView(Icons.folder, size: 20))
     private let openButton: PillButton
     /// "Version N is out — download ×" (`update-check`), in the head when it fits.
     private let updateText = ClickLabel()
@@ -588,7 +587,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         searchField.placeholderAttributedString = NSAttributedString(string: tr("Title or author"), attributes: [.font: bookFont("PT Serif", 26), .foregroundColor: nsColor(palette.muted)])
         searchField.delegate = self
         searchField.isHidden = true
-        for b in [searchButton, closeButton, folderButton] {
+        for b in [searchButton, closeButton] {
             b.colour(palette)
             b.layer!.cornerRadius = 22
             b.layer!.borderWidth = 1
@@ -597,8 +596,6 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         }
         searchButton.toolTip = tr("Search")
         closeButton.toolTip = tr("Close")
-        folderButton.toolTip = tr("Show the Books folder")
-        folderButton.onClick = { [weak self] in self?.showFolder() }
         closeButton.isHidden = true
         searchButton.onClick = { [weak self] in self?.setSearching(true) }
         closeButton.onClick = { [weak self] in self?.setSearching(false) }
@@ -612,7 +609,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             self.showUpdate()
         }
         updateNotice()
-        for v in [brandIcon, brandName, searchField, searchButton, closeButton, folderButton, openButton, updateText, updateClose] as [NSView] {
+        for v in [brandIcon, brandName, searchField, searchButton, closeButton, openButton, updateText, updateClose] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = true
             content.addSubview(v)
         }
@@ -760,7 +757,6 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         let empty = books.isEmpty
         searchButton.isHidden = empty || searching
         closeButton.isHidden = !searching
-        folderButton.isHidden = empty || searching || folder == nil
         openButton.isHidden = empty || searching
         brandIcon.isHidden = searching
         brandName.isHidden = searching
@@ -931,7 +927,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             openButton.frame.origin = CGPoint(x: right - openButton.frame.width, y: headY + (48 - openButton.frame.height) / 2)
             right -= openButton.frame.width + 10
         }
-        for b in [folderButton, searchButton, closeButton] where !b.isHidden {
+        for b in [searchButton, closeButton] where !b.isHidden {
             b.frame = CGRect(x: right - 44, y: headY + 2, width: 44, height: 44)
             right -= 54
         }

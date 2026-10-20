@@ -11,8 +11,7 @@ Running Forzac without a file and closing the last book window SHALL show the li
 Books folder (`books-folder`) together with the remembered books whose files still exist, laid out as the web reader's
 library, in the reader's theme (paper, ink, secondary colour, lines) and the interface font (Golos Text; the brand, the
 headings and the generated covers in the book serifs). Its head SHALL hold the brand (the app icon and "Forzac") on the
-left and, while there are books, a search button, a "Show the Books folder" button and an "Open a book" button on the
-right; there is no note line under it (removed 2026-10-19: the app now asks GitHub for updates, so "we don’t send any
+left and, while there are books, a search button and an "Open a book" button on the right; there is no note line under it (removed 2026-10-19: the app now asks GitHub for updates, so "we don’t send any
 data" is no longer the whole truth). Books SHALL be read from the Books folder: opening a book
 from elsewhere copies it there first. Only one library window SHALL exist at a time.
 

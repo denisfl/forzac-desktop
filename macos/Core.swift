@@ -272,23 +272,11 @@ enum Shape {
     case line(CGFloat, CGFloat, CGFloat, CGFloat)
     case rect(CGFloat, CGFloat, CGFloat, CGFloat)
     case circle(CGFloat, CGFloat, CGFloat)
-    case path(CGPath)
 }
 
 enum Icons {
     static let x: [Shape] = [.line(18, 6, 6, 18), .line(6, 6, 18, 18)]
     static let search: [Shape] = [.circle(11, 11, 8), .line(21, 21, 16.7, 16.7)]
-    /// Lucide's `folder`: its arcs as tangent arcs.
-    static let folder: [Shape] = {
-        let p = CGMutablePath()
-        p.move(to: CGPoint(x: 20, y: 20))
-        let corners: [(CGFloat, CGFloat, CGFloat, CGFloat)] = [(22, 20, 22, 18), (22, 6, 20, 6), (11.02, 6, 9.6, 3.9), (8.99, 3, 4, 3), (2, 3, 2, 5), (2, 20, 4, 20)]
-        for (x, y, nx, ny) in corners {
-            p.addArc(tangent1End: CGPoint(x: x, y: y), tangent2End: CGPoint(x: nx, y: ny), radius: 2)
-        }
-        p.closeSubpath()
-        return [.path(p)]
-    }()
     static let share: [Shape] = [.circle(18, 5, 3), .circle(6, 12, 3), .circle(18, 19, 3), .line(8.59, 13.51, 15.42, 17.49), .line(15.41, 6.51, 8.59, 10.49)]
     static let alignJustify: [Shape] = [.line(3, 6, 21, 6), .line(3, 12, 21, 12), .line(3, 18, 21, 18)]
     static let alignLeft: [Shape] = [.line(3, 6, 21, 6), .line(3, 12, 15, 12), .line(3, 18, 18, 18)]
@@ -326,7 +314,6 @@ final class IconView: NSView {
             case let .line(x1, y1, x2, y2): ctx.move(to: CGPoint(x: x1, y: y1)); ctx.addLine(to: CGPoint(x: x2, y: y2))
             case let .rect(x, y, w, h): ctx.addRect(CGRect(x: x, y: y, width: w, height: h))
             case let .circle(x, y, r): ctx.addEllipse(in: CGRect(x: x - r, y: y - r, width: 2 * r, height: 2 * r))
-            case let .path(p): ctx.addPath(p)
             }
         }
         ctx.strokePath()

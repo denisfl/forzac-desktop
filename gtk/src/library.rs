@@ -741,8 +741,7 @@ pub struct Library {
     /// "Version N is out — download ×" (`update-check`), in the head.
     update: (gtk::Box, gtk::Label),
     entry: gtk::Entry,
-    /// Search, close the search, show the Books folder, open a book.
-    buttons: (gtk::Button, gtk::Button, gtk::Button, gtk::Button),
+    buttons: (gtk::Button, gtk::Button, gtk::Button),
     question: RefCell<Option<(gtk::Widget, usize)>>,
     /// Covers being loaded or made; `settled` runs when none is left after the first frame.
     pending: Cell<usize>,
@@ -801,7 +800,6 @@ impl Library {
             b
         };
         let search = circle(icons::SEARCH, tr("Search"));
-        let show_folder = circle(icons::FOLDER, tr("Show the Books folder"));
         let close = circle(icons::X, tr("Close"));
         close.set_visible(false);
         let open_button = pill(tr("Open a book"), false);
@@ -838,7 +836,6 @@ impl Library {
             update_line.upcast_ref(),
             search.upcast_ref(),
             close.upcast_ref(),
-            show_folder.upcast_ref(),
             open_button.upcast_ref(),
         ] {
             head.append(w);
@@ -875,7 +872,7 @@ impl Library {
             brand,
             update: (update_line, update_label),
             entry,
-            buttons: (search, close, show_folder, open_button),
+            buttons: (search, close, open_button),
             question: RefCell::default(),
             pending: Cell::new(0),
             first_frame: Cell::new(None),
@@ -1105,10 +1102,9 @@ impl Library {
         *self.shelf.borrow_mut() = None;
         let searching = self.searching.get();
         let empty = self.books.borrow().is_empty();
-        let (search, close, folder, open) = &self.buttons;
+        let (search, close, open) = &self.buttons;
         search.set_visible(!empty && !searching);
         close.set_visible(searching);
-        folder.set_visible(!empty && !searching && self.folder.is_some());
         open.set_visible(!empty && !searching);
         self.brand.set_visible(!searching);
         self.show_update();
@@ -1514,13 +1510,7 @@ impl Library {
 
     /// Keys, the head's buttons, the search field and dropping files.
     fn connect(self: &Rc<Self>) {
-        let (search, close, folder, open) = &self.buttons;
-        let weak = Rc::downgrade(self);
-        folder.connect_clicked(move |_| {
-            if let Some(l) = weak.upgrade() {
-                l.show_folder();
-            }
-        });
+        let (search, close, open) = &self.buttons;
         let weak = Rc::downgrade(self);
         search.connect_clicked(move |_| {
             if let Some(l) = weak.upgrade() {

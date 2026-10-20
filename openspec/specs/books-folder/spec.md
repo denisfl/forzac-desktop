@@ -78,8 +78,10 @@ before). This SHALL happen once, and a failure for one book SHALL NOT stop the o
   still there
 
 ### Requirement: Showing the folder
-The library SHALL offer "Show the Books folder" ("Показать папку «Книги»"), also on `F`, which opens the folder in
-Finder on macOS and in the default file manager on Linux.
+`F` in the library, the empty library's "Show the Books folder" ("Показать папку «Книги»") and, on macOS, File ›
+Show the Books folder SHALL open the folder in Finder on macOS and in the default file manager on Linux. There is no
+button for it in the library's head (removed 2026-10-20: next to "Open a book" a folder icon read as a second way to
+open a file).
 
 #### Scenario: Where are my books
 - **WHEN** the reader presses `F` in the library
