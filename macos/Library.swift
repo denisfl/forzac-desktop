@@ -439,6 +439,8 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     private let open: (String) -> Void
     /// The Books folder, when it could be made.
     private let folder: String?
+    private let remembersFrame: Bool
+    private static let frameName = "Library"
     private var books: [LibraryBook]
     private var thumbs: [String: Thumb] = [:]
     private var marbles: [Int32: CGImage] = [:]
@@ -470,9 +472,11 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     private var body: [NSView] = []
     private var bodyLayout: ((CGFloat, CGFloat) -> CGFloat)?
 
-    /// The library of `books` (`forzac_library_books`) in the Books `folder`.
-    init(state: OpaquePointer, books: [LibraryBook], folder: String?, open: @escaping (String) -> Void) {
+    /// The library of `books` (`forzac_library_books`) in the Books `folder`; it opens where and as large as it was
+    /// left when it `remembersFrame` (not in measurement runs).
+    init(state: OpaquePointer, books: [LibraryBook], folder: String?, remembersFrame: Bool, open: @escaping (String) -> Void) {
         self.state = state
+        self.remembersFrame = remembersFrame
         self.open = open
         self.folder = folder
         self.books = books
@@ -545,7 +549,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
 
         loadCovers()
         rebuild()
-        window.center()
+        if !remembersFrame || !window.setFrameUsingName(LibraryWindow.frameName) { window.center() }
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(nil)
         keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
@@ -554,7 +558,15 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         }
     }
 
+    func windowDidEndLiveResize(_ notification: Notification) { saveFrame() }
+    func windowDidMove(_ notification: Notification) { saveFrame() }
+
+    private func saveFrame() {
+        if remembersFrame { window.saveFrame(usingName: LibraryWindow.frameName) }
+    }
+
     func windowWillClose(_ notification: Notification) {
+        saveFrame()
         if let keys { NSEvent.removeMonitor(keys) }
         keys = nil
     }

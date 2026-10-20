@@ -47,7 +47,8 @@ the Dock icon. The build is signed ad hoc, without a Developer ID. The download 
 with a SHA-256 checksum (`scripts/package-macos.sh X.Y.Z`); a downloaded copy needs a first-open step in macOS,
 described for the download page in [docs/macos-first-open.md](docs/macos-first-open.md).
 
-A book reopens where it was left; the settings are remembered. Until a theme is chosen, the theme follows the
+A book reopens where it was left; the settings are remembered, and book and library windows reopen at the size
+(on macOS also the place) they were left at. Until a theme is chosen, the theme follows the
 system's light or dark appearance.
 
 Books live in one folder, `~/Books` (`~/Книги` if the interface was Russian when the folder was made). A book opened

@@ -149,9 +149,23 @@ final class Reader: NSObject, NSWindowDelegate {
 
     func windowDidBecomeKey(_ notification: Notification) { if state != nil { touch() } }
     func windowDidResignKey(_ notification: Notification) { sleepAllowed() }
+    func windowDidEndLiveResize(_ notification: Notification) { saveFrame() }
+    func windowDidMove(_ notification: Notification) { saveFrame() }
+
+    /// Book windows open where and as large as the last one was left (measurement runs: centred, their own size).
+    private static let frameName = "Book"
+
+    private func saveFrame() {
+        if state != nil { window.saveFrame(usingName: Reader.frameName) }
+    }
 
     func show() {
-        window.center()
+        if state == nil || !window.setFrameUsingName(Reader.frameName) {
+            window.center()
+        } else if let other = NSApp.windows.first(where: { $0 !== window && $0.isVisible && $0.delegate is Reader && $0.frame.origin == window.frame.origin }) {
+            // Another book is open there: the new window steps down and right from it.
+            window.setFrameTopLeftPoint(window.cascadeTopLeft(from: CGPoint(x: other.frame.minX, y: other.frame.maxY)))
+        }
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(view)
     }
@@ -316,6 +330,7 @@ final class Reader: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        saveFrame()
         savePosition()
         sleepAllowed()
         if let inputMonitor { NSEvent.removeMonitor(inputMonitor) }
@@ -489,7 +504,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 guard let self, let state = self.state else { return }
                 self.showingLibrary = false
                 forzac_state_reload(state)
-                let library = LibraryWindow(state: state, books: books, folder: folder) { [weak self] path in self?.openBook(path) }
+                let library = LibraryWindow(state: state, books: books, folder: folder, remembersFrame: !measuring) { [weak self] path in self?.openBook(path) }
                 self.library = library
                 if !measuring { self.checkUpdate(state) }
                 // Closing the library with no book open quits (the app stays after its last book window: the library follows).

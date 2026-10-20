@@ -100,6 +100,26 @@ fn fitted(width: i32, height: i32) -> (i32, i32) {
     }
 }
 
+/// A window's size as it was last left (`WxH` under `key` in the state), else `default`; fitted to the monitor.
+fn remembered_size(store: &Store, key: &str, default: (i32, i32)) -> (i32, i32) {
+    let saved = store.setting(key).and_then(|s| s.split_once('x')).and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
+    let (width, height) = saved.filter(|&(w, h): &(i32, i32)| w > 0 && h > 0).unwrap_or(default);
+    fitted(width, height)
+}
+
+/// Remembers the window's size under `key` when it closes. GTK keeps the default size at the window's size as last
+/// resized, also while it is maximized or full screen.
+fn remember_size(window: &gtk::ApplicationWindow, store: &SharedStore, key: &'static str) {
+    let store = store.clone();
+    window.connect_close_request(move |w| {
+        let (width, height) = w.default_size();
+        if width > 0 && height > 0 {
+            let _ = store.borrow_mut().set_setting(key, &format!("{width}x{height}"));
+        }
+        glib::Propagation::Proceed
+    });
+}
+
 /// A book window still open: closed windows may outlive their closing (references in closures), but they leave the
 /// application.
 fn open_book_window(w: &glib::WeakRef<gtk::ApplicationWindow>) -> Option<gtk::ApplicationWindow> {
@@ -316,7 +336,7 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
     outer.set_child(Some(&overlay));
     outer.add_overlay(&help.root);
 
-    let (width, height) = fitted(760, 980);
+    let (width, height) = if stateless { fitted(760, 980) } else { remembered_size(&store.borrow(), "window-book", (760, 980)) };
     let window =
         gtk::ApplicationWindow::builder().application(app).title(&title).default_width(width).default_height(height).child(&outer).build();
     // While the help is open it takes every key, before the panels, the menu and the page.
@@ -557,6 +577,7 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             }
         });
         remember_position(&view, &window, path, store);
+        remember_size(&window, store, "window-book");
         library::cache_cover(&view.book());
         keep_awake(app, &window);
         WINDOWS.with(|w| w.borrow_mut().push((canonical, window.downgrade())));
@@ -847,9 +868,11 @@ fn library_window(app: &gtk::Application, options: &Options, store: &SharedStore
                 });
             })
         };
-        if let Some(library) = library::Library::show(&app, &store, theme, fitted(1040, 760), open, books, folder) {
+        let size = if stateless { fitted(1040, 760) } else { remembered_size(&store.borrow(), "window-library", (1040, 760)) };
+        if let Some(library) = library::Library::show(&app, &store, theme, size, open, books, folder) {
             *window.borrow_mut() = Some(library.window.downgrade());
             if !stateless {
+                remember_size(&library.window, &store, "window-library");
                 library.check_update();
             }
             shown(library);
