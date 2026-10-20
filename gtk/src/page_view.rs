@@ -199,6 +199,8 @@ pub struct State {
     style: Option<PageStyle>,
     /// Whether the window shows two pages side by side ("Slide" in a wide window, `Settings::spread`).
     spread: bool,
+    /// How far a spread's pages are drawn towards the gutter (`Settings::spread_inset`).
+    inset: f32,
     /// The page shown; in a spread its left (even) page.
     page: usize,
     /// The reading position; pages are derived from it after every re-layout.
@@ -343,6 +345,7 @@ impl PageView {
             textures: HashMap::new(),
             style: None,
             spread: false,
+            inset: 0.0,
             page: 0,
             locator: Locator { chapter, ..at },
             to_last: false,
@@ -821,12 +824,22 @@ impl PageView {
     /// The pages shown in "Slide" and their offsets from the window's left edge: the page, or a spread's left page and
     /// its right one when the chapter has it.
     fn shown_pages(s: &State) -> Vec<(usize, f32)> {
-        let (Some(layout), Some(style)) = (&s.layout, &s.style) else { return Vec::new() };
-        let mut pages = vec![(s.page, 0.0)];
+        let (Some(layout), Some(_)) = (&s.layout, &s.style) else { return Vec::new() };
+        let mut pages = vec![(s.page, Self::page_dx(s, s.page))];
         if s.spread && s.page + 1 < layout.pages.len() {
-            pages.push((s.page + 1, style.width));
+            pages.push((s.page + 1, Self::page_dx(s, s.page + 1)));
         }
         pages
+    }
+
+    /// Where `page` is drawn from the window's left edge: in a spread the left (even) page and the right one, both
+    /// moved towards the gutter.
+    fn page_dx(s: &State, page: usize) -> f32 {
+        match (s.spread, &s.style) {
+            (true, Some(style)) if page % 2 == 1 => style.width - s.inset,
+            (true, Some(_)) => s.inset,
+            _ => 0.0,
+        }
     }
 
     /// The page to show for `page`: in a spread, the left page of its pair (every chapter starts on a left page).
@@ -836,10 +849,7 @@ impl PageView {
 
     /// The right page's offset in a spread, else 0.
     fn right_dx(s: &State) -> f32 {
-        match (s.spread, &s.style) {
-            (true, Some(style)) => style.width,
-            _ => 0.0,
-        }
+        if s.spread { Self::page_dx(s, 1) } else { 0.0 }
     }
 
     /// The note markers, links, images, tables and highlights of the pages shown, the left page's first (view
@@ -864,8 +874,8 @@ impl PageView {
         out
     }
 
-    /// Where the ribbon of the page or spread shown hangs, when it is marked: 0, or the right page's offset when the
-    /// first bookmark on the spread lies on its right page.
+    /// Where the ribbon of the page or spread shown hangs, when it is marked: the offset of the page holding the first
+    /// bookmark on the spread.
     fn ribbon_dx(s: &mut State, h: f32) -> Option<f32> {
         let (from, to) = Self::shown_range(s, h)?;
         let first = *s.bookmarks.iter().find(|m| from <= **m && **m < to)?;
@@ -873,7 +883,7 @@ impl PageView {
             (Mode::Slide, Some(&(page, dx)), Some(layout)) => (first >= layout.page_start(page)).then_some(dx),
             _ => None,
         };
-        Some(right.unwrap_or(0.0))
+        Some(right.unwrap_or_else(|| Self::page_dx(s, s.page)))
     }
 
     fn shown_marked(s: &mut State, h: f32) -> bool {
@@ -1061,6 +1071,7 @@ impl PageView {
             let settings = Settings { turning: if s.mode == Mode::Scroll { Turning::Scroll } else { Turning::Slide }, ..s.settings };
             let style = settings.page_style(w, h);
             let spread = settings.spread(w, h);
+            s.inset = settings.spread_inset(w, h);
             let fresh = s.layout.as_ref().is_some_and(|l| l.chapter == s.chapter) && s.style == Some(style) && s.spread == spread;
             if fresh {
                 return false;
@@ -1270,9 +1281,9 @@ impl PageView {
             None => node,
         };
         let mut areas = selection::with_highlights(s, layout.chapter, content.areas, marks);
-        // A spread's right page is cached where it is drawn, half the window to the right.
-        let dx = if page % 2 == 1 { Self::right_dx(s) } else { 0.0 };
-        let node = if dx > 0.0 {
+        // A spread's pages are cached where they are drawn, moved towards the gutter.
+        let dx = Self::page_dx(s, page);
+        let node = if dx != 0.0 {
             for area in &mut areas {
                 area.rect.x += dx;
             }

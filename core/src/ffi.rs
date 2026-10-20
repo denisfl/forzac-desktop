@@ -1537,6 +1537,15 @@ pub unsafe extern "C" fn forzac_settings_spread(settings: *const ForzacSettings,
     Settings::from(unsafe { *settings }).spread(width, height)
 }
 
+/// How far a spread's pages are drawn towards the gutter ([`Settings::spread_inset`]); 0 when not a spread.
+///
+/// # Safety
+/// `settings` must point to valid settings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_settings_spread_inset(settings: *const ForzacSettings, width: f32, height: f32) -> f32 {
+    Settings::from(unsafe { *settings }).spread_inset(width, height)
+}
+
 /// How many text sizes there are (`ForzacSettings::size` is below it).
 #[unsafe(no_mangle)]
 pub extern "C" fn forzac_settings_size_count() -> u32 {

@@ -208,6 +208,18 @@ impl Settings {
         self.turning == Turning::Slide && width > height && width / 2.0 - 2.0 * min_margin >= MIN_SPREAD_COLUMN * self.text_size()
     }
 
+    /// How far a spread's pages are drawn towards the gutter (the left page right, the right page left), so the gutter
+    /// between the columns is as wide as each outer margin, as in a printed book: a third of the side margin, keeping
+    /// the least margin at the gutter. 0 when the window is not a spread.
+    pub fn spread_inset(&self, width: f32, height: f32) -> f32 {
+        if !self.spread(width, height) {
+            return 0.0;
+        }
+        let (_, min_margin) = self.margins.column();
+        let margin = self.page_style(width, height).margin_h;
+        (margin / 3.0).min(margin - min_margin)
+    }
+
     /// The page for a window of `width` × `height` logical pixels: half the window in a spread.
     pub fn page_style(&self, width: f32, height: f32) -> PageStyle {
         let (measure, min_margin) = self.margins.column();

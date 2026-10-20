@@ -40,6 +40,8 @@ final class PageView: NSView {
     var page: UInt32 = 0
     /// Whether the window shows two pages side by side ("Slide" in a wide window, `forzac_settings_spread`).
     private(set) var spread = false
+    /// How far a spread's pages are drawn towards the gutter (`forzac_settings_spread_inset`).
+    private var inset: CGFloat = 0
     var locator: ForzacLocator
     private var toLast = false
     /// What the current layout was made for: the size, the settings that change it, the chapter.
@@ -53,7 +55,7 @@ final class PageView: NSView {
     private let focusLayer = CALayer()
     /// The focused `Tab` stop of the page (or of the screen in "Scroll").
     private var focus: Int?
-    /// Where the current page's (or spread's) ribbon hangs: 0, or the right page's offset.
+    /// Where the current page's (or spread's) ribbon hangs: the offset of the page holding the bookmark.
     private var ribbonDx: CGFloat = 0
     /// Where jumps started, the latest last (`⌃O`).
     private var back: [ForzacLocator] = []
@@ -208,6 +210,7 @@ final class PageView: NSView {
         if laidOutFor == key { return }
         let styleChanged = laidOutFor.map { Array($0.dropLast()) != Array(key.dropLast()) } ?? true
         spread = withUnsafePointer(to: settings) { forzac_settings_spread($0, Float(size.width), Float(size.height)) }
+        inset = CGFloat(withUnsafePointer(to: settings) { forzac_settings_spread_inset($0, Float(size.width), Float(size.height)) })
         pageCount = withUnsafePointer(to: settings) { forzac_paginate(doc, chapter, Float(size.width), Float(size.height), $0) }
         var top: Float = 0, line: Float = 0
         forzac_metrics(doc, &top, &line)
@@ -287,9 +290,10 @@ final class PageView: NSView {
     func left(_ index: UInt32) -> UInt32 { spread ? index & ~1 : index }
 
     /// The pages shown with `index` first and their offsets from the view's left edge: the page, or a spread's left
-    /// page and its right one when the chapter has it.
+    /// page and its right one when the chapter has it, both moved towards the gutter.
     private func shownPages(_ index: UInt32) -> [(UInt32, CGFloat)] {
-        spread && index + 1 < pageCount ? [(index, 0), (index + 1, pageWidth)] : [(index, 0)]
+        guard spread else { return [(index, 0)] }
+        return index + 1 < pageCount ? [(index, inset), (index + 1, pageWidth - inset)] : [(index, inset)]
     }
 
     /// The page (or spread) as a bitmap at the backing scale; `index` is its (left) page.
@@ -851,7 +855,7 @@ final class PageView: NSView {
     /// Shows the current page's ribbon when it is marked, in the theme's colour, beside the text.
     private func updateRibbon() {
         // Over the page holding the spread's first bookmark.
-        ribbonDx = 0
+        ribbonDx = shownPages(page)[0].1
         if let (from, to) = shownRange(), let first = bookmarks.first(where: { !($0 < from) && $0 < to }),
            !scrolling, let right = shownPages(page).dropFirst().first, !(first < forzac_page_start(doc, right.0)) {
             ribbonDx = right.1
@@ -1045,7 +1049,7 @@ final class PageView: NSView {
         forzac_ribbon(doc, &centre, &corner)
         if let a = hits.first(where: { !$0.isViewable }) ?? hits.first {
             open(a)
-        } else if y < marginTop && p.x >= CGFloat(corner) + (spread ? pageWidth : 0) { // the right page's corner in a spread
+        } else if y < marginTop && p.x >= CGFloat(corner) + (spread ? pageWidth - inset : 0) { // the right page's corner in a spread
             toggleBookmark()
         } else if p.x >= bounds.width / 3 && p.x <= bounds.width * 2 / 3 {
             if e.clickCount == 1 { onCommand?(.menu) } // the middle opens the menu (`reader-menu`), in both modes

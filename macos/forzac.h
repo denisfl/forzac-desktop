@@ -275,6 +275,8 @@ uint32_t forzac_settings_theme(const ForzacSettings *settings, bool system_dark)
 float forzac_settings_text_size(const ForzacSettings *settings);
 // Whether a window this size shows two pages side by side (forzac_paginate then makes pages half its width).
 bool forzac_settings_spread(const ForzacSettings *settings, float width, float height);
+// How far a spread's pages are drawn towards the gutter: the left page right, the right page left; 0 if not a spread.
+float forzac_settings_spread_inset(const ForzacSettings *settings, float width, float height);
 uint32_t forzac_settings_size_count(void);
 // setting: 0 theme, 1 font, 2 size, 3 spacing, 4 alignment, 5 margins, 6 pages.
 void forzac_settings_step(ForzacSettings *settings, uint32_t setting, int32_t delta, bool system_dark);

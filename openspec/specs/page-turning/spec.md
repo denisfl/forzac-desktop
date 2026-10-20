@@ -70,7 +70,9 @@ crossing chapter boundaries included, and while idle the reader SHALL use no CPU
 In "Slide", when the window is wider than tall and half its width holds a text column of at least 28 em at the current
 text size with the margin setting's least side margins on both sides, the window SHALL show a spread: two consecutive
 pages of a chapter side by side, each half of the window wide, each typeset as a page of that width (its own margins,
-its column at most the margin setting's measure), each with its own running head and foot (`reader-navigation`). Every
+its column at most the margin setting's measure), each with its own running head and foot (`reader-navigation`).
+Both pages SHALL be moved towards the gutter by a third of their side margin (keeping at least the margin setting's
+least margin at the gutter), so the gutter between the columns is as wide as each outer margin, as in a printed book. Every
 chapter SHALL start on the left page of a spread; when a chapter ends on a left page, the right half of its last
 spread stays empty paper. The keys, wheel steps, swipes and clicks that turn a page in "Slide" SHALL turn a spread: the
 next (or previous) two pages slide in as one with the same 200 ms slide, and a turn past the chapter's last spread

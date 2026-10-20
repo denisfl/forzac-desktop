@@ -86,5 +86,10 @@ fn a_wide_window_shows_a_spread() {
     assert!(!s.spread(900.0, 1440.0), "taller than wide");
     assert!(!Settings { turning: Turning::Scroll, ..s }.spread(1920.0, 1080.0), "Scroll is one column");
     assert_eq!(s.note_style(1440.0).width, 1440.0);
+    assert_eq!(s.spread_inset(1440.0, 900.0), 0.0, "the least margins: nothing to move");
+    let margin = s.page_style(1920.0, 1080.0).margin_h;
+    let inset = s.spread_inset(1920.0, 1080.0);
+    assert!((2.0 * (margin - inset) - (margin + inset)).abs() < 0.01, "the gutter as wide as an outer margin");
+    assert_eq!(s.spread_inset(1080.0, 1920.0), 0.0);
     assert_eq!(s.table_style(1.0).width, 100_000.0);
 }
