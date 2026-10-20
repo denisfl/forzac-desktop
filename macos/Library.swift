@@ -80,15 +80,27 @@ struct LibraryBook {
 /// A book's cover: its picture filling the box, or a generated one (the Android app's `GeneratedCover`). The view
 /// is larger than the cover by `margin` on every side, for the shadow, the selection ring and the lift under the
 /// pointer.
+///
+/// On screen the cover is drawn once, at its size, into an image (`face`); the shadows and the ring are layers and the
+/// lift moves them, so scrolling and the pointer only move layers on the GPU. AppKit drops the drawing of views
+/// scrolled out of sight: a cover drawn in `draw(_:)` was drawn again, picture scaling and blurred shadows on the CPU,
+/// each time it scrolled back in. `draw(_:)` stays for `cacheDisplay` (`--png`).
 final class CoverView: NSView {
     static let margin: CGFloat = 8
+    /// The web's shadows, `0 1px 2px` at 12 % and `0 6px 18px` at 10 %: offset down, blur, opacity.
+    private static let shadows: [(CGFloat, CGFloat, CGFloat)] = [(1, 2, 0.12), (6, 18, 0.10)]
     let book: LibraryBook
     let style: ForzacCoverStyle
     var palette: Palette
-    var thumb: Thumb { didSet { needsDisplay = true } }
-    var marble: CGImage? { didSet { needsDisplay = true } }
-    var selected = false { didSet { if selected != oldValue { needsDisplay = true } } }
-    var hover = false { didSet { if hover != oldValue { needsDisplay = true } } }
+    var thumb: Thumb { didSet { face = nil; needsLayout = true } }
+    var marble: CGImage? { didSet { face = nil; needsLayout = true } }
+    var selected = false { didSet { if selected != oldValue { needsLayout = true } } }
+    var hover = false { didSet { if hover != oldValue { needsLayout = true } } }
+
+    private var face: CGImage?
+    private let faceLayer = CALayer()
+    private let shadowLayers = CoverView.shadows.map { _ in CALayer() }
+    private let ring = CAShapeLayer()
 
     init(book: LibraryBook, thumb: Thumb, palette: Palette) {
         self.book = book
@@ -96,11 +108,74 @@ final class CoverView: NSView {
         self.palette = palette
         style = forzac_cover_style(book.id, book.title)
         super.init(frame: .zero)
+        wantsLayer = true
+        for (l, (dy, blur, alpha)) in zip(shadowLayers, CoverView.shadows) {
+            l.shadowColor = .black
+            l.shadowOpacity = Float(alpha)
+            l.shadowRadius = blur / 2
+            l.shadowOffset = CGSize(width: 0, height: dy) // y down: the view is flipped
+            layer!.addSublayer(l)
+        }
+        layer!.addSublayer(faceLayer)
+        ring.fillColor = nil
+        ring.lineWidth = 2
+        layer!.addSublayer(ring)
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     override var isFlipped: Bool { true }
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {} // the sublayers hold everything
+
+    override func setFrameSize(_ newSize: NSSize) {
+        if newSize != frame.size { face = nil }
+        super.setFrameSize(newSize)
+        needsLayout = true
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        face = nil
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        var r = cover
+        if hover { r.origin.y -= 3 } // the web's `li:hover .cover`
+        let scale = window?.backingScaleFactor ?? 2
+        if face == nil { face = render(r.size, scale: scale) }
+        for l in shadowLayers {
+            l.frame = r
+            l.shadowPath = shape(CGRect(origin: .zero, size: r.size))
+        }
+        faceLayer.frame = r
+        faceLayer.contents = face
+        faceLayer.contentsScale = scale
+        ring.path = shape(r.insetBy(dx: -4, dy: -4), grow: 4)
+        ring.strokeColor = color(palette.ink)
+        ring.isHidden = !selected
+        CATransaction.commit()
+    }
+
+    /// The cover's face as an image `size` points large: drawn as in the view, y down.
+    private func render(_ size: CGSize, scale: CGFloat) -> CGImage? {
+        let (w, h) = (Int((size.width * scale).rounded(.up)), Int((size.height * scale).rounded(.up)))
+        guard w > 0, h > 0,
+              let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { return nil }
+        ctx.scaleBy(x: scale, y: scale)
+        ctx.translateBy(x: 0, y: size.height)
+        ctx.scaleBy(x: 1, y: -1)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: true)
+        drawFace(ctx, CGRect(origin: .zero, size: size))
+        NSGraphicsContext.restoreGraphicsState()
+        return ctx.makeImage()
+    }
 
     /// The cover's own rectangle inside the view.
     var cover: CGRect { bounds.insetBy(dx: CoverView.margin, dy: CoverView.margin) }
@@ -123,8 +198,8 @@ final class CoverView: NSView {
         var r = cover
         if hover { r.origin.y -= 3 } // the web's `li:hover .cover`
         let path = shape(r)
-        // The web's shadow: `0 1px 2px` at 12 %, `0 6px 18px` at 10 % (y down here, so the offset is positive).
-        for (dy, blur, alpha) in [(1.0, 2.0, 0.12), (6.0, 18.0, 0.10)] as [(CGFloat, CGFloat, CGFloat)] {
+        // The web's shadow (y down here, so the offset is positive).
+        for (dy, blur, alpha) in CoverView.shadows {
             ctx.saveGState()
             ctx.setShadow(offset: CGSize(width: 0, height: -dy), blur: blur, color: color(0x000000, alpha: alpha))
             ctx.addPath(path)
@@ -138,8 +213,13 @@ final class CoverView: NSView {
             ctx.setLineWidth(2)
             ctx.strokePath()
         }
+        drawFace(ctx, r)
+    }
+
+    /// The cover in `r`, clipped to the book's shape: the picture filling it, or the generated one.
+    private func drawFace(_ ctx: CGContext, _ r: CGRect) {
         ctx.saveGState()
-        ctx.addPath(path)
+        ctx.addPath(shape(r))
         ctx.clip()
         switch thumb {
         case .picture(let image):
