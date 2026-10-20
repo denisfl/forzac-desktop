@@ -358,7 +358,9 @@ final class SettingsSheet: SheetView {
         CATransaction.setDisableActions(true)
         let circle = circles[view.theme]
         ring.frame = layerFrame(of: circle).insetBy(dx: -6, dy: -6)
-        keysRing.frame = layerFrame(of: controls[current].0).insetBy(dx: -4, dy: -4)
+        // Around the theme circles with room for the shown theme's ring (6 px beyond its circle).
+        let room: CGFloat = controls[current].0 === themesRow ? -10 : -4
+        keysRing.frame = layerFrame(of: controls[current].0).insetBy(dx: room, dy: room)
         CATransaction.commit()
     }
 
