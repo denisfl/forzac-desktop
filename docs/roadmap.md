@@ -107,6 +107,26 @@ Total: about 18–22 weeks.
 
 - `accessibility`: the page's text for screen readers (Orca, VoiceOver), as TalkBack reads it on Android.
 
+## From the UX review
+
+[ux-review.md](ux-review.md) (2026-10-20) compared Apple Books, Kindle for Mac, Foliate, KOReader, Readest, Thorium and
+Bookmate. Chosen by the maintainer on 2026-10-20:
+
+| # | Change | What | Done when | Size |
+|---|---|---|---|---|
+| 1 | `macos-reading-bar` | On macOS the page under a transparent title bar; a bar with the window buttons, back, Contents, Aa, Search, Bookmark around the page's own running head, coming with the pointer and fading 2 s after it stops, the pointer hidden with it; the same in full screen; Linux unchanged (review W1, W2, O1, B1) | Screenshots on the M1; no missed frames while the bar fades; no CPU while idle | 3–4 d |
+
+Done and archived 2026-10-20: `macos-reading-bar`, and from the maintainer's look at it `spread-heads` (a spread's left
+head is the book's title, the right one the chapter's; the ribbon hangs over the right page, never in the gutter).
+
+The review's library items — collections with automatic ones, sorting, editing metadata without touching the file
+(L1–L3) — are rows 17–19 above (`library-metadata`, `library-shelves`, `metadata-editing`).
+
+Candidates the maintainer has not chosen (review ids): Forward in the jump history (P1); a page number in the search
+field and searching the selection (P2, C3); following the system's "Reduce motion" (P3); `⌥` arrows for chapters on
+macOS (P4); time left from the reader's own speed (W3, W4); Look Up on macOS (D1); notes on highlights and a Markdown
+file of them (H1, H2).
+
 ## Not planned for 1.0
 
 Confirmed with the maintainer in `android-parity` (2026-10-16). Text selection and quotes left the list on 2026-10-17,
