@@ -518,6 +518,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         importQueue.async { [weak self] in
             guard let worker = self?.worker else { return }
             let folder = measuring ? nil : forzac_books_folder(worker, home).map { String(cString: $0) }
+            if folder != nil { _ = forzac_sync(worker) } // the other devices' reading first (`sync`)
             let books = LibraryBook.list(worker)
             DispatchQueue.main.async {
                 guard let self, let state = self.state else { return }

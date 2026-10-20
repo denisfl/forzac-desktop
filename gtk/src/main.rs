@@ -865,6 +865,12 @@ fn library_window(app: &gtk::Application, options: &Options, store: &SharedStore
             } else {
                 forzac_core::library::books_folder(&home, language(), &mut s).ok()
             };
+            // The other devices' reading first (`sync`); measurements leave it alone.
+            if let (Some(folder), false) = (&folder, stateless)
+                && let Err(e) = forzac_core::sync::sync(folder, &mut s)
+            {
+                eprintln!("cannot sync: {e}");
+            }
             let books = match &folder {
                 Some(folder) => forzac_core::library::scan(folder, &mut s),
                 None => s.books().into_iter().cloned().collect(),

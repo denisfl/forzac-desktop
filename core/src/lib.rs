@@ -21,6 +21,7 @@ pub mod search;
 pub mod selection;
 pub mod settings;
 pub mod state;
+pub mod sync;
 mod typography;
 pub mod update;
 mod xml;

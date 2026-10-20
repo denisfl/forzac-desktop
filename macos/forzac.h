@@ -323,6 +323,9 @@ bool forzac_change_books_folder(ForzacState *state, const char *path, bool move,
 // "Send to Kindle" (send-to-kindle): converts the book and writes it onto the Kindle connected as a disk; returns the
 // message for the reader, valid until the next call on `state`. On a background queue with a state handle of its own.
 const char *forzac_send_to_kindle(ForzacState *state, const char *path, const char *title);
+// Syncing (sync): the reading data shared with the other devices through `.forzac/` in the Books folder; on a background
+// queue with a state handle of its own, after forzac_books_folder. False when the sync folder cannot be used.
+bool forzac_sync(ForzacState *state);
 
 // The library: search rank (lower first, -1 no match), generated covers, the empty state's sample page (lines: head,
 // title, subtitle, folio, paragraphs; valid for good).

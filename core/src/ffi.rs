@@ -1814,6 +1814,20 @@ pub unsafe extern "C" fn forzac_send_to_kindle(state: *mut State, path: *const c
     state.message.as_ptr()
 }
 
+/// Syncs the reading data with the other devices through the Books folder's sync folder (`sync::sync`); false when it
+/// cannot be read or written. Off the main thread, with a state handle of its own, after [`forzac_books_folder`].
+///
+/// # Safety
+/// `state` from [`forzac_state_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_sync(state: *mut State) -> bool {
+    let state = unsafe { &mut *state };
+    match crate::library::remembered_folder(&state.store) {
+        Some(folder) => crate::sync::sync(&folder, &mut state.store).is_ok(),
+        None => false,
+    }
+}
+
 /// The message after adding the folder named `name` (`library::Added::message`), or null when every book found was
 /// added; valid until the next call on `state`.
 ///

@@ -178,39 +178,85 @@ impl Store {
 
     /// The bookmarks of `book`, in reading order.
     pub fn bookmarks(&self, book: &Book) -> Vec<Locator> {
-        self.saved.bookmarks.get(&book.id).cloned().unwrap_or_default()
+        self.bookmarks_of(&book.id)
+    }
+
+    /// The bookmarks of the book `id`, in reading order.
+    pub fn bookmarks_of(&self, id: &str) -> Vec<Locator> {
+        self.saved.bookmarks.get(id).cloned().unwrap_or_default()
     }
 
     /// Replaces the bookmarks of `book` with `marks`.
     pub fn set_bookmarks(&mut self, book: &Book, marks: &[Locator]) -> io::Result<()> {
+        self.set_bookmarks_of(&book.id, marks)
+    }
+
+    /// Replaces the bookmarks of the book `id` with `marks`.
+    pub fn set_bookmarks_of(&mut self, id: &str, marks: &[Locator]) -> io::Result<()> {
         let mut marks = marks.to_vec();
         marks.sort();
         marks.dedup();
         self.write(|saved| {
             if marks.is_empty() {
-                saved.bookmarks.remove(&book.id);
+                saved.bookmarks.remove(id);
             } else {
-                saved.bookmarks.insert(book.id.clone(), marks.clone());
+                saved.bookmarks.insert(id.to_owned(), marks.clone());
             }
         })
     }
 
     /// The highlights of `book`, in reading order.
     pub fn quotes(&self, book: &Book) -> Vec<(Locator, Locator)> {
-        self.saved.quotes.get(&book.id).cloned().unwrap_or_default()
+        self.quotes_of(&book.id)
+    }
+
+    /// The highlights of the book `id`, in reading order.
+    pub fn quotes_of(&self, id: &str) -> Vec<(Locator, Locator)> {
+        self.saved.quotes.get(id).cloned().unwrap_or_default()
     }
 
     /// Replaces the highlights of `book` with `quotes`.
     pub fn set_quotes(&mut self, book: &Book, quotes: &[(Locator, Locator)]) -> io::Result<()> {
+        self.set_quotes_of(&book.id, quotes)
+    }
+
+    /// Replaces the highlights of the book `id` with `quotes`.
+    pub fn set_quotes_of(&mut self, id: &str, quotes: &[(Locator, Locator)]) -> io::Result<()> {
         let mut quotes = quotes.to_vec();
         quotes.sort();
         quotes.dedup();
         self.write(|saved| {
             if quotes.is_empty() {
-                saved.quotes.remove(&book.id);
+                saved.quotes.remove(id);
             } else {
-                saved.quotes.insert(book.id.clone(), quotes.clone());
+                saved.quotes.insert(id.to_owned(), quotes.clone());
             }
+        })
+    }
+
+    /// The ids of the books with bookmarks, highlights, shelves or edits (`sync`).
+    pub fn marked_books(&self) -> std::collections::BTreeSet<String> {
+        let s = &self.saved;
+        s.bookmarks.keys().chain(s.quotes.keys()).chain(s.shelves.keys()).chain(s.edits.keys()).cloned().collect()
+    }
+
+    /// Remembers that the book `id` (`book`, from `path`) is read at `at`, as of `opened` (seconds since the Unix epoch):
+    /// a position that came from another device (`sync`).
+    pub fn set_synced_position(&mut self, book: &Book, path: &Path, at: Locator, opened: u64) -> io::Result<()> {
+        let entry = Entry {
+            id: book.id.clone(),
+            path: path.to_owned(),
+            title: book.title.clone(),
+            authors: book.authors.join(", "),
+            position: at,
+            progress: progress(book, at),
+            opened,
+            series: book.series.clone(),
+            shelves: Vec::new(),
+        };
+        self.write(|saved| {
+            saved.books.retain(|e| e.id != entry.id && e.path != entry.path);
+            saved.books.push(entry.clone());
         })
     }
 
@@ -534,14 +580,14 @@ fn read(path: &Path) -> Saved {
     saved
 }
 
-fn escape(s: &str) -> Cow<'_, str> {
+pub(crate) fn escape(s: &str) -> Cow<'_, str> {
     if !s.contains(['\\', '\t', '\n', '\r']) {
         return Cow::Borrowed(s);
     }
     Cow::Owned(s.replace('\\', "\\\\").replace('\t', "\\t").replace('\n', "\\n").replace('\r', ""))
 }
 
-fn unescape(s: &str) -> String {
+pub(crate) fn unescape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars();
     while let Some(c) = chars.next() {

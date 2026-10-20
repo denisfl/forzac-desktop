@@ -57,6 +57,8 @@ copied twice), and books put into the folder by hand or by a sync service join t
 name is used as it is: nothing in it is renamed or moved, subfolders and other formats are left alone. The first start
 of a version with the folder copies the books read before into it. "Change the Books folder…" in the library's "⋯"
 menu moves the books to another folder — one kept by Dropbox, iCloud Drive or Syncthing, say — or uses it as it is.
+Computers sharing such a folder share where each book was left, bookmarks, highlights, shelves and edits too: each
+writes its own file into the folder's `.forzac/` when the library shows ([the format](docs/sync-format.md)).
 
 Without a file, Forzac shows the library: the folder's books with their covers, the last one to continue first
 (`Enter` opens one, `/` searches, `F` shows the Books folder, `d` removes a book: its file goes to the Trash, its

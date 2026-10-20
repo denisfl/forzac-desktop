@@ -135,6 +135,11 @@ fn read_file(name: String, meta: &std::fs::Metadata, path: &Path) -> (Cached, Op
     }
 }
 
+/// The Books folder's books by id (the cache refreshed as the scan does): where `sync` finds a book's file.
+pub fn folder_books(folder: &Path, store: &mut Store) -> HashMap<String, PathBuf> {
+    folder_files(folder, store).into_iter().filter(|f| !f.id.is_empty()).map(|f| (f.id, folder.join(f.name))).collect()
+}
+
 /// Reads the folder's books (FB2, FB2.ZIP, FB3, EPUB at its top level; not dotfiles, not subfolders), parsing only the
 /// files that are new or changed since the cache in `store`, which is written once when anything changed. Unreadable
 /// files are ignored; files with one id count once. Data a new file's old id still holds (a book put back from the
