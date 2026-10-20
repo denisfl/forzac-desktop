@@ -10,8 +10,8 @@
 // page of the chapter --png saves), --panel settings|contents|bookmarks|highlights|help|note:ID|image:ID|table:CHAPTER.BLOCK and --theme N, --size WxH (with
 // --png: the whole window with that panel or view open, in that theme; --keys "ll+\t\r" then sends those keys to it
 // first, 0.3 s apart: letters, digits, + - =, \t Tab, \r Return, \e Esc, an upper-case letter with Shift; --mouse
-// "down X Y; drag X Y; up X Y; click X Y N" then sends those mouse events to the page, 0.15 s apart, at points of the
-// page, y down), --scroll (in "Scroll"), --menus (prints the menus' titles and quits); with any of them the reading
+// "down X Y; drag X Y; up X Y; move X Y; click X Y N" then sends those mouse events to the page, 0.15 s apart, at
+// points of the page, y down), --scroll (in "Scroll"), --menus (prints the menus' titles and quits); with any of them the reading
 // state is neither read nor written. --library shows the library from the state (with --png: saves it once its covers
 // have arrived, after --keys, and quits).
 
@@ -44,6 +44,9 @@ final class Reader: NSObject, NSWindowDelegate {
     private var saveTimer: Timer?
     /// The reading menu, made when it first opens.
     private var menu: ReaderMenu?
+    /// The toolbar over the page's top margin that comes with the pointer (`macos-reading-bar`).
+    private var bar: ReadingBar!
+    private var barMonitor: Any?
     var onClose: ((Reader) -> Void)?
     /// "Back to library" in the menu, after the window closed: the library shows.
     var onLibrary: (() -> Void)?
@@ -91,6 +94,15 @@ final class Reader: NSObject, NSWindowDelegate {
         help.frame = container.bounds
         container.addSubview(help)
         view.onCommand = { [weak self] in self?.run($0) }
+        bar = ReadingBar(window: window, page: view, in: container)
+        bar.canShow = { [weak self] in self.map { !$0.panelOpen && $0.viewer == nil } ?? false }
+        bar.onCommand = { [weak self] in self?.run($0) }
+        bar.onBack = { [weak self] in self?.backToLibrary() }
+        // A key, or a click on the page, hides the bar at once (the menu's Return then holds it again).
+        barMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown]) { [weak self] e in
+            if let self, e.window === self.window, e.type == .keyDown || !self.bar.overBar(e.locationInWindow) { self.bar.hide() }
+            return e
+        }
         if let state {
             forzac_state_load_bookmarks(state, doc)
             forzac_state_load_quotes(state, doc)
@@ -102,6 +114,7 @@ final class Reader: NSObject, NSWindowDelegate {
             if !forzac_state_save_quotes(state, self.view.doc) { fputs("cannot save the reading state\n", stderr) }
         }
         view.onBookmarks = { [weak self] in
+            self?.bar.updateBookmark()
             guard let self, let state = self.state else { return }
             if !forzac_state_save_bookmarks(state, self.view.doc) { fputs("cannot save the reading state\n", stderr) }
         }
@@ -109,6 +122,7 @@ final class Reader: NSObject, NSWindowDelegate {
         view.menuOpen = { [weak self] in self?.menu?.isOpen ?? false }
         view.menuKey = { [weak self] e in self?.menu?.key(e) ?? false }
         view.onMoved = { [weak self] in
+            self?.bar.updateBookmark()
             self?.saveTimer?.invalidate()
             self?.saveTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: false) { _ in self?.savePosition() }
         }
@@ -171,6 +185,7 @@ final class Reader: NSObject, NSWindowDelegate {
     }
 
     func run(_ command: Command) {
+        if case .menu = command {} else { bar.hide() }
         switch command {
         case .settings:
             if settingsSheet == nil {
@@ -241,19 +256,21 @@ final class Reader: NSObject, NSWindowDelegate {
             closePanels()
             if menu == nil {
                 let m = ReaderMenu(view: view, in: container, below: help)
-                m.onBack = { [weak self] in
-                    guard let self else { return }
-                    let library = self.onLibrary
-                    self.window.performClose(nil)
-                    library?()
-                }
-                m.onContents = { [weak self] in self?.run(.contents) }
+                m.onOpen = { [weak self] in self?.bar.hold() }
+                m.onClose = { [weak self] in self?.bar.release() }
                 m.onSettings = { [weak self] in self?.run(.settings) }
                 menu = m
             }
             menu?.open()
             window.makeFirstResponder(view)
         }
+    }
+
+    /// "Back to library": the window closes (saving the position) and the library shows.
+    private func backToLibrary() {
+        let library = onLibrary
+        window.performClose(nil)
+        library?()
     }
 
     /// Shows an image or a table over the page, filling the window.
@@ -297,18 +314,25 @@ final class Reader: NSObject, NSWindowDelegate {
         guard let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: shift ? .shift : [], timestamp: 0, windowNumber: window.windowNumber,
                                        context: nil, characters: text, charactersIgnoringModifiers: text, isARepeat: false, keyCode: codes[key] ?? 0xFFFF)
         else { return }
-        window.sendEvent(e)
+        NSApp.sendEvent(e)
     }
 
-    /// A mouse event at `(x, y)` of the page (y down) as the mouse would send it (`--mouse`): `down`, `drag`, `up`, or
-    /// `click` (a press and a release, the `n`th click in a row).
+    /// A mouse event at `(x, y)` of the page (y down) as the mouse would send it (`--mouse`): `down`, `drag`, `up`,
+    /// `move` (the pointer moved, no button; outside the window it does nothing), or `click` (a press and a release,
+    /// the `n`th click in a row).
     func mouse(_ kind: String, _ x: CGFloat, _ y: CGFloat, _ n: Int = 1) {
         let at = view.convert(CGPoint(x: x, y: view.bounds.height - y), to: nil)
-        let types: [NSEvent.EventType] = kind == "down" ? [.leftMouseDown] : kind == "drag" ? [.leftMouseDragged] : kind == "up" ? [.leftMouseUp] : [.leftMouseDown, .leftMouseUp]
+        let types: [NSEvent.EventType] = kind == "down" ? [.leftMouseDown] : kind == "drag" ? [.leftMouseDragged] : kind == "up" ? [.leftMouseUp]
+            : kind == "move" ? [.mouseMoved] : [.leftMouseDown, .leftMouseUp]
         for type in types {
             guard let e = NSEvent.mouseEvent(with: type, location: at, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
                                              context: nil, eventNumber: 0, clickCount: n, pressure: type == .leftMouseUp ? 0 : 1) else { continue }
-            window.sendEvent(e)
+            // The system sends a move to the pointer's tracking area, not through the window: as it would.
+            if type == .mouseMoved {
+                if view.bounds.contains(view.convert(at, from: nil)) { bar.mouseMoved(with: e) }
+                continue
+            }
+            NSApp.sendEvent(e)
         }
     }
 
@@ -334,6 +358,7 @@ final class Reader: NSObject, NSWindowDelegate {
         savePosition()
         sleepAllowed()
         if let inputMonitor { NSEvent.removeMonitor(inputMonitor) }
+        if let barMonitor { NSEvent.removeMonitor(barMonitor) }
         onClose?(self)
     }
 }

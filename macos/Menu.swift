@@ -1,15 +1,12 @@
 // The reading menu over the page, as the web reader's (`#bar-top`, `#bar-bottom`) and Android's `ReaderMenu`: at the
-// top back to the library, the section and the book, the contents; at the bottom a slider over the whole book with the
-// chapters' ticks, "Page N of M", the time left in the chapter and "Aa". A click in the middle third of the page or
-// Return opens it; a click on the page or Esc closes it; ←/→/h/l move the slider and Return goes there.
+// top the window's reading bar (`Bar.swift`: back to the library, the section and the book, the contents), held while
+// the menu is open; at the bottom a slider over the whole book with the chapters' ticks, "Page N of M", the time left
+// in the chapter and "Aa". A click in the middle third of the page or Return opens it; a click on the page or Esc
+// closes it; ←/→/h/l move the slider and Return goes there.
 
 import AppKit
 import CoreText
 import QuartzCore
-
-/// The chevron and the list of Lucide (ISC), on their 24×24 grid.
-private let chevronLeft: [Shape] = [.line(15, 18, 9, 12), .line(9, 12, 15, 6)]
-private let list: [Shape] = [6, 12, 18].flatMap { y -> [Shape] in [.line(3, y, 3.01, y), .line(8, y, 21, y)] }
 
 /// A button of the bars: a child view centred, an action on click, the ink at 6 % under the pointer.
 private final class BarButton: NSView {
@@ -142,51 +139,34 @@ private final class Bar: NSView {
 
 final class ReaderMenu {
     private weak var view: PageView?
-    private let top = Bar(lineAtTop: false)
     private let bottom = Bar(lineAtTop: true)
-    private let back = BarButton(IconView(chevronLeft, size: 24), tooltip: tr("Back to library"))
-    private let contents = BarButton(IconView(list, size: 24), tooltip: tr("Contents"))
     private let aa = BarButton(label("Aa", bookFont("PT Serif", 18), 0), tooltip: tr("Text settings"))
-    private let section = label("", interfaceFont(15, .medium), 0)
-    private let book = label("", interfaceFont(12), 0)
     private let slider = Slider()
     private let pageLine = label("", interfaceFont(14, .medium), 0)
     private let hint = label("", interfaceFont(12), 0)
     /// The book page the slider shows while the reader moves it; nil: the reading position's.
     private var scrub: UInt32?
     private(set) var isOpen = false
-    var onBack: (() -> Void)?
-    var onContents: (() -> Void)?
+    /// The menu opened and closed: the window's reading bar shows and stays, then goes.
+    var onOpen: (() -> Void)?
+    var onClose: (() -> Void)?
     var onSettings: (() -> Void)?
 
-    private static let topHeight: CGFloat = 56
     /// 16 above the slider (28), 12, the row (44), 18 below: the web reader's `.bar-bottom`.
     private static let bottomHeight: CGFloat = 118
 
     init(view: PageView, in container: NSView, below sibling: NSView) {
         self.view = view
-        for l in [section, book, pageLine, hint] {
+        for l in [pageLine, hint] {
             l.lineBreakMode = .byTruncatingTail
             l.maximumNumberOfLines = 1
         }
-        section.alignment = .center
-        book.alignment = .center
         // Tabular figures, so the line does not jitter while the slider moves.
         pageLine.font = NSFont(descriptor: interfaceFont(14, .medium).fontDescriptor.addingAttributes(
             [.featureSettings: [[NSFontDescriptor.FeatureKey.typeIdentifier: kNumberSpacingType, NSFontDescriptor.FeatureKey.selectorIdentifier: kMonospacedNumbersSelector]]]), size: 14)
         aa.layer!.cornerRadius = 22
         aa.layer!.borderWidth = 1
-        back.layer!.cornerRadius = 24
-        contents.layer!.cornerRadius = 24
-        [back, section, book, contents].forEach(top.addSubview)
         [slider, pageLine, hint, aa].forEach(bottom.addSubview)
-        top.place = { [unowned self] bar in
-            let w = bar.bounds.width
-            back.frame = CGRect(x: 4, y: 4, width: 48, height: 48)
-            contents.frame = CGRect(x: w - 52, y: 4, width: 48, height: 48)
-            section.frame = CGRect(x: 60, y: 9, width: w - 120, height: 20)
-            book.frame = CGRect(x: 60, y: 30, width: w - 120, height: 16)
-        }
         bottom.place = { [unowned self] bar in
             let x = max(20, (bar.bounds.width - 640) / 2), width = bar.bounds.width - 2 * x
             slider.frame = CGRect(x: x, y: 16, width: width, height: 28)
@@ -199,26 +179,20 @@ final class ReaderMenu {
                 hint.frame = CGRect(x: x, y: 56 + 25, width: text, height: 16)
             }
         }
-        top.autoresizingMask = [.width, .minYMargin]
         bottom.autoresizingMask = [.width, .maxYMargin]
-        for bar in [top, bottom] {
-            bar.isHidden = true
-            container.addSubview(bar, positioned: .below, relativeTo: sibling)
-        }
-        back.action = { [weak self] in self?.onBack?() }
-        contents.action = { [weak self] in self?.onContents?() }
+        bottom.isHidden = true
+        container.addSubview(bottom, positioned: .below, relativeTo: sibling)
         aa.action = { [weak self] in self?.onSettings?() }
         slider.onScrub = { [weak self] in self?.scrubTo($0) }
         slider.onRelease = { [weak self] in self?.go() }
         view.onPages = { [weak self] in if self?.isOpen == true { self?.showPlace() } }
     }
 
-    private func frames(open: Bool) -> (CGRect, CGRect) {
-        guard let c = top.superview?.bounds else { return (.zero, .zero) }
-        let (th, bh) = (ReaderMenu.topHeight, ReaderMenu.bottomHeight)
-        // Closed: half their height towards the window's edge (AppKit's y up).
-        let shift: (CGFloat, CGFloat) = open ? (0, 0) : (th / 2, -bh / 2)
-        return (CGRect(x: 0, y: c.height - th + shift.0, width: c.width, height: th), CGRect(x: 0, y: shift.1, width: c.width, height: bh))
+    private func frame(open: Bool) -> CGRect {
+        guard let c = bottom.superview?.bounds else { return .zero }
+        let h = ReaderMenu.bottomHeight
+        // Closed: half its height towards the window's edge (AppKit's y up).
+        return CGRect(x: 0, y: open ? 0 : -h / 2, width: c.width, height: h)
     }
 
     func open() {
@@ -227,34 +201,23 @@ final class ReaderMenu {
         view.dismissSelection()
         scrub = nil
         let p = view.palette
-        for bar in [top, bottom] {
-            bar.layer!.backgroundColor = color(p.paper)
-            bar.rule.backgroundColor = color(p.line)
-        }
-        for b in [back, contents, aa] { b.colour(p) }
-        for icon in [back.child, contents.child] { (icon as? IconView)?.tint = nsColor(p.ink) }
+        bottom.layer!.backgroundColor = color(p.paper)
+        bottom.rule.backgroundColor = color(p.line)
+        aa.colour(p)
         (aa.child as? NSTextField)?.textColor = nsColor(p.ink)
         aa.layer!.borderColor = color(p.line)
-        section.textColor = nsColor(p.ink)
         pageLine.textColor = nsColor(p.ink)
-        book.textColor = nsColor(p.muted)
         hint.textColor = nsColor(p.muted)
         showPlace()
-        let (closedTop, closedBottom) = frames(open: false)
-        top.frame = closedTop
-        bottom.frame = closedBottom
-        for bar in [top, bottom] {
-            bar.alphaValue = 0
-            bar.isHidden = false
-        }
-        let (openTop, openBottom) = frames(open: true)
+        bottom.frame = frame(open: false)
+        bottom.alphaValue = 0
+        bottom.isHidden = false
+        onOpen?()
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.2
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            top.animator().alphaValue = 1
             bottom.animator().alphaValue = 1
-            top.animator().frame = openTop
-            bottom.animator().frame = openBottom
+            bottom.animator().frame = frame(open: true)
         }
     }
 
@@ -264,17 +227,14 @@ final class ReaderMenu {
         guard isOpen else { return false }
         isOpen = false
         scrub = nil
-        let (closedTop, closedBottom) = frames(open: false)
+        onClose?()
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.15
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
-            top.animator().alphaValue = 0
             bottom.animator().alphaValue = 0
-            top.animator().frame = closedTop
-            bottom.animator().frame = closedBottom
+            bottom.animator().frame = frame(open: false)
         }, completionHandler: { [weak self] in
             guard let self, !self.isOpen else { return }
-            self.top.isHidden = true
             self.bottom.isHidden = true
         })
         return true
@@ -320,8 +280,6 @@ final class ReaderMenu {
     private func showPlace() {
         guard let view else { return }
         let doc = view.doc
-        section.stringValue = String(cString: forzac_section(doc, view.locator))
-        book.stringValue = String(cString: forzac_title(doc))
         let total = forzac_book_pages(doc)
         slider.isHidden = total == 0
         pageLine.isHidden = total == 0

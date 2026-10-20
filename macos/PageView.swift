@@ -852,14 +852,13 @@ final class PageView: NSView {
         onBookmarks?()
     }
 
+    /// The right edge of the ribbon of the page (or spread) shown, nil when it has no bookmark (the reading bar).
+    var ribbonRight: CGFloat? { shownMarked ? ribbon.frame.maxX : nil }
+
     /// Shows the current page's ribbon when it is marked, in the theme's colour, beside the text.
     private func updateRibbon() {
-        // Over the page holding the spread's first bookmark.
-        ribbonDx = shownPages(page)[0].1
-        if let (from, to) = shownRange(), let first = bookmarks.first(where: { !($0 < from) && $0 < to }),
-           !scrolling, let right = shownPages(page).dropFirst().first, !(first < forzac_page_start(doc, right.0)) {
-            ribbonDx = right.1
-        }
+        // On a spread over the right page, in its outer margin: never in the gutter.
+        ribbonDx = shownPages(page).last!.1
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         placeRibbon(ribbon, dx: ribbonDx)
