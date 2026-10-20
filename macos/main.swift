@@ -526,6 +526,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let library = LibraryWindow(state: state, books: books, folder: folder, remembersFrame: !measuring) { [weak self] path in self?.openBook(path) }
                 self.library = library
                 library.onAddFolder = { [weak self] path in self?.importFolder(path) }
+                library.onChangeFolder = { [weak self] path, move in self?.changeBooksFolder(to: path, moving: move) }
                 if !measuring { self.checkUpdate(state) }
                 // Closing the library with no book open quits (the app stays after its last book window: the library follows).
                 NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: library.window, queue: .main) { [weak self] _ in
@@ -585,6 +586,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if let state = self?.state { forzac_state_reload(state) }
                 guard let library else { return }
                 library.addingEnded(books: books)
+                if let message {
+                    let alert = NSAlert()
+                    alert.messageText = message
+                    alert.beginSheetModal(for: library.window)
+                }
+            }
+        }
+    }
+
+    /// File › Change the Books folder… (`books-folder-setting`): the library asks for the folder and what to do.
+    @objc func changeBooksFolder(_ sender: Any?) {
+        guard let state else { return }
+        if let library { library.chooseBooksFolder() } else { showLibrary(state) { $0.chooseBooksFolder() } }
+    }
+
+    /// Makes `path` the Books folder on the background queue, moving the books when `moving`; the library then shows the
+    /// new folder's books, with a message when some could not be moved or the folder cannot be used.
+    func changeBooksFolder(to path: String, moving: Bool) {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        importQueue.async { [weak self] in
+            guard let worker = self?.worker else { return }
+            _ = forzac_books_folder(worker, home)
+            var text: UnsafePointer<CChar>?
+            let changed = forzac_change_books_folder(worker, path, moving, &text)
+            let message = changed ? text.map { String(cString: $0) }
+                : fill(tr("Couldn't open “{name}”: {reason}"), ["name": URL(fileURLWithPath: path).lastPathComponent, "reason": tr("the file is unavailable")])
+            let folder = forzac_books_folder(worker, home).map { String(cString: $0) }
+            let books = LibraryBook.list(worker)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let state = self.state { forzac_state_reload(state) }
+                guard let library = self.library else { return }
+                if changed { library.folderChanged(folder, books: books) }
                 if let message {
                     let alert = NSAlert()
                     alert.messageText = message
@@ -784,6 +818,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let close = NSMenuItem(title: tr("Close"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         submenu(tr("File"), [item(tr("Open…"), #selector(openDocument(_:)), "o"), item(tr("Add a Folder…"), #selector(addFolder(_:)), "o", [.command, .shift]),
                              recentItem, item(tr("Show the Books folder"), #selector(showBooksFolder(_:))),
+                             item(tr("Change the Books folder…"), #selector(changeBooksFolder(_:))),
                              .separator(), close])
         let copy = NSMenuItem(title: tr("Copy"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         submenu(tr("Edit"), [

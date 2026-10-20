@@ -184,7 +184,12 @@ pub fn scan(folder: &Path, store: &mut Store) -> Vec<Entry> {
         .entries()
         .iter()
         .filter_map(|e| {
-            let path = if e.path.is_file() { e.path.clone() } else { in_folder(&e.id)? };
+            // The folder's copy first: a book left elsewhere (an old Books folder) shows once, from the folder.
+            let path = match in_folder(&e.id) {
+                Some(path) => path,
+                None if e.path.is_file() => e.path.clone(),
+                None => return None,
+            };
             let series = files.iter().find(|f| f.id == e.id).and_then(|f| f.series.clone());
             let mut entry = Entry { path, series, shelves: store.shelves_of(&e.id).to_vec(), ..e.clone() };
             store.edits_of(&e.id).apply(&mut entry);
@@ -211,6 +216,91 @@ pub fn scan(folder: &Path, store: &mut Store) -> Vec<Entry> {
         entry
     }));
     remembered
+}
+
+/// What changing the Books folder did ([`change_folder`]).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Moved {
+    pub moved: usize,
+    /// Books whose content the new folder already had: left where they were.
+    pub skipped: usize,
+    pub failed: usize,
+}
+
+impl Moved {
+    /// The message for the reader, when some books could not be moved.
+    pub fn message(&self) -> Option<String> {
+        (self.failed > 0).then(|| crate::i18n::tr_count(self.failed, "Couldn't move {n} book.", "Couldn't move {n} books."))
+    }
+}
+
+/// Makes `new` the Books folder (`books-folder-setting`). With `move_books`, the book files at the old folder's top
+/// level go into `new` — a book whose content `new` already has stays, a taken name gets ` (2)` — and the remembered
+/// books and the cache follow them; without it, `new` is used as it is. Fails, changing nothing, when `new` is not a
+/// folder Forzac can write to.
+pub fn change_folder(new: &Path, store: &mut Store, move_books: bool) -> Result<Moved, crate::Error> {
+    let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_owned());
+    let probe = new.join(".forzac-write-test");
+    if !new.is_dir() || std::fs::write(&probe, b"").is_err() {
+        return Err(crate::Error::Unavailable);
+    }
+    let _ = std::fs::remove_file(&probe);
+    let old = remembered_folder(store);
+    let mut moved = Moved::default();
+    match old.filter(|old| move_books && canonical(old) != canonical(new)) {
+        Some(old) => {
+            let there: HashSet<String> = book_files_at(new, store).into_iter().map(|f| f.id).collect();
+            let files = folder_files(&old, store);
+            let mut cache = Vec::new();
+            for f in files.iter().filter(|f| !f.id.is_empty()) {
+                if there.contains(&f.id) {
+                    moved.skipped += 1;
+                    continue;
+                }
+                let (stem, ext) = match extension(&f.name) {
+                    Some(ext) => (&f.name[..f.name.len() - ext.len()], ext),
+                    None => (f.name.as_str(), ""),
+                };
+                let name = file_name(stem, &[], &f.name, ext, |n| new.join(n).exists());
+                let (from, to) = (old.join(&f.name), new.join(&name));
+                let done = std::fs::rename(&from, &to).is_ok()
+                    || (std::fs::copy(&from, &to).is_ok() && std::fs::remove_file(&from).map_err(|_| std::fs::remove_file(&to)).is_ok());
+                if !done {
+                    moved.failed += 1;
+                    continue;
+                }
+                moved.moved += 1;
+                let mtime = std::fs::metadata(&to).map_or(f.mtime, |m| mtime(&m));
+                cache.push(Cached { name, mtime, ..f.clone() });
+                let _ = store.set_path(&f.id, &to);
+            }
+            let _ = store.set_files(cache);
+        }
+        None => {
+            let _ = store.set_files(Vec::new());
+        }
+    }
+    store.set_setting(FOLDER, &new.to_string_lossy()).map_err(|_| crate::Error::Unavailable)?;
+    Ok(moved)
+}
+
+/// The books at `folder`'s top level with their ids, read without touching `store`'s cache (another folder's).
+fn book_files_at(folder: &Path, store: &Store) -> Vec<Cached> {
+    let mut files = Vec::new();
+    for item in std::fs::read_dir(folder).into_iter().flatten().flatten() {
+        let Ok(name) = item.file_name().into_string() else { continue };
+        let Ok(meta) = item.metadata() else { continue };
+        if name.starts_with('.') || extension(&name).is_none() || !meta.is_file() {
+            continue;
+        }
+        let known = store.files().iter().find(|c| c.name == name && c.size == meta.len() && c.mtime == mtime(&meta)).cloned();
+        let file = known.unwrap_or_else(|| {
+            let id = std::fs::read(item.path()).map(|b| book_id(&b)).unwrap_or_default();
+            Cached { name, id, ..Cached::default() }
+        });
+        files.push(file);
+    }
+    files
 }
 
 /// Copies the book at `src` into `folder` and returns the copy's path: `src` itself when it is inside the folder, the

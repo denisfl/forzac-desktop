@@ -55,11 +55,14 @@ Books live in one folder, `~/Books` (`~/Книги` if the interface was Russian
 from anywhere else is copied there as `Author — Title.ext` (the original stays where it was; the same book is not
 copied twice), and books put into the folder by hand or by a sync service join the library. An existing folder of that
 name is used as it is: nothing in it is renamed or moved, subfolders and other formats are left alone. The first start
-of a version with the folder copies the books read before into it.
+of a version with the folder copies the books read before into it. "Change the Books folder…" in the library's "⋯"
+menu moves the books to another folder — one kept by Dropbox, iCloud Drive or Syncthing, say — or uses it as it is.
 
 Without a file, Forzac shows the library: the folder's books with their covers, the last one to continue first
 (`Enter` opens one, `/` searches, `F` shows the Books folder, `d` removes a book: its file goes to the Trash, its
-bookmarks and highlights stay for when it is put back). The state is kept in
+bookmarks and highlights stay for when it is put back). Tabs sort and group it by title, author, series or shelf
+(`Tab`); a book's "⋯" menu shows its details, edits them (kept by Forzac, the file is not changed) and puts it on
+shelves; a dropped folder or `Ctrl+Shift+O` adds a whole folder of books. The state is kept in
 `$XDG_DATA_HOME/forzac/state` on Linux and `~/Library/Application Support/Forzac/state` on macOS, cover thumbnails in
 `$XDG_CACHE_HOME/forzac/covers` and `~/Library/Caches/Forzac/covers`.
 

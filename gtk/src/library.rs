@@ -775,7 +775,7 @@ pub struct Library {
     /// Opens a book in its window (copied into the Books folder first).
     open: Rc<dyn Fn(&Path)>,
     /// The Books folder, when it could be made.
-    folder: Option<PathBuf>,
+    folder: RefCell<Option<PathBuf>>,
     palette: Palette,
     books: RefCell<Vec<Book>>,
     thumbs: RefCell<HashMap<String, Thumb>>,
@@ -800,6 +800,8 @@ pub struct Library {
     update: (gtk::Box, gtk::Label),
     entry: gtk::Entry,
     buttons: (gtk::Button, gtk::Button, gtk::Button),
+    /// The head's "⋯": the Books folder and adding a folder (`books-folder-setting`).
+    head_menu: gtk::Button,
     /// "Adding books… N of M" while a folder is added (`folder-import`), in place of the search button.
     progress: gtk::Label,
     adding: Cell<bool>,
@@ -853,6 +855,7 @@ impl Library {
             b
         };
         let search = circle(icons::SEARCH, tr("Search"));
+        let head_menu = circle(icons::ELLIPSIS, tr("More"));
         let close = circle(icons::X, tr("Close"));
         close.set_visible(false);
         let open_button = pill(tr("Open a book"), false);
@@ -891,6 +894,7 @@ impl Library {
             spacer.upcast_ref(),
             update_line.upcast_ref(),
             progress.upcast_ref(),
+            head_menu.upcast_ref(),
             search.upcast_ref(),
             close.upcast_ref(),
             open_button.upcast_ref(),
@@ -918,7 +922,7 @@ impl Library {
             window,
             store: store.clone(),
             open,
-            folder,
+            folder: RefCell::new(folder),
             palette,
             books: RefCell::new(books),
             thumbs: RefCell::default(),
@@ -938,6 +942,7 @@ impl Library {
             update: (update_line, update_label),
             entry,
             buttons: (search, close, open_button),
+            head_menu,
             progress,
             adding: Cell::new(false),
             waiting: RefCell::default(),
@@ -1174,6 +1179,7 @@ impl Library {
         let empty = self.books.borrow().is_empty();
         let (search, close, open) = &self.buttons;
         search.set_visible(!empty && !searching && !self.adding.get());
+        self.head_menu.set_visible(!searching);
         close.set_visible(searching);
         open.set_visible(!empty && !searching);
         self.brand.set_visible(!searching);
@@ -1363,6 +1369,91 @@ impl Library {
             glib::idle_add_local_once(move || p.unparent());
         });
         popover.popup();
+    }
+
+    /// The head's menu: "Show the Books folder", "Change the Books folder…", "Add a Folder…".
+    fn head_menu(self: &Rc<Self>) {
+        let model = gio::Menu::new();
+        model.append(Some(tr("Show the Books folder")), Some("lib.showfolder"));
+        model.append(Some(tr("Change the Books folder…")), Some("lib.changefolder"));
+        model.append(Some(tr("Add a Folder…")), Some("lib.addfolder"));
+        let popover = gtk::PopoverMenu::from_model(Some(&model));
+        popover.set_parent(&self.head_menu);
+        popover.set_has_arrow(false);
+        popover.connect_closed(|p| {
+            let p = p.clone();
+            glib::idle_add_local_once(move || p.unparent());
+        });
+        popover.popup();
+    }
+
+    /// "Change the Books folder…": the folder dialog, then "Move the books…?" (Cancel, Leave them, Move); the change
+    /// runs in the background (`library::change_folder`) and the library shows the new folder's books.
+    fn choose_books_folder(self: &Rc<Self>) {
+        let dialog = gtk::FileDialog::builder().title(tr("Change the Books folder…")).modal(true).build();
+        let weak = Rc::downgrade(self);
+        dialog.select_folder(Some(&self.window), gio::Cancellable::NONE, move |dir| {
+            let (Some(l), Some(new)) = (weak.upgrade(), dir.ok().and_then(|d| d.path())) else { return };
+            let old = l.folder.borrow().clone();
+            if old.as_ref().is_some_and(|o| o.canonicalize().ok() == new.canonicalize().ok()) {
+                return;
+            }
+            let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let question = gtk::AlertDialog::builder()
+                .message(fill(tr("Move the books to “{folder}”?"), &[("folder", &name(&new))]))
+                .detail(fill(
+                    tr("The books in “{folder}” go to the new folder; where you stopped in each stays."),
+                    &[("folder", &old.as_deref().map(name).unwrap_or_default())],
+                ))
+                .buttons([tr("Cancel"), tr("Leave them"), tr("Move")])
+                .cancel_button(0)
+                .default_button(2)
+                .modal(true)
+                .build();
+            let weak = Rc::downgrade(&l);
+            question.choose(Some(&l.window), gio::Cancellable::NONE, move |answer| {
+                if let (Some(l), Ok(answer @ 1..=2)) = (weak.upgrade(), answer) {
+                    l.change_folder(new, answer == 2);
+                }
+            });
+        });
+    }
+
+    fn change_folder(self: &Rc<Self>, new: PathBuf, move_books: bool) {
+        let (state, weak, target) = (self.store.borrow().path().to_owned(), Rc::downgrade(self), new.clone());
+        glib::spawn_future_local(async move {
+            let done = gio::spawn_blocking(move || {
+                let mut s = Store::open(state);
+                library::change_folder(&target, &mut s, move_books).map(|moved| (moved, library::scan(&target, &mut s)))
+            })
+            .await
+            .unwrap_or(Err(forzac_core::Error::Unavailable));
+            let Some(l) = weak.upgrade() else { return };
+            l.store.borrow_mut().reload();
+            let message = match done {
+                Ok((moved, books)) => {
+                    *l.folder.borrow_mut() = Some(new);
+                    *l.books.borrow_mut() = books.iter().map(Book::of).collect();
+                    l.selected.set(0);
+                    l.load_covers();
+                    l.rebuild();
+                    moved.message()
+                }
+                Err(_) => {
+                    let name = new.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    Some(fill(tr("Couldn't open “{name}”: {reason}"), &[("name", &name), ("reason", tr("the file is unavailable"))]))
+                }
+            };
+            if let Some(message) = message {
+                gtk::AlertDialog::builder()
+                    .message(message)
+                    .buttons([tr("Close")])
+                    .cancel_button(0)
+                    .modal(true)
+                    .build()
+                    .show(Some(&l.window));
+            }
+        });
     }
 
     /// Puts the book `id` on the shelf `name` or takes it off, and shows it.
@@ -1721,7 +1812,7 @@ impl Library {
         let hint = label(tr("or drop a file into this window"), "hint");
         hint.set_margin_top(14);
         text.append(&hint);
-        if self.folder.is_some() {
+        if self.folder.borrow().is_some() {
             let show = gtk::Button::builder().label(tr("Show the Books folder")).focusable(false).halign(gtk::Align::Start).build();
             show.add_css_class("folder-link");
             show.set_margin_top(6);
@@ -1795,8 +1886,8 @@ impl Library {
 
     /// Opens the Books folder in the file manager.
     fn show_folder(&self) {
-        let Some(folder) = &self.folder else { return };
-        gtk::FileLauncher::new(Some(&gio::File::for_path(folder))).launch(Some(&self.window), gio::Cancellable::NONE, |r| {
+        let Some(folder) = self.folder.borrow().clone() else { return };
+        gtk::FileLauncher::new(Some(&gio::File::for_path(&folder))).launch(Some(&self.window), gio::Cancellable::NONE, |r| {
             if let Err(e) = r {
                 eprintln!("cannot show the Books folder: {e}");
             }
@@ -1834,7 +1925,7 @@ impl Library {
     /// Adds the folder `dir` in the background (`library::import_folder`), the head counting the files; then shows the
     /// books again and, when something was not added, says so. A folder added meanwhile waits for this one.
     fn add_folder(self: &Rc<Self>, dir: PathBuf) {
-        let Some(folder) = self.folder.clone() else { return };
+        let Some(folder) = self.folder.borrow().clone() else { return };
         if self.adding.replace(true) {
             self.waiting.borrow_mut().push(dir);
             return;
@@ -1958,7 +2049,7 @@ impl Library {
         let b = self.books.borrow()[book].clone();
         // The file goes to the Trash first; the book stays when it cannot. A file outside the folder (one the move
         // could not copy) is left alone.
-        if self.folder.as_ref().is_some_and(|f| b.path.starts_with(f))
+        if self.folder.borrow().as_ref().is_some_and(|f| b.path.starts_with(f))
             && b.path.exists()
             && let Err(e) = gio::File::for_path(&b.path).trash(gio::Cancellable::NONE)
         {
@@ -2018,6 +2109,12 @@ impl Library {
             }
         });
         let weak = Rc::downgrade(self);
+        self.head_menu.connect_clicked(move |_| {
+            if let Some(l) = weak.upgrade() {
+                l.head_menu();
+            }
+        });
+        let weak = Rc::downgrade(self);
         open.connect_clicked(move |_| {
             if let Some(l) = weak.upgrade() {
                 l.choose_file();
@@ -2062,6 +2159,19 @@ impl Library {
                 l.ask_shelf(book as usize);
             }
         });
+        for (name, act) in [("showfolder", 0), ("changefolder", 1), ("addfolder", 2)] {
+            let action = gio::SimpleAction::new(name, None);
+            let weak = Rc::downgrade(self);
+            action.connect_activate(move |_, _| {
+                let Some(l) = weak.upgrade() else { return };
+                match act {
+                    0 => l.show_folder(),
+                    1 => l.choose_books_folder(),
+                    _ => l.choose_folder(),
+                }
+            });
+            actions.add_action(&action);
+        }
         actions.add_action(&about);
         actions.add_action(&remove);
         actions.add_action(&newshelf);

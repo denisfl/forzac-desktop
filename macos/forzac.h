@@ -316,6 +316,10 @@ typedef struct {
 } ForzacAdded;
 ForzacAdded forzac_import_folder(ForzacState *state, const char *src, void (*progress)(void *ctx, uint32_t done, uint32_t found), void *ctx);
 const char *forzac_added_message(ForzacState *state, ForzacAdded added, const char *name);
+// Changing the Books folder (books-folder-setting): makes `path` the folder, moving the books there when `move`; on a
+// background queue with a state handle of its own. False when `path` is not a writable folder; `*message` is what to
+// tell the reader (null: nothing), valid until the next call on `state`.
+bool forzac_change_books_folder(ForzacState *state, const char *path, bool move, const char **message);
 
 // The library: search rank (lower first, -1 no match), generated covers, the empty state's sample page (lines: head,
 // title, subtitle, folio, paragraphs; valid for good).

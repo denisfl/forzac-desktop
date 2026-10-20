@@ -6,15 +6,16 @@ TBD - created by archiving change books-folder. Update Purpose after archive.
 ## Requirements
 
 ### Requirement: The folder
-Forzac SHALL keep its books in one folder in the home folder: `~/Книги` when the interface language is Russian at the
-time the folder is made, `~/Books` otherwise. The folder SHALL be made on the first start of a version with this
-capability, and its path SHALL be remembered in the state, so a later change of the interface language does not move
-or rename it. When the remembered folder is missing (deleted by hand), Forzac SHALL make it again at the same path. A
-folder of that name that already exists SHALL be used as it is (decided 2026-10-19; choosing another folder is left to
-a later settings change): its FB2, FB2.ZIP, FB3 and EPUB files at the top level join the library, and Forzac SHALL NOT
-rename, move or change any file already there, nor touch its subfolders or files of other formats; it only adds its
-own copies beside them. The only change Forzac makes to a file it did not put there is moving it to the Trash when the
-reader removes that book from the library and confirms.
+Forzac SHALL keep its books in one folder, by default in the home folder: `~/Книги` when the interface language is
+Russian at the time the folder is made, `~/Books` otherwise; the reader can choose another (`Changing the folder`).
+The folder SHALL be made on the first start of a version with this capability, and its path SHALL be remembered in the
+state, so a later change of the interface language does not move or rename it. When the remembered folder is missing
+(deleted by hand, or a sync service's folder not there), Forzac SHALL make it again at the same path. A folder that
+already exists SHALL be used as it is: its FB2, FB2.ZIP, FB3 and EPUB files at the top level join the library, and
+Forzac SHALL NOT rename, move or change any file already there, nor touch its subfolders or files of other formats; it
+only adds its own copies beside them. The only changes Forzac makes to a file it did not put there are moving it to
+the Trash when the reader removes that book from the library and confirms, and moving it to a new Books folder when
+the reader changes the folder and chooses "Move".
 
 #### Scenario: The first start in Russian
 - **WHEN** Forzac with a Russian interface starts for the first time on a Mac with no `~/Книги`
@@ -78,10 +79,9 @@ before). This SHALL happen once, and a failure for one book SHALL NOT stop the o
   still there
 
 ### Requirement: Showing the folder
-`F` in the library, the empty library's "Show the Books folder" ("Показать папку «Книги»") and, on macOS, File ›
-Show the Books folder SHALL open the folder in Finder on macOS and in the default file manager on Linux. There is no
-button for it in the library's head (removed 2026-10-20: next to "Open a book" a folder icon read as a second way to
-open a file).
+`F` in the library, "Show the Books folder" ("Показать папку «Книги»") in the library head's "⋯" menu and in the empty
+library, and, on macOS, File › Show the Books folder SHALL open the folder in Finder on macOS and in the default file
+manager on Linux.
 
 #### Scenario: Where are my books
 - **WHEN** the reader presses `F` in the library
@@ -109,3 +109,25 @@ many were already there and how many failed.
 #### Scenario: Adding the home folder
 - **WHEN** the reader adds the home folder, which holds the Books folder
 - **THEN** the books outside the Books folder are added and the Books folder's own files are not copied again
+
+### Requirement: Changing the folder
+"Change the Books folder…" SHALL show the system's folder dialog; choosing a folder other than the current one SHALL
+ask "Move the books to “name”?" ("Перенести книги в «name»?") with "The books in “old” go to the new folder; where
+you stopped in each stays.", and "Move", "Leave them", "Cancel". "Cancel" SHALL change nothing. Otherwise the chosen
+folder SHALL become the Books folder, remembered in the state. "Move" SHALL move every FB2, FB2.ZIP, FB3 and EPUB file
+at the old folder's top level into the new one off the UI thread — a book whose content (id) is already in the new
+folder SHALL stay where it is, a name taken by another file SHALL get ` (2)`, ` (3)`, … — and point the remembered
+books at their new paths; positions, bookmarks, highlights, shelves and edits SHALL stay, as they are kept by book id.
+A file that cannot be moved SHALL stay and be counted; when any could not, a message SHALL say "Couldn't move N
+books.". "Leave them" SHALL move nothing. The library SHALL then show the new folder's books.
+
+#### Scenario: Into Dropbox
+- **WHEN** the reader with 40 books in `~/Книги` chooses `~/Dropbox/Книги` and "Move"
+- **THEN** the 40 files are in `~/Dropbox/Книги`, `~/Книги` holds none of them, each book opens where it was left, and
+  after a restart the library still reads `~/Dropbox/Книги`
+
+#### Scenario: A folder that already has the books
+- **WHEN** the reader chooses a Syncthing folder that already holds 30 of the 40 books (synced from another computer)
+  and "Move"
+- **THEN** the 10 others are moved, the 30 stay in `~/Книги`, and the library shows each of the 40 once, from the new
+  folder

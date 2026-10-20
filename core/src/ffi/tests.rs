@@ -464,6 +464,12 @@ fn adding_a_folder_through_the_c_functions() {
         let added = forzac_import_folder(state, c(src.to_str().unwrap()).as_ptr(), Some(progress), ctx);
         assert_eq!((added.added, added.known, added.failed), (1, 0, 1));
         assert_eq!(calls, [(0, 2), (1, 2), (2, 2)]);
+        let mut moved: *const c_char = std::ptr::null();
+        let elsewhere = root.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        assert!(forzac_change_books_folder(state, c(elsewhere.to_str().unwrap()).as_ptr(), true, &mut moved));
+        assert!(moved.is_null(), "everything moved");
+        assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 1);
         crate::i18n::set_language(crate::i18n::Language::English);
         let message = string(forzac_added_message(state, added, c("old").as_ptr()));
         assert_eq!(message.as_deref(), Some("Added 1 book. 1 file couldn't be read."));

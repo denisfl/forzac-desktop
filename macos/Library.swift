@@ -546,7 +546,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     private let state: OpaquePointer
     private let open: (String) -> Void
     /// The Books folder, when it could be made.
-    private let folder: String?
+    private var folder: String?
     private let remembersFrame: Bool
     private static let frameName = "Library"
     private var books: [LibraryBook]
@@ -583,6 +583,10 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     private let brandName: NSTextField
     private let searchField = NSTextField()
     private let searchButton = FlatButton(IconView(Icons.search, size: 20))
+    /// The head's "⋯": the Books folder and adding a folder (`books-folder-setting`).
+    private let headMenuButton = FlatButton(IconView(Icons.ellipsis, size: 20))
+    /// Changes the Books folder (the app runs it): the chosen path and whether to move the books.
+    var onChangeFolder: ((String, Bool) -> Void)?
     private let closeButton = FlatButton(IconView(Icons.x, size: 20))
     private let openButton: PillButton
     /// "Version N is out — download ×" (`update-check`), in the head when it fits.
@@ -631,7 +635,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         searchField.placeholderAttributedString = NSAttributedString(string: tr("Title, author or series"), attributes: [.font: bookFont("PT Serif", 26), .foregroundColor: nsColor(palette.muted)])
         searchField.delegate = self
         searchField.isHidden = true
-        for b in [searchButton, closeButton] {
+        for b in [searchButton, closeButton, headMenuButton] {
             b.colour(palette)
             b.layer!.cornerRadius = 22
             b.layer!.borderWidth = 1
@@ -642,6 +646,8 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         closeButton.toolTip = tr("Close")
         closeButton.isHidden = true
         searchButton.onClick = { [weak self] in self?.setSearching(true) }
+        headMenuButton.toolTip = tr("More")
+        headMenuButton.onClick = { [weak self] in self?.headMenu() }
         closeButton.onClick = { [weak self] in self?.setSearching(false) }
         openButton.onClick = { [weak self] in self?.chooseFile() }
         // "install" (macos-auto-update) until it fails, then "download" from the site.
@@ -670,7 +676,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             tab.onClick = { [weak self] in self?.setView(UInt32(i)) }
             tabs.append(tab)
         }
-        for v in [brandIcon, brandName, searchField, searchButton, closeButton, openButton, progressText, updateText, updateClose, tabRule] + tabs as [NSView] {
+        for v in [brandIcon, brandName, searchField, searchButton, closeButton, headMenuButton, openButton, progressText, updateText, updateClose, tabRule] + tabs as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = true
             content.addSubview(v)
         }
@@ -821,6 +827,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         items = []
         let empty = books.isEmpty
         searchButton.isHidden = empty || searching || adding > 0
+        headMenuButton.isHidden = searching
         progressText.isHidden = adding == 0 || searching
         closeButton.isHidden = !searching
         openButton.isHidden = empty || searching
@@ -1219,7 +1226,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             openButton.frame.origin = CGPoint(x: right - openButton.frame.width, y: headY + (48 - openButton.frame.height) / 2)
             right -= openButton.frame.width + 10
         }
-        for b in [searchButton, closeButton] where !b.isHidden {
+        for b in [searchButton, closeButton, headMenuButton] where !b.isHidden {
             b.frame = CGRect(x: right - 44, y: headY + 2, width: 44, height: 44)
             right -= 54
         }
@@ -1278,6 +1285,57 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     }
 
     private func chooseFile() { (NSApp.delegate as? AppDelegate)?.openDocument(nil) }
+
+    /// The head's menu: "Show the Books folder", "Change the Books folder…", "Add a Folder…".
+    private func headMenu() {
+        let menu = NSMenu()
+        for (title, action) in [(tr("Show the Books folder"), #selector(menuShowFolder(_:))), (tr("Change the Books folder…"), #selector(menuChangeFolder(_:))),
+                                (tr("Add a Folder…"), #selector(menuAddFolder(_:)))] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+        }
+        menu.popUp(positioning: nil, at: CGPoint(x: 0, y: headMenuButton.bounds.maxY + 4), in: headMenuButton)
+    }
+
+    @objc private func menuShowFolder(_ sender: Any?) { showFolder() }
+    @objc private func menuChangeFolder(_ sender: Any?) { chooseBooksFolder() }
+    @objc private func menuAddFolder(_ sender: Any?) { (NSApp.delegate as? AppDelegate)?.addFolder(nil) }
+
+    /// "Change the Books folder…": the folder panel, then "Move the books…?" (Move, Leave them, Cancel).
+    func chooseBooksFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.message = tr("Change the Books folder…")
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let new = url.path
+        if let folder, URL(fileURLWithPath: folder).standardizedFileURL == url.standardizedFileURL { return }
+        let alert = NSAlert()
+        alert.messageText = fill(tr("Move the books to “{folder}”?"), ["folder": url.lastPathComponent])
+        alert.informativeText = fill(tr("The books in “{folder}” go to the new folder; where you stopped in each stays."),
+                                     ["folder": URL(fileURLWithPath: folder ?? "").lastPathComponent])
+        alert.addButton(withTitle: tr("Move"))
+        alert.addButton(withTitle: tr("Leave them"))
+        alert.addButton(withTitle: tr("Cancel"))
+        alert.beginSheetModal(for: window) { [weak self] response in
+            switch response {
+            case .alertFirstButtonReturn: self?.onChangeFolder?(new, true)
+            case .alertSecondButtonReturn: self?.onChangeFolder?(new, false)
+            default: break
+            }
+        }
+    }
+
+    /// The Books folder changed: the library shows `books` from `folder`.
+    func folderChanged(_ folder: String?, books: [LibraryBook]) {
+        self.folder = folder
+        self.books = books
+        selected = 0
+        loadCovers()
+        rebuild()
+    }
 
     // MARK: Adding a folder (folder-import)
 

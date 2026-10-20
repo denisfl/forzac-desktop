@@ -1774,6 +1774,30 @@ pub unsafe extern "C" fn forzac_import_folder(
     ForzacAdded { added: added.added as u32, known: added.known as u32, failed: added.failed as u32 }
 }
 
+/// Makes `path` the Books folder, moving the books there when `move_books` (`library::change_folder`); off the main
+/// thread with a state handle of its own. False when `path` is not a folder Forzac can write to. `*message` is the
+/// message for the reader or null, valid until the next call on `state`.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`]; `path` a valid NUL-terminated string; `message` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_change_books_folder(
+    state: *mut State,
+    path: *const c_char,
+    move_books: bool,
+    message: *mut *const c_char,
+) -> bool {
+    let state = unsafe { &mut *state };
+    let path = PathBuf::from(unsafe { str(path) }.into_owned());
+    unsafe { *message = std::ptr::null() };
+    let Ok(moved) = crate::library::change_folder(&path, &mut state.store, move_books) else { return false };
+    if let Some(text) = moved.message() {
+        state.message = cstring(&text);
+        unsafe { *message = state.message.as_ptr() };
+    }
+    true
+}
+
 /// The message after adding the folder named `name` (`library::Added::message`), or null when every book found was
 /// added; valid until the next call on `state`.
 ///

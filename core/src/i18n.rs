@@ -464,6 +464,14 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Genres", "Жанры"),
     ("From the book", "Как в книге"),
     ("Save", "Сохранить"),
+    ("Change the Books folder…", "Сменить папку «Книги»…"),
+    ("Move the books to “{folder}”?", "Перенести книги в\u{a0}«{folder}»?"),
+    (
+        "The books in “{folder}” go to the new folder; where you stopped in each stays.",
+        "Книги из\u{a0}«{folder}» переедут в\u{a0}новую папку, места чтения сохранятся.",
+    ),
+    ("Move", "Перенести"),
+    ("Leave them", "Оставить"),
     ("About the book", "О книге"),
     ("Read", "Читать"),
     ("More", "Ещё"),
@@ -568,6 +576,10 @@ const RUSSIAN: &[(&str, &str)] = &[
 const PLURALS: &[(&str, [&str; 3])] = &[
     ("{n} matches", ["{n} совпадение", "{n} совпадения", "{n} совпадений"]),
     ("Added {n} books.", ["Добавлена {n} книга.", "Добавлены {n} книги.", "Добавлено {n} книг."]),
+    (
+        "Couldn't move {n} books.",
+        ["Не\u{a0}удалось перенести {n} книгу.", "Не\u{a0}удалось перенести {n} книги.", "Не\u{a0}удалось перенести {n} книг."],
+    ),
     (
         "{n} files couldn't be read.",
         ["{n} файл не\u{a0}удалось прочитать.", "{n} файла не\u{a0}удалось прочитать.", "{n} файлов не\u{a0}удалось прочитать."],

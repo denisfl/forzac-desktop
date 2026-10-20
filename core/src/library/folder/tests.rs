@@ -414,3 +414,59 @@ fn the_message_after_adding() {
     assert_eq!(m(0, 40, 0).unwrap(), "No new books in “Old”: all 40 are already in the library.");
     assert_eq!(m(0, 0, 0).unwrap(), "No books in “Old”: FB2, FB3 or EPUB needed.");
 }
+
+// region books-folder-setting
+
+#[test]
+fn the_books_move_to_a_new_folder() {
+    let home = home();
+    let mut s = store(&home);
+    let old = books_folder(&home, Language::English, &mut s).unwrap();
+    let a = write(&old.join("A.fb2"), &fb2("A", "", "a"));
+    write(&old.join("B.fb2"), &fb2("B", "", "b"));
+    write(&old.join("notes.pdf"), b"%PDF");
+    let book = crate::parse(&std::fs::read(&a).unwrap()).unwrap();
+    let at = Locator { chapter: 0, block: 0, offset: 2 };
+    s.save_position(&book, &a, at, false).unwrap();
+    s.set_shelf(&book.id, "Летом", true).unwrap();
+    let new = home.join("Dropbox/Книги");
+    write(&new.join("B.fb2"), &fb2("Другая B", "", "other")); // a name taken by another book
+    write(&new.join("Same A.fb2"), &fb2("A", "", "a")); // this content is already there
+
+    let moved = change_folder(&new, &mut s, true).unwrap();
+    assert_eq!(moved, Moved { moved: 1, skipped: 1, failed: 0 });
+    assert_eq!(names(&old), ["A.fb2", "notes.pdf"], "the book already there and other files stay");
+    assert_eq!(names(&new), ["B (2).fb2", "B.fb2", "Same A.fb2"]);
+    let mut s = store(&home);
+    assert_eq!(books_folder(&home, Language::English, &mut s).unwrap(), new, "remembered");
+    let books = scan(&new, &mut s);
+    let mut titles: Vec<&str> = titles(&books);
+    titles.sort();
+    assert_eq!(titles, ["A", "B", "Другая B"], "each book once");
+    let a_entry = books.iter().find(|e| e.id == book.id).unwrap();
+    assert_eq!(a_entry.path, new.join("Same A.fb2"), "the folder's copy wins over the remembered path");
+    assert_eq!((a_entry.position, a_entry.shelves.clone()), (at, vec!["Летом".to_owned()]));
+}
+
+#[test]
+fn leaving_the_books_uses_the_new_folder_as_it_is() {
+    let home = home();
+    let mut s = store(&home);
+    let old = books_folder(&home, Language::English, &mut s).unwrap();
+    write(&old.join("A.fb2"), &fb2("A", "", "a"));
+    scan(&old, &mut s);
+    let new = home.join("Sync");
+    write(&new.join("C.fb2"), &fb2("C", "", "c"));
+    assert_eq!(change_folder(&new, &mut s, false).unwrap(), Moved::default());
+    assert_eq!(names(&old), ["A.fb2"]);
+    assert_eq!(titles(&scan(&new, &mut s)), ["C"], "a never opened book of the old folder is not shown");
+    assert!(change_folder(&home.join("missing"), &mut s, true).is_err());
+    assert_eq!(remembered_folder(&s), Some(new), "a failed change changes nothing");
+}
+
+#[test]
+fn the_moved_message() {
+    crate::i18n::set_language(Language::English);
+    assert_eq!(Moved { moved: 3, skipped: 0, failed: 0 }.message(), None);
+    assert_eq!(Moved { moved: 0, skipped: 0, failed: 2 }.message().unwrap(), "Couldn't move 2 books.");
+}

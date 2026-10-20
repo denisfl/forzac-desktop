@@ -278,6 +278,7 @@ enum Shape {
 enum Icons {
     static let x: [Shape] = [.line(18, 6, 6, 18), .line(6, 6, 18, 18)]
     static let search: [Shape] = [.circle(11, 11, 8), .line(21, 21, 16.7, 16.7)]
+    static let ellipsis: [Shape] = [.circle(12, 12, 1), .circle(19, 12, 1), .circle(5, 12, 1)]
     static let share: [Shape] = [.circle(18, 5, 3), .circle(6, 12, 3), .circle(18, 19, 3), .line(8.59, 13.51, 15.42, 17.49), .line(15.41, 6.51, 8.59, 10.49)]
     static let alignJustify: [Shape] = [.line(3, 6, 21, 6), .line(3, 12, 21, 12), .line(3, 18, 21, 18)]
     static let alignLeft: [Shape] = [.line(3, 6, 21, 6), .line(3, 12, 15, 12), .line(3, 18, 18, 18)]

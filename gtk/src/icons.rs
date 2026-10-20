@@ -12,6 +12,8 @@ pub const CHEVRON_LEFT: Paths = &["m15 18-6-6 6-6"];
 pub const LIST: Paths = &["M3 12h.01", "M3 18h.01", "M3 6h.01", "M8 12h13", "M8 18h13", "M8 6h13"];
 pub const X: Paths = &["M18 6 6 18", "m6 6 12 12"];
 pub const SEARCH: Paths = &["M19 11a8 8 0 1 1-16 0a8 8 0 1 1 16 0", "m21 21-4.3-4.3"];
+pub const ELLIPSIS: Paths =
+    &["M13 12a1 1 0 1 1-2 0a1 1 0 1 1 2 0", "M20 12a1 1 0 1 1-2 0a1 1 0 1 1 2 0", "M6 12a1 1 0 1 1-2 0a1 1 0 1 1 2 0"];
 pub const ALIGN_JUSTIFY: Paths = &["M3 6h18", "M3 12h18", "M3 18h18"];
 pub const ALIGN_LEFT: Paths = &["M3 6h18", "M3 12h12", "M3 18h15"];
 pub const SPACING: [Paths; 3] =
