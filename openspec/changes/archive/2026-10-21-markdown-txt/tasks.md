@@ -21,4 +21,4 @@
 - [x] 3.1 `cargo test -p forzac-core`, `cargo clippy -p forzac-core --all-targets -- -D warnings`, `cargo fmt --all --check`
 - [x] 3.2 The GTK shell builds and passes `cargo clippy --workspace --all-targets -- -D warnings` in `forzac-debian-clippy` (not run on Linux)
 - [x] 3.3 macOS (`macos/build.sh`, a test state, `--png`/`--panel`/`--mouse`): a Markdown answer — title from its heading, contents, nested lists with hanging lines, task boxes, code, quotes, a table and its view, links; a click on an anchor goes to its chapter with "Back"; a windows-1251 TXT with indents, chapters, a scene break and a hyphenated word; a JPEG named `.md` gets the new message
-- [ ] 3.4 With the maintainer on the Mac: `⌘O` and a drop of a `.md` and a `.txt`, Finder's "Open With" offering Forzac for both while the default app stays; a TXT book synced from the phone opens on the same place
+- [x] 3.4 With the maintainer on the Mac: `⌘O` and a drop of a `.md` and a `.txt`, Finder's "Open With" offering Forzac for both while the default app stays; a TXT book synced from the phone opens on the same place — not done: archived at the maintainer's request (2026-10-21)

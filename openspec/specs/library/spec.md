@@ -82,7 +82,7 @@ folder added while one is being added SHALL wait for it.
 
 #### Scenario: Dropping a photo
 - **WHEN** the reader drops `photo.jpg` on the library
-- **THEN** a message says "Couldn't open “photo.jpg”: unsupported format — FB2, FB3 or EPUB needed", nothing is copied
+- **THEN** a message says "Couldn't open “photo.jpg”: unsupported format — FB2, FB3, EPUB, TXT or Markdown needed", nothing is copied
   and the library stays
 
 #### Scenario: Dropping a folder
@@ -144,7 +144,7 @@ opens in Recent, the first book in the other views.
 ### Requirement: The empty library
 With no books, the library SHALL show the web reader's empty state: "Read books right on your computer", "Open a book
 file — a copy goes into your Books folder, the original stays where it is.", the "Open a book" button, "or drop a file
-into this window", "Show the Books folder" and, under a rule, "FB2, FB2.ZIP, FB3 and EPUB are supported.", and beside
+into this window", "Show the Books folder" and, under a rule, "FB2, FB2.ZIP, FB3, EPUB, TXT and Markdown are supported.", and beside
 them an illustrated book page (a
 page of "Pride and Prejudice" in English, of "Капитанская дочка" in Russian, over a second page turned slightly). On a
 narrow window the page goes under the text.

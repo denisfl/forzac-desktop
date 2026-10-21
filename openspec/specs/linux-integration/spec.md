@@ -27,7 +27,8 @@ newer), fontconfig and File::MimeInfo (`perl-file-mimeinfo` on Arch, `libfile-mi
 ### Requirement: Desktop entry and MIME types
 The packages SHALL install the desktop entry `app.truenrth.forzac.desktop`, which passes `desktop-file-validate`,
 names Forzac in English and Russian, and declares `application/x-fictionbook+xml`,
-`application/x-zip-compressed-fb2`, `application/x-fb3` and `application/epub+zip`. FB3, which shared-mime-info lacks,
+`application/x-zip-compressed-fb2`, `application/x-fb3`, `application/epub+zip` and `text/markdown` — not `text/plain`,
+which would offer a book reader for every log and configuration file. FB3, which shared-mime-info lacks,
 SHALL be declared by `/usr/share/mime/packages/forzac.xml` (the `*.fb3` glob, a subclass of `application/zip`). The
 Wayland app id of every Forzac window SHALL be `app.truenrth.forzac`, the desktop entry's name, so that taskbars and
 docks tie the windows to the entry and its icon.
