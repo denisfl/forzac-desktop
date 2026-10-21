@@ -34,7 +34,8 @@ typedef struct {
 typedef struct {
     ForzacRect rect;
     uint8_t ink;            // 0 text, 1 link, 2 secondary
-} ForzacStroke;             // a line through struck-out text
+    uint8_t shape;          // 0 a filled rectangle, 1 a task's box, 2 a done task's box (with a check mark)
+} ForzacStroke;             // a line through struck-out text, or a list task's box
 
 typedef struct {
     uint32_t chapter;

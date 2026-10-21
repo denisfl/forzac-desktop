@@ -527,12 +527,36 @@ fn list_items_hang_under_their_text() {
     let first = lines[0].runs[0].positions[0][0];
     let second = lines[1].runs[0].positions[0][0];
     assert!(first.abs() < 0.01, "the marker at the edge, no first-line indent: {first}");
-    let marker = t.width_of(t.font_of(Face::Regular), "1. ", 20.0);
-    assert!((second - marker).abs() < 0.5, "wrapped lines under the text: {second} vs {marker}");
+    let text_start = lines[0].glyphs.iter().find(|g| g.0 == "1. ".len() as u32).map_or(0.0, |g| g.1);
+    assert!((second - text_start).abs() < 0.5, "wrapped lines under the text after the marker: {second} vs {text_start}");
     assert_eq!(top.x, 0.0);
     let nested = t.layout(&b.chapters[0].blocks[1], &b).unwrap();
     assert!((nested.x - 30.0).abs() < 0.01, "a level further right by 1.5 em");
     let deep = t.layout(&b.chapters[0].blocks[2], &b).unwrap();
     assert!((deep.x - 4.0 * 30.0).abs() < 0.01, "at most four levels");
     assert_eq!(top.group, nested.group, "items of one list go without spacing between them");
+}
+
+#[test]
+fn tasks_are_boxes_and_done_ones_muted() {
+    let style = PageStyle::for_window(600.0, 900.0, 20.0);
+    let mut t = typesetter(style);
+    let task = |text: &str| Block::Paragraph { text: StyledText { text: text.into(), styles: vec![] }, kind: Kind::ListItem(0) };
+    let b = book(vec![task(&format!("☐ {TEXT}")), task("☑ сделано")]);
+    let open = t.layout(&b.chapters[0].blocks[0], &b).unwrap();
+    let lines = &text_of(&open).lines;
+    let boxes: Vec<&Stroke> = lines[0].strokes.iter().filter(|s| s.shape != Shape::Fill).collect();
+    assert_eq!(boxes.len(), 1);
+    assert_eq!((boxes[0].shape, boxes[0].ink), (Shape::Box, Ink::Text));
+    assert!((boxes[0].rect.w - 20.0 * 0.74).abs() < 0.01, "the size of a letter");
+    let first_glyph = lines[0].runs.iter().flat_map(|r| &r.positions).map(|p| p[0]).fold(f32::MAX, f32::min);
+    assert!(first_glyph > boxes[0].rect.x + boxes[0].rect.w, "the character is not drawn under the box");
+    let second = lines[1].runs[0].positions[0][0];
+    assert!((second - first_glyph).abs() < 0.5, "wrapped lines under the text: {second} vs {first_glyph}");
+    assert!(lines.iter().flat_map(|l| &l.runs).all(|r| r.ink == Ink::Text));
+
+    let done = t.layout(&b.chapters[0].blocks[1], &b).unwrap();
+    let line = &text_of(&done).lines[0];
+    assert_eq!(line.strokes.iter().find(|s| s.shape != Shape::Fill).map(|s| (s.shape, s.ink)), Some((Shape::Checked, Ink::Text)));
+    assert!(line.runs.iter().all(|r| r.ink == Ink::Secondary), "a done task's text muted");
 }

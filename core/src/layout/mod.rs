@@ -144,11 +144,23 @@ impl GlyphRun {
     }
 }
 
-/// A line through struck-out text: a filled rectangle in an ink.
+/// A line through struck-out text — a filled rectangle in an ink — or a list task's box.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Stroke {
     pub rect: Rect,
     pub ink: Ink,
+    pub shape: Shape,
+}
+
+/// What a [`Stroke`] draws in its rectangle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shape {
+    Fill = 0,
+    /// A task's box (`☐`), drawn as on Android: an outline with rounded corners (a fifth of the side), the line a
+    /// tenth of the side.
+    Box = 1,
+    /// A done task's box (`☑`): the box with a check mark through (0.24, 0.52), (0.43, 0.72), (0.78, 0.30) of it.
+    Checked = 2,
 }
 
 /// A note marker or a link on the page.
@@ -476,14 +488,27 @@ impl Typesetter {
                     // most), wrapped lines under the text after the marker.
                     Kind::ListItem(level) => {
                         let x = (*level).min(MAX_LIST_LEVEL) as f32 * self.style.text_size * 1.5;
-                        let marker = text.text.find(' ').map_or(0, |at| at + 1);
-                        let hang = self.width_of(self.font_of(Face::Regular), &text.text[..marker], self.style.text_size);
+                        let hang = self.marker_width(text, &base);
                         Spec { width: w - x, x, hang, group: Group::Kind(Kind::ListItem(0)), space_before: half, space_after: half, ..base }
                     }
                 };
-                Some(self.make(text, spec))
+                let mut layout = self.make(text, spec);
+                if let (Kind::ListItem(_), Content::Text(lines)) = (kind, &mut layout.content) {
+                    task_box(lines, &text.text, self.style.text_size);
+                }
+                Some(layout)
             }
         }
+    }
+
+    /// The width of a list item's marker and its space ("• ", "1. ", "☐ "), shaped as the paragraph shapes it (a task's
+    /// box comes from a fallback font): where its wrapped lines start.
+    fn marker_width(&mut self, text: &StyledText, base: &Spec) -> f32 {
+        let Some(space) = text.text.find(' ') else { return 0.0 };
+        let marker = StyledText { text: text.text[..space].to_owned(), styles: Vec::new() };
+        let probe = self.text(&marker, base);
+        let end = probe.lines.first().and_then(|l| l.glyphs.last()).map_or(0.0, |&(_, x, advance)| x + advance);
+        end + self.width_of(self.font_of(Face::Regular), " ", self.style.text_size)
     }
 
     /// One logical pixel per image pixel, scaled down to the column and the page; never split.
@@ -797,6 +822,34 @@ enum Cut {
     Ideographic,
 }
 
+/// A task item (`☐ `, `☑ `): its character drawn as a box the size of a letter in the text's ink, as on Android; a done
+/// task's text in the secondary ink.
+fn task_box(layout: &mut TextLayout, text: &str, size: f32) {
+    let done = text.starts_with("☑ ");
+    if !done && !text.starts_with("☐ ") {
+        return;
+    }
+    let Some(line) = layout.lines.first_mut() else { return };
+    let Some(&(0, x, advance)) = line.glyphs.first() else { return };
+    if let Some(run) = line.runs.first_mut() {
+        run.glyphs.remove(0);
+        run.positions.remove(0);
+        if run.glyphs.is_empty() {
+            line.runs.remove(0);
+        }
+    }
+    if done {
+        for line in &mut layout.lines {
+            line.runs.iter_mut().for_each(|r| r.ink = Ink::Secondary);
+            line.strokes.iter_mut().for_each(|s| s.ink = Ink::Secondary);
+        }
+    }
+    let side = size * 0.74;
+    let rect = Rect { x: x + (advance - side) / 2.0, y: -side * 0.9, w: side, h: side };
+    let shape = if done { Shape::Checked } else { Shape::Box };
+    layout.lines[0].strokes.push(Stroke { rect, ink: Ink::Text, shape });
+}
+
 /// Deeper list items are not moved further right: a narrow window would leave no room for their text.
 const MAX_LIST_LEVEL: u32 = 4;
 
@@ -914,7 +967,7 @@ fn draw(line: &mut Line, pieces: &[Piece], segments: &[Segment], a: usize, b: us
                     Some(s) if s.ink == seg.ink && s.rect.y == rect.y && s.rect.x + s.rect.w >= x - 2.0 * p.size => {
                         s.rect.w = x + advance - s.rect.x
                     }
-                    _ => line.strokes.push(Stroke { rect, ink: seg.ink }),
+                    _ => line.strokes.push(Stroke { rect, ink: seg.ink, shape: Shape::Fill }),
                 }
             }
             if let Some(target) = &seg.target {

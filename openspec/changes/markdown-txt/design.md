@@ -34,8 +34,15 @@ share, so the readers are written again.
 - **List items are `Kind::ListItem(level)`.** Android added the kind with a nesting level for its list layout; the
   desktop model mirrors Android's. The typesetter gets a hanging indent (`Spec::hang`: lines after the first are
   narrower and start right of the marker) and shifts a level 1.5 em right, four levels at most, as Android does.
-  Items share one spacing group, so a list has space around it but not between its items. Kindle export sets them as
+  Items share one spacing group, so a list has space around it but not between its items. The marker's width is
+  measured by typesetting the marker itself, so a `☐` from a fallback font hangs right. Kindle export sets them as
   plain left-aligned paragraphs.
+- **Task boxes are strokes with a shape.** Android replaces `☐`/`☑` with a drawn box (side 0.74 of the text size, a
+  fifth rounded, line 0.07, check mark 0.09 of the size) and mutes a done task's text to 55 %. The desktop core drops
+  the character's glyph (the character stays in the text for search, quotes and `Locator`) and puts a `Stroke` with
+  `Shape::Box` or `Shape::Checked` in its place, in the text's ink; the shells draw it as a path (Core Graphics,
+  `gsk::PathBuilder`). A done task's text is in the secondary ink (60 %), the desktop's muted colour, rather than a new
+  55 % ink. Crossing the C ABI: one byte, `ForzacStroke::shape`.
 - **Titles from file names in the core.** `open(path)` and the Books folder scan title an untitled book by its file's
   name without the book's extension (`library::file_title`), so the library, the window title, the running head and
   the cover all show "ответ", not "ответ.md" or "Forzac". This applies to an untitled FB2 too.
@@ -54,7 +61,8 @@ share, so the readers are written again.
   example) is the check — kept in the hand-over notes, not in the repository.
 - [A TXT with a few Markdown marks is read as Markdown and its lines joined] → the same thresholds as Android; the
   worst case is still readable.
-- [Characters `☐` `☑` missing from the bundled fonts] → glyph fallback (`typesetting`) finds them in the system's fonts.
+- [Characters `☐` `☑` missing from the bundled fonts] → glyph fallback (`typesetting`) finds them for the width; the
+  box is drawn, not the glyph.
 - [A file in KOI8-R or CP866 reads as windows-1251 mojibake] → rare; same as Android.
 
 ## Migration Plan

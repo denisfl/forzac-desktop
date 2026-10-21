@@ -60,11 +60,13 @@ pub struct ForzacRule {
     pub strength: u8,
 }
 
-/// A line through struck-out text, in an ink (0 text, 1 link, 2 secondary).
+/// A line through struck-out text, in an ink (0 text, 1 link, 2 secondary), or a list task's box (`shape` 1, 2 with a
+/// check mark; 0 a filled rectangle).
 #[repr(C)]
 pub struct ForzacStroke {
     pub rect: ForzacRect,
     pub ink: u8,
+    pub shape: u8,
 }
 
 /// A note marker (`kind` 0, `target` the note id), a link (`kind` 1, `target` the link key), an image that opens in the
@@ -250,7 +252,7 @@ impl Published {
             })
             .collect();
         self.rules = p.rules.iter().map(|r| ForzacRule { rect: r.rect.into(), strength: r.strength }).collect();
-        self.strokes = p.strokes.iter().map(|s| ForzacStroke { rect: s.rect.into(), ink: s.ink as u8 }).collect();
+        self.strokes = p.strokes.iter().map(|s| ForzacStroke { rect: s.rect.into(), ink: s.ink as u8, shape: s.shape as u8 }).collect();
         let none = Locator::default().into();
         let (kinds, targets): (Vec<(u8, ForzacLocator)>, Vec<CString>) = p
             .areas

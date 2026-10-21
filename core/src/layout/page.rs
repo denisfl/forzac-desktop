@@ -544,7 +544,7 @@ fn layout_blocks(book: &Book, blocks: Vec<Block>, style: &PageStyle, typesetter:
 fn push_line(out: &mut PageContent, line: &super::Line, x: f32, y: f32) {
     out.runs.extend(line.runs.iter().map(|r| r.offset(x, y)));
     out.areas.extend(line.areas.iter().map(|a| Area { rect: a.rect.offset(x, y), target: a.target.clone() }));
-    out.strokes.extend(line.strokes.iter().map(|s| Stroke { rect: s.rect.offset(x, y), ink: s.ink }));
+    out.strokes.extend(line.strokes.iter().map(|s| Stroke { rect: s.rect.offset(x, y), ..*s }));
 }
 
 /// Paginates a chapter: a port of the Android `Paginator`, which needs only line counts and heights from its layouts.

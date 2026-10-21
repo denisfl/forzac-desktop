@@ -18,8 +18,8 @@ use forzac_core::model::LinkTarget;
 use forzac_core::search::Hit;
 use forzac_core::settings::{Setting, Settings, Turning};
 use forzac_core::{
-    Area, Block, Book, BookPages, ChapterLayout, CountControl, Ink, Locator, PageContent, PageStyle, Rect, Target, Typesetter, end_page,
-    fonts, layout_note, layout_preview, layout_table, paginate,
+    Area, Block, Book, BookPages, ChapterLayout, CountControl, Ink, Locator, PageContent, PageStyle, Rect, Shape, Target, Typesetter,
+    end_page, fonts, layout_note, layout_preview, layout_table, paginate,
 };
 use gtk::subclass::prelude::*;
 use gtk::{gdk, gio, glib, graphene, gsk, prelude::*};
@@ -1677,6 +1677,27 @@ pub(crate) fn draw_focus(snapshot: &gtk::Snapshot, theme: usize, areas: &[Area],
     }
 }
 
+/// A list task's box, as on Android: rounded, its line a tenth of its side; a done task's with a check mark.
+fn task_box(snapshot: &gtk::Snapshot, r: Rect, ink: &gdk::RGBA, done: bool) {
+    let side = r.w;
+    let line = |width: f32| {
+        let stroke = gsk::Stroke::new(side * width / 0.74);
+        stroke.set_line_cap(gsk::LineCap::Round);
+        stroke.set_line_join(gsk::LineJoin::Round);
+        stroke
+    };
+    let outline = gsk::PathBuilder::new();
+    outline.add_rounded_rect(&gsk::RoundedRect::from_rect(rect(r), side * 0.2));
+    snapshot.append_stroke(&outline.to_path(), &line(0.07), ink);
+    if done {
+        let check = gsk::PathBuilder::new();
+        check.move_to(r.x + side * 0.24, r.y + side * 0.52);
+        check.line_to(r.x + side * 0.43, r.y + side * 0.72);
+        check.line_to(r.x + side * 0.78, r.y + side * 0.30);
+        snapshot.append_stroke(&check.to_path(), &line(0.09), ink);
+    }
+}
+
 /// The render node of a page's (or a note's, or a table's) contents in `theme`: images, table rules and glyph runs.
 fn content_node(
     content: &PageContent,
@@ -1707,7 +1728,10 @@ fn content_node(
             Ink::Link => rgba(link),
             Ink::Secondary => secondary,
         };
-        snapshot.append_color(&ink, &rect(stroke.rect));
+        match stroke.shape {
+            Shape::Fill => snapshot.append_color(&ink, &rect(stroke.rect)),
+            shape => task_box(&snapshot, stroke.rect, &ink, shape == Shape::Checked),
+        }
     }
     for run in &content.runs {
         let ink = match run.ink {

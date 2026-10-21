@@ -30,8 +30,8 @@ mod xml;
 
 pub use fonts::Face;
 pub use layout::{
-    Area, BookPages, ChapterLayout, CountControl, GlyphRun, Ink, PageContent, PageImage, PageStyle, Rect, Rule, Stroke, TableView, Target,
-    Typesetter, Word, end_page, layout_note, layout_preview, layout_table, paginate,
+    Area, BookPages, ChapterLayout, CountControl, GlyphRun, Ink, PageContent, PageImage, PageStyle, Rect, Rule, Shape, Stroke, TableView,
+    Target, Typesetter, Word, end_page, layout_note, layout_preview, layout_table, paginate,
 };
 pub use model::{Block, Book, Chapter, Locator};
 

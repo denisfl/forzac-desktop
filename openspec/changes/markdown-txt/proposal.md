@@ -23,7 +23,8 @@ No setting is added.
   text is titled by the file's name. A book of any format without a title is now titled by its file's name without the
   extension (it was the whole file name in the library, "Forzac" in the window).
 - List items are set as the Android app sets them: no first-line indent, ragged right, nested items further right,
-  wrapped lines under the text after the marker.
+  wrapped lines under the text after the marker; a task's `☐`/`☑` drawn as a box the size of a letter (with a check
+  mark when done), a done task's text muted.
 - The Books folder shows `.txt`, `.md` and `.markdown` files; adding a folder does not gather them (every README and
   log of a home folder would come along).
 - The unsupported-format message and the empty library name TXT and Markdown; macOS offers Forzac in "Open With" for
@@ -37,8 +38,6 @@ No setting is added.
 - Opening text without a file (a clipboard, a drag of selected text).
 - Declaring Forzac for every `text/plain` file on Linux: a desktop without a default for it could start opening logs
   and configuration files in a book reader.
-- Drawing a task item's `☐`/`☑` as a box, as Android does: the characters are shown (from the fallback font when the
-  bundled ones lack them).
 
 ## Capabilities
 
@@ -58,7 +57,9 @@ No setting is added.
 ## Impact
 
 - Core: `core/src/text.rs` (detection, encoding, plain text) and `core/src/markdown.rs`, a port of the Android
-  app's `:core:format-text`; `lib.rs` dispatch; `model::Kind::ListItem`; the typesetter's list items; the Books
-  folder's extensions; `open` titles an untitled book by its file.
-- GTK: the file dialog's filter; the desktop entry. macOS: `Info.plist` document types.
+  app's `:core:format-text`; `lib.rs` dispatch; `model::Kind::ListItem`; the typesetter's list items and task boxes
+  (`Stroke::shape`); the Books folder's extensions; `open` titles an untitled book by its file.
+- C ABI: `ForzacStroke` gains `shape` (0 a filled rectangle, 1 a task's box, 2 a done task's box).
+- GTK: the file dialog's filter; the desktop entry; task boxes drawn with `gsk` paths. macOS: `Info.plist` document
+  types; task boxes drawn with Core Graphics.
 - Strings in the catalogue (English and Russian); README and the Mac's first-open page.

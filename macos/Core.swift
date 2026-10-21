@@ -173,11 +173,16 @@ func drawPage(_ page: ForzacPage, in ctx: CGContext, height h: CGFloat, palette:
         ctx.setFillColor(color(palette.ink, alpha: ruleAlpha[Int(rule.strength)]))
         ctx.fill(flipped(rule.rect))
     }
-    // Lines through struck-out text, in their run's ink.
+    // Lines through struck-out text, in their run's ink; list tasks' boxes.
     for i in 0..<Int(page.stroke_count) {
         let stroke = page.strokes[i]
-        ctx.setFillColor(stroke.ink == 1 ? color(palette.link) : color(palette.ink, alpha: stroke.ink == 2 ? secondaryAlpha : 1))
-        ctx.fill(flipped(stroke.rect))
+        let ink = stroke.ink == 1 ? color(palette.link) : color(palette.ink, alpha: stroke.ink == 2 ? secondaryAlpha : 1)
+        if stroke.shape == 0 {
+            ctx.setFillColor(ink)
+            ctx.fill(flipped(stroke.rect))
+        } else {
+            drawTaskBox(ctx, flipped(stroke.rect), ink, done: stroke.shape == 2)
+        }
     }
     for r in 0..<Int(page.run_count) {
         let run = page.runs[r]
@@ -187,6 +192,27 @@ func drawPage(_ page: ForzacPage, in ctx: CGContext, height h: CGFloat, palette:
         let points = (0..<count).map { i in CGPoint(x: CGFloat(run.positions[2 * i]), y: h - CGFloat(run.positions[2 * i + 1])) }
         CTFontDrawGlyphs(font, run.glyphs, points, count, ctx)
     }
+}
+
+/// A list task's box in `r` (y up), as on Android: rounded, its line a tenth of its side; a done task's with a check mark.
+func drawTaskBox(_ ctx: CGContext, _ r: CGRect, _ ink: CGColor, done: Bool) {
+    let side = r.width
+    ctx.saveGState()
+    ctx.setStrokeColor(ink)
+    ctx.setLineCap(.round)
+    ctx.setLineJoin(.round)
+    ctx.setLineWidth(side * 0.07 / 0.74)
+    ctx.addPath(CGPath(roundedRect: r, cornerWidth: side * 0.2, cornerHeight: side * 0.2, transform: nil))
+    ctx.strokePath()
+    if done {
+        let at = { (x: CGFloat, y: CGFloat) in CGPoint(x: r.minX + side * x, y: r.maxY - side * y) }
+        ctx.setLineWidth(side * 0.09 / 0.74)
+        ctx.move(to: at(0.24, 0.52))
+        ctx.addLine(to: at(0.43, 0.72))
+        ctx.addLine(to: at(0.78, 0.30))
+        ctx.strokePath()
+    }
+    ctx.restoreGState()
 }
 
 /// A bitmap `size` big at `scale`, filled with `background`, drawn into by `body` (y up, logical pixels).
