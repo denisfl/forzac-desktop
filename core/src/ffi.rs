@@ -1579,6 +1579,8 @@ pub struct State {
     message: CString,
     /// The shelf names, as last returned.
     shelf_names: CString,
+    /// The books whose position the last sync set, one id a line.
+    synced: CString,
 }
 
 /// A book of the library.
@@ -1650,6 +1652,7 @@ pub unsafe extern "C" fn forzac_state_open(path: *const c_char) -> *mut State {
         recent_strings: Vec::new(),
         notice: CString::default(),
         message: CString::default(),
+        synced: CString::default(),
         shelf_names: CString::default(),
         path: CString::default(),
     }))
@@ -1822,10 +1825,18 @@ pub unsafe extern "C" fn forzac_send_to_kindle(state: *mut State, path: *const c
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn forzac_sync(state: *mut State) -> bool {
     let state = unsafe { &mut *state };
-    match crate::library::remembered_folder(&state.store) {
-        Some(folder) => crate::sync::sync(&folder, &mut state.store).is_ok(),
-        None => false,
-    }
+    let moved = crate::library::remembered_folder(&state.store).map(|folder| crate::sync::sync(&folder, &mut state.store));
+    state.synced = cstring(&moved.as_ref().and_then(|m| m.as_ref().ok()).map(|ids| ids.join("\n")).unwrap_or_default());
+    matches!(moved, Some(Ok(_)))
+}
+
+/// The books whose position the last [`forzac_sync`] on `state` set, one id a line; valid until the next call on `state`.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_synced(state: *const State) -> *const c_char {
+    unsafe { &*state }.synced.as_ptr()
 }
 
 /// The message after adding the folder named `name` (`library::Added::message`), or null when every book found was

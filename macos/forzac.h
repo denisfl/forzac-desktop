@@ -326,6 +326,8 @@ const char *forzac_send_to_kindle(ForzacState *state, const char *path, const ch
 // Syncing (sync): the reading data shared with the other devices through `.forzac/` in the Books folder; on a background
 // queue with a state handle of its own, after forzac_books_folder. False when the sync folder cannot be used.
 bool forzac_sync(ForzacState *state);
+// The books whose position the last forzac_sync on `state` set, one id a line; valid until the next call on `state`.
+const char *forzac_synced(const ForzacState *state);
 
 // The library: search rank (lower first, -1 no match), generated covers, the empty state's sample page (lines: head,
 // title, subtitle, folio, paragraphs; valid for good).

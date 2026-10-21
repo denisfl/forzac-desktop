@@ -79,6 +79,20 @@ impl Options {
 
 type SharedStore = Rc<RefCell<Store>>;
 
+/// One sync at a time (`sync`): the library's and the book windows'.
+static SYNCING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Syncs the state file `state` with its Books folder's sync folder, off the main thread; the books whose position it set.
+fn sync_state(state: &Path) -> Vec<String> {
+    let _one = SYNCING.lock().unwrap_or_else(|e| e.into_inner());
+    let mut s = Store::open(state);
+    let Some(folder) = forzac_core::library::remembered_folder(&s) else { return Vec::new() };
+    forzac_core::sync::sync(&folder, &mut s).unwrap_or_else(|e| {
+        eprintln!("cannot sync: {e}");
+        Vec::new()
+    })
+}
+
 /// The reading position is saved this long after the last turn.
 const SAVE_DELAY: Duration = Duration::from_secs(1);
 /// The screen stays on this long after the last key, turn, scroll or click in a book window.
@@ -191,6 +205,11 @@ fn main() -> glib::ExitCode {
             }
         }
     });
+    // Quitting gives this computer's reading away (`sync`).
+    if !options.stateless() {
+        let state = store.borrow().path().to_owned();
+        app.connect_shutdown(move |_| drop(sync_state(&state)));
+    }
     // After the last book window, the library (as on macOS); closing it quits. Shown while the window is being removed,
     // so the application never runs out of windows.
     if !options.stateless() {
@@ -834,13 +853,41 @@ fn remember_position(view: &PageView, window: &gtk::ApplicationWindow, path: &Pa
             s2();
         }));
     });
-    let s = save.clone();
+    let (s, waiting) = (save.clone(), pending.clone());
     window.connect_close_request(move |_| {
         if let Some(id) = pending.borrow_mut().take() {
             id.remove();
         }
         s();
         glib::Propagation::Proceed
+    });
+    // Leaving the book window gives the reading away, coming back takes the other devices' (`sync`); a place that came
+    // from another device moves the book there, keeping the place left for going back. Only an unsaved move is saved
+    // first: an unmoved book keeps the time it was last read.
+    let (v, st, p, s) = (view.downgrade(), store.clone(), path.to_owned(), save.clone());
+    window.connect_is_active_notify(move |_| {
+        if let Some(id) = waiting.borrow_mut().take() {
+            id.remove();
+            s();
+        }
+        let (v, st, p) = (v.clone(), st.clone(), p.clone());
+        let state = st.borrow().path().to_owned();
+        glib::spawn_future_local(async move {
+            let moved = gio::spawn_blocking(move || sync_state(&state)).await.unwrap_or_default();
+            if moved.is_empty() {
+                return;
+            }
+            st.borrow_mut().reload();
+            let Some(view) = v.upgrade() else { return };
+            let book = view.book();
+            let synced = st.borrow().position(&book, &p);
+            if moved.contains(&book.id)
+                && let Some(at) = synced
+                && at != view.locator()
+            {
+                view.go_to(at);
+            }
+        });
     });
     save(); // an opened book is in the library, even if it is closed without turning a page
 }
@@ -866,10 +913,11 @@ fn library_window(app: &gtk::Application, options: &Options, store: &SharedStore
                 forzac_core::library::books_folder(&home, language(), &mut s).ok()
             };
             // The other devices' reading first (`sync`); measurements leave it alone.
-            if let (Some(folder), false) = (&folder, stateless)
-                && let Err(e) = forzac_core::sync::sync(folder, &mut s)
-            {
-                eprintln!("cannot sync: {e}");
+            if let (Some(folder), false) = (&folder, stateless) {
+                let _one = SYNCING.lock().unwrap_or_else(|e| e.into_inner());
+                if let Err(e) = forzac_core::sync::sync(folder, &mut s) {
+                    eprintln!("cannot sync: {e}");
+                }
             }
             let books = match &folder {
                 Some(folder) => forzac_core::library::scan(folder, &mut s),

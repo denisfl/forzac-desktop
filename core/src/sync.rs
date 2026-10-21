@@ -16,6 +16,9 @@ use crate::state::{Edits, Store, escape, unescape};
 
 /// The setting that remembers this device's id.
 pub const DEVICE: &str = "sync.device";
+/// The setting that remembers a digest of what this device last wrote to its own file: another text there means another
+/// installation with the same id (a copied state) wrote it.
+const WRITTEN: &str = "sync.written";
 /// The sync folder inside the Books folder.
 pub const DIR: &str = ".forzac";
 const HEADER: &str = "forzac-sync 1";
@@ -199,7 +202,11 @@ fn parse_record(line: &str) -> Option<Record> {
 
 /// The records of the sync file at `path`; none when it is missing or not a sync file.
 fn read(path: &Path) -> Vec<Record> {
-    let Ok(text) = std::fs::read_to_string(path) else { return Vec::new() };
+    std::fs::read_to_string(path).map(|text| parse(&text)).unwrap_or_default()
+}
+
+/// The records of a sync file's text; none when it is not a sync file.
+fn parse(text: &str) -> Vec<Record> {
     let mut lines = text.lines();
     if lines.next() != Some(HEADER) {
         return Vec::new();
@@ -229,13 +236,27 @@ fn now() -> u64 {
 
 /// This device's id, made once and remembered in the state.
 fn device(store: &mut Store) -> io::Result<String> {
-    if let Some(id) = store.setting(DEVICE) {
-        return Ok(id.to_owned());
+    match store.setting(DEVICE) {
+        Some(id) => Ok(id.to_owned()),
+        None => new_device(store),
     }
-    let seed = format!("{:?}{}{}", SystemTime::now(), std::process::id(), store.path().display());
+}
+
+/// A new id for this device, remembered in the state.
+fn new_device(store: &mut Store) -> io::Result<String> {
+    let seed = format!("{:?}{}{}{:?}", SystemTime::now(), std::process::id(), store.path().display(), store.setting(DEVICE));
     let id = crate::state::book_id(seed.as_bytes())[..16].to_owned();
     store.set_setting(DEVICE, &id)?;
     Ok(id)
+}
+
+fn digest(text: &str) -> String {
+    crate::state::book_id(text.as_bytes())
+}
+
+/// The time of a local change of the item at `key`: now, but later than the item it replaces, whatever the clocks say.
+fn after(own: &HashMap<(u8, String, String), Record>, key: &(u8, String, String), now: u64) -> u64 {
+    own.get(key).map_or(now, |o| now.max(o.time + 1))
 }
 
 /// Books parsed on demand, by id.
@@ -256,15 +277,25 @@ impl Books {
 
 /// Syncs the state with the sync folder of the Books folder `folder`: finds the state's changes since the last sync,
 /// takes the other devices' newer items, applies them to the state and writes this device's file. Reads books only
-/// when a place must be converted.
-pub fn sync(folder: &Path, store: &mut Store) -> io::Result<()> {
+/// when a place must be converted. Returns the books whose position it set.
+pub fn sync(folder: &Path, store: &mut Store) -> io::Result<Vec<String>> {
     store.reload();
-    let device = device(store)?;
+    let mut device = device(store)?;
     let dir = folder.join(DIR);
     std::fs::create_dir_all(&dir)?;
-    let own_path = dir.join(format!("{device}.sync"));
-    let before = std::fs::read_to_string(&own_path).unwrap_or_default();
-    let mut own: HashMap<_, Record> = read(&own_path).into_iter().map(|r| (r.key(), r)).collect();
+    let mut own_path = dir.join(format!("{device}.sync"));
+    let mut before = std::fs::read_to_string(&own_path).ok();
+    // Another installation with this id wrote the own file (a copied state): this one takes a new id. A missing or
+    // unreadable file is not a copy.
+    if let (Some(text), Some(written)) = (&before, store.setting(WRITTEN))
+        && digest(text) != written
+    {
+        device = new_device(store)?;
+        own_path = dir.join(format!("{device}.sync"));
+        before = None;
+    }
+    let before = before.unwrap_or_default();
+    let mut own: HashMap<_, Record> = parse(&before).into_iter().map(|r| (r.key(), r)).collect();
     let mut paths = crate::library::folder_books(folder, store);
     for e in store.entries() {
         if !paths.contains_key(&e.id) && e.path.is_file() {
@@ -291,7 +322,7 @@ pub fn sync(folder: &Path, store: &mut Store) -> io::Result<()> {
             }
         }
     }
-    apply(store, &mut own, &mut books, &adopted)?;
+    let moved = apply(store, &mut own, &mut books, &adopted)?;
 
     let text = serialize(&device, &own);
     if text != before {
@@ -299,17 +330,27 @@ pub fn sync(folder: &Path, store: &mut Store) -> io::Result<()> {
         std::fs::write(&part, &text)?;
         std::fs::rename(&part, &own_path)?;
     }
-    Ok(())
+    let written = digest(&text);
+    if store.setting(WRITTEN) != Some(written.as_str()) {
+        store.set_setting(WRITTEN, &written)?;
+    }
+    Ok(moved)
 }
 
 /// Records in `own` the state's changes since the own file was written.
 fn local_changes(store: &Store, own: &mut HashMap<(u8, String, String), Record>, books: &mut Books, now: u64) {
-    // Positions: newer when the book was read after the item's time.
+    // Positions: a place applied here that is no longer the book's is a local change; one never applied here (its book
+    // was missing) is replaced only by a later reading.
     for e in store.entries().to_vec() {
         let key = (0, e.id.clone(), String::new());
-        let time = e.opened.max(1) * 1000;
-        let changed = own.get(&key).is_none_or(|o| o.local.as_deref() != Some(local(e.position).as_str()) && time > o.time);
+        let read = e.opened.max(1) * 1000;
+        let changed = match own.get(&key) {
+            None => true,
+            Some(o) if o.local.is_none() => read > o.time,
+            Some(o) => o.local.as_deref() != Some(local(e.position).as_str()),
+        };
         if changed && let Some(book) = books.get(&e.id) {
+            let time = after(own, &key, read);
             let item = Item::Position { place: place_of(book, e.position), progress: e.progress };
             own.insert(key, Record { book: e.id.clone(), time, deleted: false, item, local: Some(local(e.position)) });
         }
@@ -327,13 +368,14 @@ fn local_changes(store: &Store, own: &mut HashMap<(u8, String, String), Record>,
         let (have_marks, have_quotes) = (held(1, own), held(2, own));
         for l in marks.iter().filter(|l| !have_marks.contains(l)) {
             if let (Some(at), Some(book)) = (parse_local(l), books.get(id)) {
-                let r = Record {
+                let mut r = Record {
                     book: id.clone(),
                     time: now,
                     deleted: false,
                     item: Item::Bookmark(place_of(book, at)),
                     local: Some(l.clone()),
                 };
+                r.time = after(own, &r.key(), now);
                 own.insert(r.key(), r);
             }
         }
@@ -341,7 +383,8 @@ fn local_changes(store: &Store, own: &mut HashMap<(u8, String, String), Record>,
             let pair = l.split_once('-').and_then(|(a, b)| Some((parse_local(a)?, parse_local(b)?)));
             if let (Some((a, b)), Some(book)) = (pair, books.get(id)) {
                 let item = Item::Highlight(place_of(book, a), place_of(book, b));
-                let r = Record { book: id.clone(), time: now, deleted: false, item, local: Some(l.clone()) };
+                let mut r = Record { book: id.clone(), time: now, deleted: false, item, local: Some(l.clone()) };
+                r.time = after(own, &r.key(), now);
                 own.insert(r.key(), r);
             }
         }
@@ -353,7 +396,7 @@ fn local_changes(store: &Store, own: &mut HashMap<(u8, String, String), Record>,
             };
             if gone {
                 r.deleted = true;
-                r.time = now;
+                r.time = now.max(r.time + 1);
             }
         }
         // Shelves.
@@ -361,7 +404,8 @@ fn local_changes(store: &Store, own: &mut HashMap<(u8, String, String), Record>,
         for name in &shelves {
             let key = (3, id.clone(), name.to_lowercase());
             if own.get(&key).is_none_or(|r| r.deleted) {
-                own.insert(key, Record { book: id.clone(), time: now, deleted: false, item: Item::Shelf(name.clone()), local: None });
+                let time = after(own, &key, now);
+                own.insert(key, Record { book: id.clone(), time, deleted: false, item: Item::Shelf(name.clone()), local: None });
             }
         }
         for r in own.values_mut().filter(|r| r.book == *id && !r.deleted) {
@@ -369,7 +413,7 @@ fn local_changes(store: &Store, own: &mut HashMap<(u8, String, String), Record>,
                 && !shelves.iter().any(|s| s.to_lowercase() == name.to_lowercase())
             {
                 r.deleted = true;
-                r.time = now;
+                r.time = now.max(r.time + 1);
             }
         }
         // Edits.
@@ -377,18 +421,21 @@ fn local_changes(store: &Store, own: &mut HashMap<(u8, String, String), Record>,
         let key = (4, id.clone(), String::new());
         let held = own.get(&key).map(|r| if let Item::Edit(e) = &r.item { e.clone() } else { Edits::default() });
         if held.as_ref().map_or(!edits.is_empty(), |h| *h != edits) {
-            own.insert(key, Record { book: id.clone(), time: now, deleted: false, item: Item::Edit(edits), local: None });
+            let time = after(own, &key, now);
+            own.insert(key, Record { book: id.clone(), time, deleted: false, item: Item::Edit(edits), local: None });
         }
     }
 }
 
-/// Applies to the state the adopted items and the own items that wait for their book.
+/// Applies to the state the adopted items and the own items that wait for their book; returns the books whose position
+/// it set.
 fn apply(
     store: &mut Store,
     own: &mut HashMap<(u8, String, String), Record>,
     books: &mut Books,
     adopted: &[(u8, String, String)],
-) -> io::Result<()> {
+) -> io::Result<Vec<String>> {
+    let mut moved = Vec::new();
     let waiting: Vec<_> = own
         .iter()
         .filter(|(_, r)| {
@@ -410,6 +457,7 @@ fn apply(
                 let read_later = store.entries().iter().any(|e| e.id == id && e.opened * 1000 > r.time);
                 if !read_later && let Some(path) = path {
                     store.set_synced_position(book, &path, at, r.time / 1000)?;
+                    moved.push(id.clone());
                 }
                 Some(local(at))
             }
@@ -462,7 +510,7 @@ fn apply(
             record.local = local_now;
         }
     }
-    Ok(())
+    Ok(moved)
 }
 
 #[cfg(test)]

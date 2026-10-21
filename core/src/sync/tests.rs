@@ -185,3 +185,62 @@ fn a_block_of_a_table_row_counts_its_cells_joined() {
     };
     assert_eq!(block_text(&book, 0, 1).as_deref(), Some("А\nБ"));
 }
+
+#[test]
+fn a_clock_ahead_does_not_win_over_later_changes() {
+    let (folder, path, _, mut b, book) = setup();
+    // Another device whose clock is an hour ahead: a place and a bookmark.
+    let ahead = now() + 3_600_000;
+    let mut text = format!("{HEADER}\ndevice\tffffffffffffffff\tAhead\n");
+    let place = place_of(&book, at(1, 1, 0));
+    let mark = place_of(&book, at(0, 1, 0));
+    write_record(
+        &mut text,
+        &Record { book: book.id.clone(), time: ahead, deleted: false, item: Item::Position { place, progress: 0.5 }, local: None },
+        false,
+    );
+    write_record(&mut text, &Record { book: book.id.clone(), time: ahead, deleted: false, item: Item::Bookmark(mark), local: None }, false);
+    std::fs::create_dir_all(folder.join(DIR)).unwrap();
+    std::fs::write(folder.join(DIR).join("ffffffffffffffff.sync"), text).unwrap();
+    // B has the book open somewhere else; the sync takes the other place and says so.
+    b.save_position(&book, &path, at(0, 2, 0), false).unwrap();
+    assert_eq!(sync(&folder, &mut b).unwrap(), std::slice::from_ref(&book.id));
+    assert_eq!(b.position(&book, &path), Some(at(1, 1, 0)));
+    assert_eq!(b.bookmarks(&book), [at(0, 1, 0)]);
+
+    // B reads on and removes the bookmark with its own (earlier) clock: both are later on every device.
+    b.save_position(&book, &path, at(1, 2, 10), false).unwrap();
+    b.set_bookmarks(&book, &[]).unwrap();
+    assert!(sync(&folder, &mut b).unwrap().is_empty());
+    let mut c = Store::open(folder.parent().unwrap().join("c.state"));
+    sync(&folder, &mut c).unwrap();
+    assert_eq!(c.position(&book, &path), Some(at(1, 2, 10)));
+    assert!(c.bookmarks(&book).is_empty());
+}
+
+#[test]
+fn a_copied_state_takes_a_new_id() {
+    let (folder, _, mut a, _, book) = setup();
+    a.set_bookmarks(&book, &[at(0, 1, 0)]).unwrap();
+    sync(&folder, &mut a).unwrap();
+    // A second computer with a copy of A's state: same id, same own file.
+    let copy = folder.parent().unwrap().join("copy.state");
+    std::fs::copy(a.path(), &copy).unwrap();
+    let mut a2 = Store::open(&copy);
+    assert_eq!(a2.setting(DEVICE), a.setting(DEVICE));
+    a2.set_bookmarks(&book, &[at(0, 1, 0), at(1, 2, 0)]).unwrap();
+    sync(&folder, &mut a2).unwrap();
+    // A finds a text it did not write in its file: a new id, and the copy's file is another device's.
+    sync(&folder, &mut a).unwrap();
+    assert_ne!(a.setting(DEVICE), a2.setting(DEVICE));
+    assert_eq!(a.bookmarks(&book), [at(0, 1, 0), at(1, 2, 0)]);
+    a.set_bookmarks(&book, &[at(1, 2, 0)]).unwrap();
+    sync(&folder, &mut a).unwrap();
+    sync(&folder, &mut a2).unwrap();
+    assert_eq!(a2.bookmarks(&book), [at(1, 2, 0)]);
+    let files = std::fs::read_dir(folder.join(DIR))
+        .unwrap()
+        .filter(|e| e.as_ref().unwrap().path().extension().is_some_and(|x| x == "sync"))
+        .count();
+    assert_eq!(files, 2, "one file per computer");
+}

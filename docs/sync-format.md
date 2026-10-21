@@ -52,6 +52,19 @@ For every key, the item with the latest `<time>` across all files wins (a tie: e
 file every item it knows — its own changes with the time of the change, the others' with their times — so the files
 converge. Tombstones are kept.
 
+Clocks differ between devices, so the time of a local change is the time of the change but at least one millisecond
+later than the item it replaces in the own file (`max(now, seen + 1)`): a change made after taking an item from another
+device is newer than that item whatever the clocks say. A device finds its local changes by comparing its state with
+its own file: a place it applied that is no longer the book's place is a local change; a place it never applied (the
+book was missing) is replaced only by a later reading.
+
+A device remembers a digest of what it last wrote to its own file. When the file is there and holds something else,
+another installation with the same id (a copied state) wrote it: the device takes a new id and starts a new own file;
+the old one counts as another device's.
+
+A device syncs when it is left (it gives its changes away) and when it is come back to (it takes the others'): on a
+phone when the app leaves and enters the screen, on a computer when the app loses and gains focus, and on quitting.
+
 ## Finding a place
 
 To use a remote place in a book: if block `block` of chapter `chapter` exists and its text at `offset` starts with

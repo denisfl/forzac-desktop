@@ -346,6 +346,11 @@ final class Reader: NSObject, NSWindowDelegate {
         print("saved \(path)")
     }
 
+    /// Saves the place now if a move is waiting to be saved: an unmoved book keeps the time it was last read (`sync`).
+    func savePendingPosition() {
+        if saveTimer != nil { savePosition() }
+    }
+
     func savePosition() {
         saveTimer?.invalidate()
         saveTimer = nil
@@ -426,6 +431,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if args.contains("--library"), let state {
             showLibrary(state) { [weak self] library in
                 if let png { self?.measureLibrary(library, png: png) }
+            }
+        }
+        // Leaving the app gives this Mac's reading away, coming back takes the other devices' (`sync`).
+        if !measuring {
+            for name in [NSApplication.didResignActiveNotification, NSApplication.didBecomeActiveNotification] {
+                NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.sync() }
             }
         }
         // Books from Finder arrive through `application(_:open:)`; without any, the library.
@@ -746,6 +757,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         readers.forEach { $0.savePosition() }
+        if !measuring, let worker { importQueue.sync { _ = forzac_sync(worker) } }
+    }
+
+    /// Syncs with the other devices (`sync`) after saving the open books' unsaved moves; an open book whose place came
+    /// from another device goes there, keeping the place left for going back.
+    func sync() {
+        guard worker != nil else { return }
+        readers.forEach { $0.savePendingPosition() }
+        importQueue.async { [weak self] in
+            guard let worker = self?.worker, forzac_sync(worker) else { return }
+            let moved = Set(String(cString: forzac_synced(worker)).split(separator: "\n").map(String.init))
+            guard !moved.isEmpty else { return }
+            DispatchQueue.main.async {
+                guard let self, let state = self.state else { return }
+                forzac_state_reload(state)
+                for reader in self.readers where moved.contains(String(cString: forzac_book_id(reader.view.doc))) {
+                    var at = reader.view.locator
+                    let here = at
+                    if forzac_state_position(state, reader.view.doc, &at), (at.chapter, at.block, at.offset) != (here.chapter, here.block, here.offset) {
+                        reader.view.go(to: at)
+                    }
+                }
+            }
+        }
     }
 
     // MARK: Menus
