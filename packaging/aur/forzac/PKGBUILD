@@ -2,7 +2,7 @@
 # Builds from the source of a tagged release; links the system GTK 4. At publication: updpkgsums, then
 # makepkg --printsrcinfo > .SRCINFO.
 pkgname=forzac
-pkgver=0.12.0
+pkgver=0.13.0
 pkgrel=1
 pkgdesc="Offline FB2 and EPUB reader with book-quality typesetting"
 arch=(x86_64 aarch64)

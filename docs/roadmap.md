@@ -22,8 +22,9 @@ later, syncing with the Android app through Dropbox-like services. `update-check
 Agreed with the maintainer on 2026-10-20: "follow calibre-ebook.com — a library and syncing data with readers". In this
 order; the library's screens (17–19) are designed after the UX review (`docs/ux-review.md`). Done: `book-identity`,
 `folder-import`, `library-metadata`, `library-shelves`, `metadata-editing`,
-`books-folder-setting` and `send-to-kindle` (2026-10-20), released in 0.12.0 the same day; `sync-format` on the
-desktop side (format: [sync-format.md](sync-format.md)).
+`books-folder-setting` and `send-to-kindle` (2026-10-20), released in 0.12.0 the same day; `sync-format` and
+`sync-handover` (format: [sync-format.md](sync-format.md); the Android side: `sync-folder`, `sync-clock`), released in
+0.13.0 on 2026-10-21.
 
 | # | Change | What | Done when | Size |
 |---|---|---|---|---|
