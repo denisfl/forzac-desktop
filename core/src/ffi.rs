@@ -197,6 +197,8 @@ pub struct Document {
     /// The book's bookmarks in reading order, and what [`forzac_bookmark_places`] and [`forzac_bookmarks`] last
     /// returned.
     bookmarks: Vec<Locator>,
+    /// The bookmarks as last loaded or saved: a save changes only what differs from them (`Store::change_bookmarks_of`).
+    bookmarks_saved: Vec<Locator>,
     bookmark_places: Vec<ForzacLocator>,
     bookmark_list: Vec<ForzacBookmark>,
     bookmark_strings: Vec<CString>,
@@ -204,6 +206,8 @@ pub struct Document {
     words: Vec<ForzacWord>,
     /// The book's highlights in reading order, and what [`forzac_quote_places`] and [`forzac_quotes`] last returned.
     quotes: Vec<(Locator, Locator)>,
+    /// The highlights as last loaded or saved.
+    quotes_saved: Vec<(Locator, Locator)>,
     quote_places: Vec<ForzacRange>,
     quote_list: Vec<ForzacQuote>,
     quote_strings: Vec<CString>,
@@ -377,11 +381,13 @@ pub unsafe extern "C" fn forzac_open(path: *const c_char, error: *mut u32) -> *m
         contents_titles: Vec::new(),
         text: CString::default(),
         bookmarks: Vec::new(),
+        bookmarks_saved: Vec::new(),
         bookmark_places: Vec::new(),
         bookmark_list: Vec::new(),
         bookmark_strings: Vec::new(),
         words: Vec::new(),
         quotes: Vec::new(),
+        quotes_saved: Vec::new(),
         quote_places: Vec::new(),
         quote_list: Vec::new(),
         quote_strings: Vec::new(),
@@ -2280,16 +2286,26 @@ pub extern "C" fn forzac_sample_page() -> *const c_char {
 pub unsafe extern "C" fn forzac_state_load_bookmarks(state: *const State, doc: *mut Document) {
     let (state, doc) = unsafe { (&*state, &mut *doc) };
     doc.bookmarks = state.store.bookmarks(&doc.book);
+    doc.bookmarks_saved = doc.bookmarks.clone();
 }
 
-/// Remembers the document's bookmarks in `state`; false when the file cannot be written.
+/// Remembers in `state` what changed in the document's bookmarks since they were loaded or saved, over what the state
+/// holds now (a sync or another window may have changed it); the document then has them all. False when the file cannot
+/// be written.
 ///
 /// # Safety
 /// `state` from [`forzac_state_open`], `doc` from [`forzac_open`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn forzac_state_save_bookmarks(state: *mut State, doc: *const Document) -> bool {
-    let (state, doc) = unsafe { (&mut *state, &*doc) };
-    state.store.set_bookmarks(&doc.book, &doc.bookmarks).is_ok()
+pub unsafe extern "C" fn forzac_state_save_bookmarks(state: *mut State, doc: *mut Document) -> bool {
+    let (state, doc) = unsafe { (&mut *state, &mut *doc) };
+    match state.store.change_bookmarks_of(&doc.book.id, &doc.bookmarks_saved, &doc.bookmarks) {
+        Ok(held) => {
+            doc.bookmarks_saved = held.clone();
+            doc.bookmarks = held;
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 /// Takes the document's highlights from `state`.
@@ -2300,16 +2316,24 @@ pub unsafe extern "C" fn forzac_state_save_bookmarks(state: *mut State, doc: *co
 pub unsafe extern "C" fn forzac_state_load_quotes(state: *const State, doc: *mut Document) {
     let (state, doc) = unsafe { (&*state, &mut *doc) };
     doc.quotes = state.store.quotes(&doc.book);
+    doc.quotes_saved = doc.quotes.clone();
 }
 
-/// Remembers the document's highlights in `state`; false when the file cannot be written.
+/// Remembers the document's highlights as [`forzac_state_save_bookmarks`] does its bookmarks.
 ///
 /// # Safety
 /// `state` from [`forzac_state_open`], `doc` from [`forzac_open`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn forzac_state_save_quotes(state: *mut State, doc: *const Document) -> bool {
-    let (state, doc) = unsafe { (&mut *state, &*doc) };
-    state.store.set_quotes(&doc.book, &doc.quotes).is_ok()
+pub unsafe extern "C" fn forzac_state_save_quotes(state: *mut State, doc: *mut Document) -> bool {
+    let (state, doc) = unsafe { (&mut *state, &mut *doc) };
+    match state.store.change_quotes_of(&doc.book.id, &doc.quotes_saved, &doc.quotes) {
+        Ok(held) => {
+            doc.quotes_saved = held.clone();
+            doc.quotes = held;
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 /// The settings remembered in `state` (defaults for anything missing or unknown); the defaults for a null `state`.

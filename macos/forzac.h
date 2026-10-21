@@ -406,9 +406,9 @@ const char *forzac_update_notice(ForzacState *state);
 bool forzac_update_dismiss(ForzacState *state);
 
 void forzac_state_load_bookmarks(const ForzacState *state, ForzacDocument *doc);
-bool forzac_state_save_bookmarks(ForzacState *state, const ForzacDocument *doc);
+bool forzac_state_save_bookmarks(ForzacState *state, ForzacDocument *doc);
 void forzac_state_load_quotes(const ForzacState *state, ForzacDocument *doc);
-bool forzac_state_save_quotes(ForzacState *state, const ForzacDocument *doc);
+bool forzac_state_save_quotes(ForzacState *state, ForzacDocument *doc);
 ForzacSettings forzac_state_settings(const ForzacState *state);
 bool forzac_state_save_settings(ForzacState *state, const ForzacSettings *settings);
 void forzac_state_close(ForzacState *state);

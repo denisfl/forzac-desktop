@@ -221,6 +221,41 @@ impl Store {
     }
 
     /// Replaces the highlights of the book `id` with `quotes`.
+    /// The book's bookmarks with what changed from `base` (what the caller last read or saved) to `marks` applied to what
+    /// the state holds now, so changes made meanwhile elsewhere (another window, a sync) are kept. Returns the bookmarks
+    /// now held.
+    pub fn change_bookmarks_of(&mut self, id: &str, base: &[Locator], marks: &[Locator]) -> io::Result<Vec<Locator>> {
+        let mut held = Vec::new();
+        self.write(|saved| {
+            held = changed(saved.bookmarks.get(id).map_or(&[][..], Vec::as_slice), base, marks);
+            if held.is_empty() {
+                saved.bookmarks.remove(id);
+            } else {
+                saved.bookmarks.insert(id.to_owned(), held.clone());
+            }
+        })?;
+        Ok(held)
+    }
+
+    /// The highlights as [`Store::change_bookmarks_of`] changes bookmarks.
+    pub fn change_quotes_of(
+        &mut self,
+        id: &str,
+        base: &[(Locator, Locator)],
+        quotes: &[(Locator, Locator)],
+    ) -> io::Result<Vec<(Locator, Locator)>> {
+        let mut held = Vec::new();
+        self.write(|saved| {
+            held = changed(saved.quotes.get(id).map_or(&[][..], Vec::as_slice), base, quotes);
+            if held.is_empty() {
+                saved.quotes.remove(id);
+            } else {
+                saved.quotes.insert(id.to_owned(), held.clone());
+            }
+        })?;
+        Ok(held)
+    }
+
     pub fn set_quotes_of(&mut self, id: &str, quotes: &[(Locator, Locator)]) -> io::Result<()> {
         let mut quotes = quotes.to_vec();
         quotes.sort();
@@ -242,22 +277,39 @@ impl Store {
 
     /// Remembers that the book `id` (`book`, from `path`) is read at `at`, as of `opened` (seconds since the Unix epoch):
     /// a position that came from another device (`sync`).
-    pub fn set_synced_position(&mut self, book: &Book, path: &Path, at: Locator, opened: u64) -> io::Result<()> {
+    /// `at` as the place of `book` (at `path`), read on another device at `opened` with `progress` (`sync`), only while
+    /// the book's place here is still `expected` (none: it has none yet): a page turned meanwhile wins. True when it was
+    /// set.
+    pub fn set_synced_position(
+        &mut self,
+        book: &Book,
+        path: &Path,
+        at: Locator,
+        progress: f32,
+        opened: u64,
+        expected: Option<Locator>,
+    ) -> io::Result<bool> {
         let entry = Entry {
             id: book.id.clone(),
             path: path.to_owned(),
             title: book.title.clone(),
             authors: book.authors.join(", "),
             position: at,
-            progress: progress(book, at),
+            progress: progress.clamp(0.0, 1.0),
             opened,
             series: book.series.clone(),
             shelves: Vec::new(),
         };
+        let mut set = false;
         self.write(|saved| {
+            if saved.books.iter().find(|e| e.id == entry.id).map(|e| e.position) != expected {
+                return;
+            }
             saved.books.retain(|e| e.id != entry.id && e.path != entry.path);
             saved.books.push(entry.clone());
-        })
+            set = true;
+        })?;
+        Ok(set)
     }
 
     /// The shelves the book `id` is on.
@@ -412,6 +464,15 @@ impl Store {
 
     /// Re-reads the file, applies `change`, and replaces the file with the result.
     fn write(&mut self, change: impl FnOnce(&mut Saved)) -> io::Result<()> {
+        if let Some(dir) = self.path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        // One read-change-write at a time across handles, threads and processes (a shell's handles, a sync): else one
+        // would write over what another has just written.
+        let name = self.path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let lock =
+            std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(self.path.with_file_name(format!(".{name}.lock")))?;
+        lock.lock()?;
         let mut saved = read(&self.path);
         change(&mut saved);
         let mut text = String::with_capacity(64 + saved.books.len() * 160);
@@ -477,12 +538,8 @@ impl Store {
             let number = f.series.as_ref().and_then(|s| s.number).map(|n| n.to_string()).unwrap_or_default();
             let _ = writeln!(text, "file\t{name}\t{}\t{}\t{id}\t{title}\t{authors}\t{series}\t{number}", f.size, f.mtime);
         }
-        if let Some(dir) = self.path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
         // A name of its own per write: a background import writes the same file from another thread.
         static WRITES: AtomicUsize = AtomicUsize::new(0);
-        let name = self.path.file_name().unwrap_or_default().to_string_lossy();
         let tmp = self.path.with_file_name(format!(".{name}.{}.{}.tmp", std::process::id(), WRITES.fetch_add(1, Ordering::Relaxed)));
         let written = std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, &self.path));
         if written.is_err() {
@@ -693,3 +750,12 @@ pub fn progress(book: &Book, at: Locator) -> f32 {
 
 #[cfg(test)]
 mod tests;
+
+/// `current` with what changed from `base` to `new`: what `new` dropped is removed, what it added is added.
+fn changed<T: Ord + Clone>(current: &[T], base: &[T], new: &[T]) -> Vec<T> {
+    let mut held: Vec<T> = current.iter().filter(|x| !base.contains(x) || new.contains(x)).cloned().collect();
+    held.extend(new.iter().filter(|x| !base.contains(x)).cloned());
+    held.sort();
+    held.dedup();
+    held
+}

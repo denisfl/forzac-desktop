@@ -602,21 +602,56 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
         view.set_bookmarks(starts);
     }
     if !stateless {
-        view.set_highlights(store.borrow().quotes(&view.book()));
-        let (st, book) = (store.clone(), view.book());
+        // The marks as this window last loaded or saved them: a save changes only what differs (a sync or another window
+        // may have changed the state meanwhile), and the view then shows them all.
+        let saved_quotes = Rc::new(RefCell::new(store.borrow().quotes(&view.book())));
+        let saved_marks = Rc::new(RefCell::new(store.borrow().bookmarks(&view.book())));
+        view.set_highlights(saved_quotes.borrow().clone());
+        view.set_bookmarks(saved_marks.borrow().clone());
+        let (st, book, saved, v) = (store.clone(), view.book(), saved_quotes.clone(), view.downgrade());
         view.connect_highlights(move |quotes| {
-            if let Err(e) = st.borrow_mut().set_quotes(&book, quotes) {
-                eprintln!("cannot save the reading state: {e}");
+            let base = saved.borrow().clone();
+            match st.borrow_mut().change_quotes_of(&book.id, &base, quotes) {
+                Ok(held) => {
+                    if held != quotes
+                        && let Some(v) = v.upgrade()
+                    {
+                        v.set_highlights(held.clone());
+                    }
+                    *saved.borrow_mut() = held;
+                }
+                Err(e) => eprintln!("cannot save the reading state: {e}"),
             }
         });
-        view.set_bookmarks(store.borrow().bookmarks(&view.book()));
-        let (st, book) = (store.clone(), view.book());
+        let (st, book, saved, v) = (store.clone(), view.book(), saved_marks.clone(), view.downgrade());
         view.connect_bookmarks(move |marks| {
-            if let Err(e) = st.borrow_mut().set_bookmarks(&book, marks) {
-                eprintln!("cannot save the reading state: {e}");
+            let base = saved.borrow().clone();
+            match st.borrow_mut().change_bookmarks_of(&book.id, &base, marks) {
+                Ok(held) => {
+                    if held != marks
+                        && let Some(v) = v.upgrade()
+                    {
+                        v.set_bookmarks(held.clone());
+                    }
+                    *saved.borrow_mut() = held;
+                }
+                Err(e) => eprintln!("cannot save the reading state: {e}"),
             }
         });
-        remember_position(&view, &window, path, store);
+        // After a sync: the marks from the state again.
+        let refresh: Rc<dyn Fn()> = {
+            let (st, v) = (store.clone(), view.downgrade());
+            Rc::new(move || {
+                let Some(v) = v.upgrade() else { return };
+                let book = v.book();
+                let (marks, quotes) = (st.borrow().bookmarks(&book), st.borrow().quotes(&book));
+                *saved_marks.borrow_mut() = marks.clone();
+                *saved_quotes.borrow_mut() = quotes.clone();
+                v.set_bookmarks(marks);
+                v.set_highlights(quotes);
+            })
+        };
+        remember_position(&view, &window, path, store, refresh);
         remember_size(&window, store, "window-book");
         library::cache_cover(&view.book());
         keep_awake(app, &window);
@@ -831,7 +866,7 @@ fn save_window_png(window: &gtk::ApplicationWindow, path: &std::path::Path) {
 }
 
 /// Saves the reading position when the book opens, `SAVE_DELAY` after the last move and when the window closes.
-fn remember_position(view: &PageView, window: &gtk::ApplicationWindow, path: &Path, store: &SharedStore) {
+fn remember_position(view: &PageView, window: &gtk::ApplicationWindow, path: &Path, store: &SharedStore, refresh: Rc<dyn Fn()>) {
     let save = {
         let (view, store, path) = (view.downgrade(), store.clone(), path.to_owned());
         Rc::new(move || {
@@ -861,29 +896,30 @@ fn remember_position(view: &PageView, window: &gtk::ApplicationWindow, path: &Pa
         s();
         glib::Propagation::Proceed
     });
-    // Leaving the book window gives the reading away, coming back takes the other devices' (`sync`); a place that came
-    // from another device moves the book there, keeping the place left for going back. Only an unsaved move is saved
-    // first: an unmoved book keeps the time it was last read.
+    // Leaving the book window gives the reading away, coming back takes the other devices' (`sync`); then the marks come
+    // from the state again, and a place that came from another device moves the book there (keeping the place left for
+    // going back) unless the book was moved since the sync began. Only an unsaved move is saved first: an unmoved book
+    // keeps the time it was last read.
     let (v, st, p, s) = (view.downgrade(), store.clone(), path.to_owned(), save.clone());
     window.connect_is_active_notify(move |_| {
         if let Some(id) = waiting.borrow_mut().take() {
             id.remove();
             s();
         }
-        let (v, st, p) = (v.clone(), st.clone(), p.clone());
+        let Some(view) = v.upgrade() else { return };
+        let (v, st, p, refresh, start) = (v.clone(), st.clone(), p.clone(), refresh.clone(), view.locator());
         let state = st.borrow().path().to_owned();
         glib::spawn_future_local(async move {
             let moved = gio::spawn_blocking(move || sync_state(&state)).await.unwrap_or_default();
-            if moved.is_empty() {
-                return;
-            }
             st.borrow_mut().reload();
+            refresh();
             let Some(view) = v.upgrade() else { return };
             let book = view.book();
             let synced = st.borrow().position(&book, &p);
             if moved.contains(&book.id)
+                && view.locator() == start
                 && let Some(at) = synced
-                && at != view.locator()
+                && at != start
             {
                 view.go_to(at);
             }

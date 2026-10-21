@@ -58,9 +58,15 @@ device is newer than that item whatever the clocks say. A device finds its local
 its own file: a place it applied that is no longer the book's place is a local change; a place it never applied (the
 book was missing) is replaced only by a later reading.
 
-A device remembers a digest of what it last wrote to its own file. When the file is there and holds something else,
-another installation with the same id (a copied state) wrote it: the device takes a new id and starts a new own file;
-the old one counts as another device's.
+A device remembers digests of what it last wrote to its own file — the new text and the one before, saved before the
+file is replaced, so a crash in between is not a copy — and which file that was. When the file is there and holds
+something else, another installation with the same id (a copied state) wrote it: the device takes a new id and starts
+a new own file; the old one counts as another device's. A missing own file is a new one; an unreadable one stops the
+sync instead of being replaced.
+
+A device applies the others' items to its state before it writes its own file, so the file never says an item is
+applied that the state lacks; a remote place moves a book only if the book's place has not changed since the sync
+began.
 
 A device syncs when it is left (it gives its changes away) and when it is come back to (it takes the others'): on a
 phone when the app leaves and enters the screen, on a computer when the app loses and gains focus, and on quitting.

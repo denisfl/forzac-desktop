@@ -117,6 +117,7 @@ final class Reader: NSObject, NSWindowDelegate {
             self?.bar.updateBookmark()
             guard let self, let state = self.state else { return }
             if !forzac_state_save_bookmarks(state, self.view.doc) { fputs("cannot save the reading state\n", stderr) }
+            self.view.reloadBookmarks() // with what a sync brought meanwhile
         }
         view.panelOpen = { [weak self] in self?.panelOpen ?? false }
         view.menuOpen = { [weak self] in self?.menu?.isOpen ?? false }
@@ -346,6 +347,19 @@ final class Reader: NSObject, NSWindowDelegate {
         print("saved \(path)")
     }
 
+    /// Takes the bookmarks and highlights from the state again (a sync may have changed them); the pages are drawn again
+    /// only when the highlights changed.
+    func reloadMarks() {
+        guard let state else { return }
+        forzac_state_load_bookmarks(state, view.doc)
+        forzac_state_load_quotes(state, view.doc)
+        let before = view.highlights
+        view.reloadBookmarks()
+        view.reloadHighlights()
+        if view.highlights != before { view.reloadHighlights(redraw: true) }
+        bar.updateBookmark()
+    }
+
     /// Saves the place now if a move is waiting to be saved: an unmoved book keeps the time it was last read (`sync`).
     func savePendingPosition() {
         if saveTimer != nil { savePosition() }
@@ -529,12 +543,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         importQueue.async { [weak self] in
             guard let worker = self?.worker else { return }
             let folder = measuring ? nil : forzac_books_folder(worker, home).map { String(cString: $0) }
-            if folder != nil { _ = forzac_sync(worker) } // the other devices' reading first (`sync`)
+            // The other devices' reading first (`sync`).
+            let moved = folder != nil && forzac_sync(worker) ? Self.moved(worker) : []
             let books = LibraryBook.list(worker)
             DispatchQueue.main.async {
                 guard let self, let state = self.state else { return }
                 self.showingLibrary = false
                 forzac_state_reload(state)
+                if !self.readers.isEmpty { self.synced(moved) }
                 let library = LibraryWindow(state: state, books: books, folder: folder, remembersFrame: !measuring) { [weak self] path in self?.openBook(path) }
                 self.library = library
                 library.onAddFolder = { [weak self] path in self?.importFolder(path) }
@@ -765,21 +781,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func sync() {
         guard worker != nil else { return }
         readers.forEach { $0.savePendingPosition() }
+        let starts = readers.map { ($0, $0.view.locator) }
         importQueue.async { [weak self] in
             guard let worker = self?.worker, forzac_sync(worker) else { return }
-            let moved = Set(String(cString: forzac_synced(worker)).split(separator: "\n").map(String.init))
-            guard !moved.isEmpty else { return }
-            DispatchQueue.main.async {
-                guard let self, let state = self.state else { return }
-                forzac_state_reload(state)
-                for reader in self.readers where moved.contains(String(cString: forzac_book_id(reader.view.doc))) {
-                    var at = reader.view.locator
-                    let here = at
-                    if forzac_state_position(state, reader.view.doc, &at), (at.chapter, at.block, at.offset) != (here.chapter, here.block, here.offset) {
-                        reader.view.go(to: at)
-                    }
-                }
-            }
+            let moved = Self.moved(worker)
+            DispatchQueue.main.async { self?.synced(moved, starts: starts) }
+        }
+    }
+
+    /// The books whose place the last sync on `worker` set.
+    static func moved(_ worker: OpaquePointer) -> Set<String> {
+        Set(String(cString: forzac_synced(worker)).split(separator: "\n").map(String.init))
+    }
+
+    /// After a sync: the state again and the open books' marks; an open book whose place came from another device goes
+    /// there, unless it was moved since the sync began (`starts`).
+    func synced(_ moved: Set<String>, starts: [(Reader, ForzacLocator)] = []) {
+        guard let state else { return }
+        forzac_state_reload(state)
+        for reader in readers {
+            reader.reloadMarks()
+            guard moved.contains(String(cString: forzac_book_id(reader.view.doc))) else { continue }
+            if let start = starts.first(where: { $0.0 === reader })?.1, start != reader.view.locator { continue }
+            var at = reader.view.locator
+            if forzac_state_position(state, reader.view.doc, &at), at != reader.view.locator { reader.view.go(to: at) }
         }
     }
 

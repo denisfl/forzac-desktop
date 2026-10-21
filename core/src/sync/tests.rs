@@ -244,3 +244,77 @@ fn a_copied_state_takes_a_new_id() {
         .count();
     assert_eq!(files, 2, "one file per computer");
 }
+
+#[test]
+fn opening_a_book_does_not_beat_a_later_reading_elsewhere() {
+    let (folder, path, mut a, mut b, book) = setup();
+    b.save_position(&book, &path, at(0, 1, 0), false).unwrap();
+    sync(&folder, &mut b).unwrap();
+    // A reads on (the desktop keeps a place's time in seconds); B opens the book (its place saved again, unmoved) only
+    // after A's reading, then syncs.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    a.save_position(&book, &path, at(1, 2, 0), false).unwrap();
+    sync(&folder, &mut a).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    b.save_position(&book, &path, at(0, 1, 0), false).unwrap();
+    assert_eq!(sync(&folder, &mut b).unwrap(), std::slice::from_ref(&book.id));
+    assert_eq!(b.position(&book, &path), Some(at(1, 2, 0)));
+    sync(&folder, &mut a).unwrap();
+    assert_eq!(a.position(&book, &path), Some(at(1, 2, 0)), "B's old place does not come back");
+}
+
+#[test]
+fn a_highlight_that_cannot_be_shown_is_not_removed() {
+    let (folder, _, _, mut b, book) = setup();
+    // A highlight from another app whose places are nowhere in this book's text: both fall back to one block start.
+    let lost = Place { chapter: 0, block: 1, offset: 0, fragment: "нет такого".into() };
+    let mut text = format!("{HEADER}\ndevice\tffffffffffffffff\tOther\n");
+    let item = Item::Highlight(lost.clone(), Place { offset: 5, ..lost });
+    write_record(&mut text, &Record { book: book.id.clone(), time: 5, deleted: false, item, local: None }, false);
+    std::fs::create_dir_all(folder.join(DIR)).unwrap();
+    std::fs::write(folder.join(DIR).join("ffffffffffffffff.sync"), text).unwrap();
+    sync(&folder, &mut b).unwrap();
+    sync(&folder, &mut b).unwrap();
+    assert!(b.quotes(&book).is_empty());
+    let own =
+        std::fs::read_dir(folder.join(DIR)).unwrap().map(|e| e.unwrap().path()).find(|p| !p.ends_with("ffffffffffffffff.sync")).unwrap();
+    let records = read(&own);
+    assert!(records.iter().any(|r| matches!(r.item, Item::Highlight(..)) && !r.deleted), "kept, not a removal");
+}
+
+#[test]
+fn an_unreadable_own_file_stops_the_sync() {
+    let (folder, _, mut a, _, book) = setup();
+    a.set_bookmarks(&book, &[at(0, 1, 0)]).unwrap();
+    sync(&folder, &mut a).unwrap();
+    let own = folder.join(DIR).join(format!("{}.sync", a.setting(DEVICE).unwrap()));
+    std::fs::remove_file(&own).unwrap();
+    std::fs::create_dir(&own).unwrap(); // not readable as a file
+    assert!(sync(&folder, &mut a).is_err());
+    assert!(own.is_dir(), "not replaced");
+}
+
+#[test]
+fn a_window_saves_only_what_it_changed() {
+    let (_, _, mut a, _, book) = setup();
+    // `other` stands for a sync or another window writing the same state file.
+    let mut other = Store::open(a.path());
+    let base = a.bookmarks(&book);
+    other.change_bookmarks_of(&book.id, &[], &[at(1, 1, 0)]).unwrap();
+    let held = a.change_bookmarks_of(&book.id, &base, &[at(0, 1, 0)]).unwrap();
+    assert_eq!(held, [at(0, 1, 0), at(1, 1, 0)], "the other change is kept");
+    let held = a.change_bookmarks_of(&book.id, &held, &[at(1, 1, 0)]).unwrap();
+    assert_eq!(held, [at(1, 1, 0)]);
+}
+
+#[test]
+fn a_synced_place_does_not_overwrite_a_page_turned_meanwhile() {
+    let (_, path, mut a, _, book) = setup();
+    a.save_position(&book, &path, at(0, 1, 0), false).unwrap();
+    // The sync began at (0, 1, 0); the reader has turned a page since.
+    a.save_position(&book, &path, at(0, 2, 0), false).unwrap();
+    assert!(!a.set_synced_position(&book, &path, at(1, 2, 0), 0.5, 1, Some(at(0, 1, 0))).unwrap());
+    assert_eq!(a.position(&book, &path), Some(at(0, 2, 0)));
+    assert!(a.set_synced_position(&book, &path, at(1, 2, 0), 0.5, 1, Some(at(0, 2, 0))).unwrap());
+    assert_eq!(a.position(&book, &path), Some(at(1, 2, 0)));
+}

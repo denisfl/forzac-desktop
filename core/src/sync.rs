@@ -9,16 +9,24 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::model::{Book, Locator};
 use crate::state::{Edits, Store, escape, unescape};
 
 /// The setting that remembers this device's id.
 pub const DEVICE: &str = "sync.device";
-/// The setting that remembers a digest of what this device last wrote to its own file: another text there means another
-/// installation with the same id (a copied state) wrote it.
+/// The setting that remembers digests of what this device last wrote to its own file (the new text and the one before,
+/// so a crash between the setting and the file is not a copy): another text there means another installation with the
+/// same id (a copied state) wrote it.
 const WRITTEN: &str = "sync.written";
+/// The own file those digests are of: another Books folder's own file may hold another text without being a copy.
+const WRITTEN_PATH: &str = "sync.written.path";
+/// The local field of a highlight that cannot be shown here (its places do not make a range): it neither waits for its
+/// book nor counts as removed.
+const NOT_SHOWN: &str = "-";
+/// Parsing time a sync may spend on new books; the rest wait for the next sync.
+const BUDGET: Duration = Duration::from_secs(1);
 /// The sync folder inside the Books folder.
 pub const DIR: &str = ".forzac";
 const HEADER: &str = "forzac-sync 1";
@@ -259,19 +267,33 @@ fn after(own: &HashMap<(u8, String, String), Record>, key: &(u8, String, String)
     own.get(key).map_or(now, |o| now.max(o.time + 1))
 }
 
-/// Books parsed on demand, by id.
+/// Books parsed on demand, by id, one at a time: the last one stays parsed and failures are remembered. After `BUDGET`
+/// no new book is parsed (the first always is): their places wait for the next sync, so the first sync of a large
+/// library does not hold the library for a minute.
 struct Books {
     paths: HashMap<String, PathBuf>,
-    parsed: HashMap<String, Option<Book>>,
+    last: Option<(String, Option<Book>)>,
+    failed: HashSet<String>,
+    deadline: Instant,
 }
 
 impl Books {
+    fn new(paths: HashMap<String, PathBuf>) -> Books {
+        Books { paths, last: None, failed: HashSet::new(), deadline: Instant::now() + BUDGET }
+    }
+
     fn get(&mut self, id: &str) -> Option<&Book> {
-        if !self.parsed.contains_key(id) {
+        if self.last.as_ref().is_none_or(|(last, _)| last != id) {
+            if self.failed.contains(id) || (self.last.is_some() && Instant::now() > self.deadline) {
+                return None;
+            }
             let book = self.paths.get(id).and_then(|p| crate::open(p).ok());
-            self.parsed.insert(id.to_owned(), book);
+            if book.is_none() {
+                self.failed.insert(id.to_owned());
+            }
+            self.last = Some((id.to_owned(), book));
         }
-        self.parsed.get(id)?.as_ref()
+        self.last.as_ref()?.1.as_ref()
     }
 }
 
@@ -284,11 +306,18 @@ pub fn sync(folder: &Path, store: &mut Store) -> io::Result<Vec<String>> {
     let dir = folder.join(DIR);
     std::fs::create_dir_all(&dir)?;
     let mut own_path = dir.join(format!("{device}.sync"));
-    let mut before = std::fs::read_to_string(&own_path).ok();
-    // Another installation with this id wrote the own file (a copied state): this one takes a new id. A missing or
-    // unreadable file is not a copy.
+    // A missing own file is a new one; an unreadable one (an iCloud placeholder that cannot download) stops the sync
+    // rather than being replaced.
+    let mut before = match std::fs::read_to_string(&own_path) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e),
+    };
+    // Another installation with this id wrote the own file (a copied state): this one takes a new id.
+    let path_text = own_path.to_string_lossy().into_owned();
     if let (Some(text), Some(written)) = (&before, store.setting(WRITTEN))
-        && digest(text) != written
+        && store.setting(WRITTEN_PATH) == Some(path_text.as_str())
+        && !written.split(' ').any(|d| d == digest(text))
     {
         device = new_device(store)?;
         own_path = dir.join(format!("{device}.sync"));
@@ -302,7 +331,8 @@ pub fn sync(folder: &Path, store: &mut Store) -> io::Result<Vec<String>> {
             paths.insert(e.id.clone(), e.path.clone());
         }
     }
-    let mut books = Books { paths, parsed: HashMap::new() };
+    let mut books = Books::new(paths);
+    let positions: HashMap<String, Locator> = store.entries().iter().map(|e| (e.id.clone(), e.position)).collect();
     let now = now();
     local_changes(store, &mut own, &mut books, now);
 
@@ -322,17 +352,20 @@ pub fn sync(folder: &Path, store: &mut Store) -> io::Result<Vec<String>> {
             }
         }
     }
-    let moved = apply(store, &mut own, &mut books, &adopted)?;
+    let moved = apply(store, &mut own, &mut books, &adopted, &positions)?;
 
     let text = serialize(&device, &own);
+    let path_text = own_path.to_string_lossy().into_owned();
     if text != before {
+        // The digests first, the old one kept: a crash before the file is renamed leaves the old text, still ours.
+        store.set_settings(&[(WRITTEN, format!("{} {}", digest(&text), digest(&before))), (WRITTEN_PATH, path_text)])?;
         let part = dir.join(format!(".{device}.sync.part"));
         std::fs::write(&part, &text)?;
         std::fs::rename(&part, &own_path)?;
-    }
-    let written = digest(&text);
-    if store.setting(WRITTEN) != Some(written.as_str()) {
-        store.set_setting(WRITTEN, &written)?;
+    } else if store.setting(WRITTEN).is_none_or(|w| !w.split(' ').any(|d| d == digest(&text)))
+        || store.setting(WRITTEN_PATH) != Some(path_text.as_str())
+    {
+        store.set_settings(&[(WRITTEN, digest(&text)), (WRITTEN_PATH, path_text)])?;
     }
     Ok(moved)
 }
@@ -341,7 +374,10 @@ pub fn sync(folder: &Path, store: &mut Store) -> io::Result<Vec<String>> {
 fn local_changes(store: &Store, own: &mut HashMap<(u8, String, String), Record>, books: &mut Books, now: u64) {
     // Positions: a place applied here that is no longer the book's is a local change; one never applied here (its book
     // was missing) is replaced only by a later reading.
-    for e in store.entries().to_vec() {
+    // The books read last first: if parsing runs out of its budget, the older ones wait.
+    let mut entries = store.entries().to_vec();
+    entries.sort_by_key(|e| std::cmp::Reverse(e.opened));
+    for e in entries {
         let key = (0, e.id.clone(), String::new());
         let read = e.opened.max(1) * 1000;
         let changed = match own.get(&key) {
@@ -368,28 +404,26 @@ fn local_changes(store: &Store, own: &mut HashMap<(u8, String, String), Record>,
         let (have_marks, have_quotes) = (held(1, own), held(2, own));
         for l in marks.iter().filter(|l| !have_marks.contains(l)) {
             if let (Some(at), Some(book)) = (parse_local(l), books.get(id)) {
-                let mut r = Record {
+                let r = Record {
                     book: id.clone(),
                     time: now,
                     deleted: false,
                     item: Item::Bookmark(place_of(book, at)),
                     local: Some(l.clone()),
                 };
-                r.time = after(own, &r.key(), now);
-                own.insert(r.key(), r);
+                add(own, r, &marks);
             }
         }
         for l in quotes.iter().filter(|l| !have_quotes.contains(l)) {
             let pair = l.split_once('-').and_then(|(a, b)| Some((parse_local(a)?, parse_local(b)?)));
             if let (Some((a, b)), Some(book)) = (pair, books.get(id)) {
                 let item = Item::Highlight(place_of(book, a), place_of(book, b));
-                let mut r = Record { book: id.clone(), time: now, deleted: false, item, local: Some(l.clone()) };
-                r.time = after(own, &r.key(), now);
-                own.insert(r.key(), r);
+                add(own, Record { book: id.clone(), time: now, deleted: false, item, local: Some(l.clone()) }, &quotes);
             }
         }
         for r in own.values_mut().filter(|r| r.book == *id && !r.deleted) {
             let gone = match (&r.item, &r.local) {
+                (_, Some(l)) if l == NOT_SHOWN => false,
                 (Item::Bookmark(_), Some(l)) => !marks.contains(l),
                 (Item::Highlight(..), Some(l)) => !quotes.contains(l),
                 _ => false,
@@ -427,6 +461,22 @@ fn local_changes(store: &Store, own: &mut HashMap<(u8, String, String), Record>,
     }
 }
 
+/// Records a new local bookmark or highlight `r`, later than what its key held. When the key is held by a live item at
+/// another local place still in the state (`current`), two places here are one place in the file (past a block's end):
+/// the new one is left out, or the two would swap at every sync.
+fn add(own: &mut HashMap<(u8, String, String), Record>, mut r: Record, current: &[String]) {
+    let key = r.key();
+    if let Some(o) = own.get(&key)
+        && !o.deleted
+        && o.local != r.local
+        && o.local.as_ref().is_some_and(|l| current.contains(l))
+    {
+        return;
+    }
+    r.time = after(own, &key, r.time);
+    own.insert(key, r);
+}
+
 /// Applies to the state the adopted items and the own items that wait for their book; returns the books whose position
 /// it set.
 fn apply(
@@ -434,6 +484,7 @@ fn apply(
     own: &mut HashMap<(u8, String, String), Record>,
     books: &mut Books,
     adopted: &[(u8, String, String)],
+    positions: &HashMap<String, Locator>,
 ) -> io::Result<Vec<String>> {
     let mut moved = Vec::new();
     let waiting: Vec<_> = own
@@ -446,55 +497,61 @@ fn apply(
     let mut keys: Vec<_> = adopted.iter().cloned().chain(waiting).collect();
     keys.sort();
     keys.dedup();
+    // Book by book (one stays parsed), those with the newest items first (parsing has a budget).
+    let mut newest: HashMap<String, u64> = HashMap::new();
+    for key in &keys {
+        let time = own.get(key).map_or(0, |r| r.time);
+        newest.entry(key.1.clone()).and_modify(|t| *t = (*t).max(time)).or_insert(time);
+    }
+    keys.sort_by(|a, b| newest[&b.1].cmp(&newest[&a.1]).then_with(|| a.1.cmp(&b.1)).then_with(|| a.cmp(b)));
     for key in keys {
         let Some(r) = own.get(&key).cloned() else { continue };
         let id = r.book.clone();
         let local_now = match &r.item {
-            Item::Position { place, .. } => {
+            Item::Position { place, progress } => {
+                // A later reading here has already been recorded as a local change, which this item is newer than.
                 let path = books.paths.get(&id).cloned();
                 let Some(book) = books.get(&id) else { continue };
                 let at = locate(book, place);
-                let read_later = store.entries().iter().any(|e| e.id == id && e.opened * 1000 > r.time);
-                if !read_later && let Some(path) = path {
-                    store.set_synced_position(book, &path, at, r.time / 1000)?;
+                // Only over the place the sync started from: a page turned meanwhile wins, and goes out next time.
+                if let Some(path) = path
+                    && store.set_synced_position(book, &path, at, *progress, r.time / 1000, positions.get(&id).copied())?
+                {
                     moved.push(id.clone());
                 }
                 Some(local(at))
             }
+            // One item changed over what the state holds now (a window may have changed it since the sync began).
             Item::Bookmark(place) => {
-                let mut marks = store.bookmarks_of(&id);
                 if r.deleted {
                     if let Some(at) = r.local.as_deref().and_then(parse_local) {
-                        marks.retain(|m| *m != at);
-                        store.set_bookmarks_of(&id, &marks)?;
+                        store.change_bookmarks_of(&id, &[at], &[])?;
                     }
                     r.local.clone()
                 } else {
                     let Some(book) = books.get(&id) else { continue };
                     let at = locate(book, place);
-                    marks.push(at);
-                    store.set_bookmarks_of(&id, &marks)?;
+                    store.change_bookmarks_of(&id, &[], &[at])?;
                     Some(local(at))
                 }
             }
             Item::Highlight(a, b) => {
-                let mut quotes = store.quotes_of(&id);
                 if r.deleted {
                     let pair =
                         r.local.as_deref().and_then(|l| l.split_once('-')).and_then(|(a, b)| Some((parse_local(a)?, parse_local(b)?)));
                     if let Some(pair) = pair {
-                        quotes.retain(|q| *q != pair);
-                        store.set_quotes_of(&id, &quotes)?;
+                        store.change_quotes_of(&id, &[pair], &[])?;
                     }
                     r.local.clone()
                 } else {
                     let Some(book) = books.get(&id) else { continue };
                     let (a, b) = (locate(book, a), locate(book, b));
                     if a < b {
-                        quotes.push((a, b));
-                        store.set_quotes_of(&id, &quotes)?;
+                        store.change_quotes_of(&id, &[], &[(a, b)])?;
+                        Some(local_pair(a, b))
+                    } else {
+                        Some(NOT_SHOWN.to_owned())
                     }
-                    Some(local_pair(a, b))
                 }
             }
             Item::Shelf(name) => {
