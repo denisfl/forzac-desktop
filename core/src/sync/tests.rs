@@ -318,3 +318,49 @@ fn a_synced_place_does_not_overwrite_a_page_turned_meanwhile() {
     assert!(a.set_synced_position(&book, &path, at(1, 2, 0), 0.5, 1, Some(at(0, 2, 0))).unwrap());
     assert_eq!(a.position(&book, &path), Some(at(1, 2, 0)));
 }
+
+#[test]
+fn times_in_words() {
+    crate::i18n::set_language(crate::i18n::Language::English);
+    // 2026-10-21 10:14 UTC, and three hours east of it.
+    let now = 1_792_577_640_000;
+    let hour = 3_600_000;
+    assert_eq!(when(now, now, 0), "today at 10:14");
+    assert_eq!(when(now - 12 * hour, now, 0), "yesterday at 22:14");
+    assert_eq!(when(now - 12 * hour, now, 3 * 3600), "today at 01:14");
+    assert_eq!(when(now - 10 * 24 * hour, now, 0), "11 October at 10:14");
+    assert_eq!(when(now - 300 * 24 * hour, now, 0), "25 December 2025 at 10:14");
+    assert_eq!(civil(0), (1970, 1, 1));
+    assert_eq!(civil(-1), (1969, 12, 31));
+    assert_eq!(civil(20_513), (2026, 3, 1));
+    assert_eq!(civil(20_512), (2026, 2, 28));
+}
+
+#[test]
+fn the_state_line() {
+    crate::i18n::set_language(crate::i18n::Language::English);
+    let now = 1_792_577_640_000;
+    assert_eq!(state_line(None, now, 0), "Not synced yet");
+    assert_eq!(state_line(Some((now, None)), now, 0), "Synced today at 10:14");
+    assert_eq!(state_line(Some((now, Some("Permission denied".into()))), now, 0), "Couldn't sync: Permission denied");
+}
+
+#[test]
+fn the_other_devices_by_their_files() {
+    let folder = dir();
+    let sync = folder.join(DIR);
+    std::fs::create_dir_all(&sync).unwrap();
+    std::fs::write(sync.join("aaaaaaaaaaaaaaaa.sync"), format!("{HEADER}\ndevice\taaaaaaaaaaaaaaaa\tMacBook Air\n")).unwrap();
+    std::fs::write(sync.join("bbbbbbbbbbbbbbbb.sync"), format!("{HEADER}\ndevice\tbbbbbbbbbbbbbbbb\tNothing\\tPhone\n")).unwrap();
+    std::fs::write(sync.join("cccccccccccccccc.sync"), format!("{HEADER}\ndevice\tcccccccccccccccc\t\n")).unwrap();
+    std::fs::write(sync.join("dddddddddddddddd.sync"), "not a sync file\n").unwrap();
+    std::fs::write(sync.join(".eeeeeeeeeeeeeeee.sync.part"), format!("{HEADER}\ndevice\te\tPart\n")).unwrap();
+    // The phone wrote last.
+    let file = std::fs::File::options().write(true).open(sync.join("bbbbbbbbbbbbbbbb.sync")).unwrap();
+    file.set_modified(SystemTime::now() + Duration::from_secs(60)).unwrap();
+    let found = devices(&folder, Some("cccccccccccccccc"));
+    let names: Vec<&str> = found.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(names, ["Nothing\tPhone", "MacBook Air"]);
+    assert_eq!(devices(&folder, None).len(), 3);
+    assert!(devices(&folder.join("missing"), None).is_empty());
+}

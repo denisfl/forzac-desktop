@@ -10,6 +10,15 @@ fn the_language_is_the_first_preferred_one_forzac_has() {
 }
 
 #[test]
+fn the_readers_choice_wins_over_the_systems_languages() {
+    assert_eq!(Language::choose(Some("ru"), ["en_US.UTF-8"]), Language::Russian);
+    assert_eq!(Language::choose(Some("en"), ["ru-RU", "en"]), Language::English);
+    assert_eq!(Language::choose(Some(""), ["ru-RU"]), Language::Russian);
+    assert_eq!(Language::choose(None, ["de", "ru"]), Language::Russian);
+    assert_eq!(Language::choose(Some(Language::Russian.code()), []), Language::Russian);
+}
+
+#[test]
 fn russian_words_and_plurals() {
     assert_eq!(tr_in(Language::Russian, "Highlights"), "Цитаты");
     assert_eq!(tr_in(Language::English, "Highlights"), "Highlights");

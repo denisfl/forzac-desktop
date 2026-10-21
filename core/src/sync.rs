@@ -7,10 +7,12 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
-use std::io;
+use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::i18n::{fill, tr};
 use crate::model::{Book, Locator};
 use crate::state::{Edits, Store, escape, unescape};
 
@@ -232,8 +234,19 @@ fn serialize(device: &str, records: &HashMap<(u8, String, String), Record>) -> S
     out
 }
 
+/// The computer's name for the `device` line, from the shell (`set_device_name`).
+static NAME: OnceLock<String> = OnceLock::new();
+
+/// Names this device in its sync file: the computer's name, as the system shows it.
+pub fn set_device_name(name: &str) {
+    let _ = NAME.set(name.trim().to_owned());
+}
+
 fn device_name() -> String {
-    std::env::var("HOSTNAME").or_else(|_| std::env::var("USER")).unwrap_or_default()
+    match NAME.get().filter(|n| !n.is_empty()) {
+        Some(name) => name.clone(),
+        None => std::env::var("HOSTNAME").or_else(|_| std::env::var("USER")).unwrap_or_default(),
+    }
 }
 
 // endregion
@@ -297,10 +310,19 @@ impl Books {
     }
 }
 
+/// How the last sync of this process ended: when, and its error if it failed (`settings`).
+static LAST: Mutex<Option<(u64, Option<String>)>> = Mutex::new(None);
+
 /// Syncs the state with the sync folder of the Books folder `folder`: finds the state's changes since the last sync,
 /// takes the other devices' newer items, applies them to the state and writes this device's file. Reads books only
 /// when a place must be converted. Returns the books whose position it set.
 pub fn sync(folder: &Path, store: &mut Store) -> io::Result<Vec<String>> {
+    let synced = sync_folder(folder, store);
+    *LAST.lock().unwrap_or_else(|e| e.into_inner()) = Some((now(), synced.as_ref().err().map(io::Error::to_string)));
+    synced
+}
+
+fn sync_folder(folder: &Path, store: &mut Store) -> io::Result<Vec<String>> {
     store.reload();
     let mut device = device(store)?;
     let dir = folder.join(DIR);
@@ -569,6 +591,127 @@ fn apply(
     }
     Ok(moved)
 }
+
+// region What the settings show (`settings`)
+
+/// Another device whose file is in the sync folder: the name on its `device` line and when its file last changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Device {
+    pub name: String,
+    /// Milliseconds since the Unix epoch.
+    pub changed: u64,
+}
+
+/// The devices with a file in the sync folder of the Books folder `folder`, but `own` (this device's id), the latest
+/// first. Reads each file only up to its `device` line.
+pub fn devices(folder: &Path, own: Option<&str>) -> Vec<Device> {
+    let Ok(entries) = std::fs::read_dir(folder.join(DIR)) else { return Vec::new() };
+    let mut devices: Vec<Device> = entries
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            if path.extension().is_none_or(|x| x != "sync") || path.file_stem().and_then(|s| s.to_str()) == own {
+                return None;
+            }
+            let changed = e.metadata().ok()?.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_millis() as u64;
+            Some(Device { name: name_in(&path)?, changed })
+        })
+        .collect();
+    devices.sort_by_key(|d| std::cmp::Reverse(d.changed));
+    devices
+}
+
+/// The name on the `device` line of the sync file at `path`; none when it is not a sync file.
+fn name_in(path: &Path) -> Option<String> {
+    let mut lines = io::BufReader::new(std::fs::File::open(path).ok()?).lines();
+    if lines.next()?.ok()? != HEADER {
+        return None;
+    }
+    let line = lines.next().and_then(Result::ok).unwrap_or_default();
+    let fields: Vec<&str> = line.split('\t').collect();
+    Some(if fields[0] == "device" { fields.get(2).map(|n| unescape(n)).unwrap_or_default() } else { String::new() })
+}
+
+/// What the settings show about syncing, in the interface language.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Status {
+    /// The Books folder.
+    pub folder: Option<PathBuf>,
+    /// "Synced today at 10:14", "Couldn't sync: …" or "Not synced yet".
+    pub state: String,
+    /// The other devices' names and when each last wrote, the latest first.
+    pub devices: Vec<(String, String)>,
+}
+
+/// The settings' sync status, the times in the time zone `offset` seconds east of UTC.
+pub fn status(store: &Store, offset: i64) -> Status {
+    let (folder, now) = (crate::library::remembered_folder(store), now());
+    let devices = folder.as_deref().map(|f| devices(f, store.setting(DEVICE))).unwrap_or_default();
+    let devices = devices
+        .into_iter()
+        .map(|d| {
+            let name = if d.name.is_empty() { tr("Another device").to_owned() } else { d.name };
+            (name, when(d.changed, now, offset))
+        })
+        .collect();
+    let last = LAST.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    Status { folder, state: state_line(last, now, offset), devices }
+}
+
+/// The line for how the last sync ended (`last`: its time and error).
+fn state_line(last: Option<(u64, Option<String>)>, now: u64, offset: i64) -> String {
+    match last {
+        Some((time, None)) => fill(tr("Synced {when}"), &[("when", &when(time, now, offset))]),
+        Some((_, Some(reason))) => fill(tr("Couldn't sync: {reason}"), &[("reason", &reason)]),
+        None => tr("Not synced yet").to_owned(),
+    }
+}
+
+/// `time` (milliseconds since the Unix epoch) in words as of `now`, in the time zone `offset` seconds east of UTC, with
+/// a 24-hour clock: "today at 10:14", "yesterday at 22:10", "21 October at 10:14", "21 October 2025 at 10:14".
+pub fn when(time: u64, now: u64, offset: i64) -> String {
+    let local = |ms: u64| (ms / 1000) as i64 + offset;
+    let (t, day, today) = (local(time), local(time).div_euclid(86_400), local(now).div_euclid(86_400));
+    let clock = format!("{:02}:{:02}", t.rem_euclid(86_400) / 3600, t.rem_euclid(3600) / 60);
+    let date = if day == today {
+        tr("today").to_owned()
+    } else if day + 1 == today {
+        tr("yesterday").to_owned()
+    } else {
+        let months = [
+            tr("January"),
+            tr("February"),
+            tr("March"),
+            tr("April"),
+            tr("May"),
+            tr("June"),
+            tr("July"),
+            tr("August"),
+            tr("September"),
+            tr("October"),
+            tr("November"),
+            tr("December"),
+        ];
+        let ((year, month, d), (this_year, _, _)) = (civil(day), civil(today));
+        let date = format!("{d} {}", months[month as usize - 1]);
+        if year == this_year { date } else { format!("{date} {year}") }
+    };
+    fill(tr("{date} at {time}"), &[("date", &date), ("time", &clock)])
+}
+
+/// The year, month (1–12) and day of the day `days` after 1970-01-01 (the proleptic Gregorian calendar).
+fn civil(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let (era, doe) = (z.div_euclid(146_097), z.rem_euclid(146_097));
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (yoe + era * 400 + i64::from(month <= 2), month, day)
+}
+
+// endregion
 
 #[cfg(test)]
 mod tests;

@@ -24,7 +24,8 @@ order; the library's screens (17–19) are designed after the UX review (`docs/u
 `folder-import`, `library-metadata`, `library-shelves`, `metadata-editing`,
 `books-folder-setting` and `send-to-kindle` (2026-10-20), released in 0.12.0 the same day; `sync-format` and
 `sync-handover` (format: [sync-format.md](sync-format.md); the Android side: `sync-folder`, `sync-clock`), released in
-0.13.0 on 2026-10-21.
+0.13.0 on 2026-10-21. Then `app-settings` (2026-10-21, for 0.14.0): the settings window with the language and syncing,
+as the Android app's.
 
 | # | Change | What | Done when | Size |
 |---|---|---|---|---|

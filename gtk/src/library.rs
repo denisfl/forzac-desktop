@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use forzac_core::i18n::{fill, tr};
+use forzac_core::i18n::{self, fill, tr};
 use forzac_core::library::{self, CoverStyle, View};
 use forzac_core::model::Series;
 use forzac_core::state::{Entry, Store};
@@ -763,10 +763,21 @@ const STATIC_CSS: &str = "
     .forzac-library .about-authors { font-size: 15px; }
     .forzac-library .about-series, .forzac-library .about-details { font-size: 14px; }
     .forzac-library .about-annotation { font-family: 'Literata'; font-size: 15px; line-height: 1.5; }
+    .forzac-library .settings-heading { font-weight: 700; font-size: 15px; margin-top: 12px; }
+    .forzac-library button.sheet-button.small { min-height: 36px; border-radius: 18px; padding: 0 16px; font-size: 14px; }
 ";
 
 /// The "Edit…" form: its sheet, the book, its fields and the parsed book (its own details).
 type EditForm = (gtk::Widget, usize, [gtk::Entry; 5], forzac_core::Book);
+
+/// The settings sheet (`settings`) and what a sync or a change of the Books folder updates in it.
+struct SettingsSheet {
+    sheet: gtk::Widget,
+    folder: gtk::Label,
+    status: gtk::Label,
+    devices: gtk::Box,
+    sync: gtk::Button,
+}
 
 /// The library window and what it shows.
 pub struct Library {
@@ -812,6 +823,8 @@ pub struct Library {
     naming: RefCell<Option<(gtk::Widget, usize, gtk::Entry)>>,
     /// The "Edit…" form while it shows.
     editing: RefCell<Option<EditForm>>,
+    /// The settings while they show.
+    settings: RefCell<Option<SettingsSheet>>,
     /// Covers being loaded or made; `settled` runs when none is left after the first frame.
     pending: Cell<usize>,
     first_frame: Cell<Option<Instant>>,
@@ -949,6 +962,7 @@ impl Library {
             question: RefCell::default(),
             naming: RefCell::default(),
             editing: RefCell::default(),
+            settings: RefCell::default(),
             pending: Cell::new(0),
             first_frame: Cell::new(None),
             settled: RefCell::default(),
@@ -1372,12 +1386,17 @@ impl Library {
         popover.popup();
     }
 
-    /// The head's menu: "Show the Books folder", "Change the Books folder…", "Add a Folder…".
+    /// The head's menu: "Show the Books folder", "Change the Books folder…", "Add a Folder…", then "Settings…".
     fn head_menu(self: &Rc<Self>) {
         let model = gio::Menu::new();
-        model.append(Some(tr("Show the Books folder")), Some("lib.showfolder"));
-        model.append(Some(tr("Change the Books folder…")), Some("lib.changefolder"));
-        model.append(Some(tr("Add a Folder…")), Some("lib.addfolder"));
+        let folders = gio::Menu::new();
+        folders.append(Some(tr("Show the Books folder")), Some("lib.showfolder"));
+        folders.append(Some(tr("Change the Books folder…")), Some("lib.changefolder"));
+        folders.append(Some(tr("Add a Folder…")), Some("lib.addfolder"));
+        model.append_section(None, &folders);
+        let settings = gio::Menu::new();
+        settings.append(Some(tr("Settings…")), Some("lib.settings"));
+        model.append_section(None, &settings);
         let popover = gtk::PopoverMenu::from_model(Some(&model));
         popover.set_parent(&self.head_menu);
         popover.set_has_arrow(false);
@@ -1431,6 +1450,7 @@ impl Library {
             .unwrap_or(Err(forzac_core::Error::Unavailable));
             let Some(l) = weak.upgrade() else { return };
             l.store.borrow_mut().reload();
+            l.read_sync_status();
             let message = match done {
                 Ok((moved, books)) => {
                     *l.folder.borrow_mut() = Some(new);
@@ -1760,6 +1780,170 @@ impl Library {
         backdrop.add_controller(click);
         self.overlay.add_overlay(&backdrop);
         *self.about.borrow_mut() = Some((backdrop.upcast(), book));
+    }
+
+    /// The settings (`settings`): a sheet over the dimmed library with the language and syncing.
+    fn show_settings(self: &Rc<Self>) {
+        if self.settings.borrow().is_some() || self.about.borrow().is_some() || self.question.borrow().is_some() {
+            return;
+        }
+        let backdrop = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        backdrop.add_css_class("backdrop");
+        let sheet = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        sheet.add_css_class("about");
+        sheet.set_valign(gtk::Align::Center);
+        sheet.set_halign(gtk::Align::Center);
+        sheet.set_vexpand(true);
+        sheet.set_size_request((self.window.width() - 48).clamp(280, 520), -1);
+        sheet.append(&label(tr("Settings"), "about-title"));
+
+        sheet.append(&label(tr("Language"), "settings-heading"));
+        // The languages in their own words, whatever the interface's.
+        let language = gtk::DropDown::from_strings(&[tr("As the system"), "English", "Русский"]);
+        let chosen = match self.store.borrow().setting(i18n::SETTING) {
+            Some("en") => 1,
+            Some("ru") => 2,
+            _ => 0,
+        };
+        language.set_selected(chosen);
+        language.set_halign(gtk::Align::Start);
+        let store = self.store.clone();
+        language.connect_selected_notify(move |d| {
+            let code = match d.selected() {
+                1 => i18n::Language::English.code(),
+                2 => i18n::Language::Russian.code(),
+                _ => "",
+            };
+            if let Err(e) = store.borrow_mut().set_setting(i18n::SETTING, code) {
+                eprintln!("cannot save the reading state: {e}");
+            }
+        });
+        sheet.append(&language);
+        sheet.append(&label(tr("Forzac will speak the chosen language after a restart."), "question-body"));
+
+        sheet.append(&label(tr("Sync"), "settings-heading"));
+        sheet.append(&label(
+            tr("Your place, bookmarks, highlights, shelves and book details are the same in Forzac on every computer and phone that shares the Books folder. Keep the folder in sync with Dropbox, iCloud Drive or Syncthing; on Android only Syncthing keeps a folder on the phone."),
+            "question-body",
+        ));
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        row.set_margin_top(4);
+        let column = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        column.set_hexpand(true);
+        column.set_valign(gtk::Align::Center);
+        column.append(&label(tr("Books folder"), "question-body"));
+        let folder = gtk::Label::builder().xalign(0.0).ellipsize(pango::EllipsizeMode::Middle).build();
+        column.append(&folder);
+        row.append(&column);
+        let change = gtk::Button::builder().label(tr("Change…")).focusable(false).valign(gtk::Align::Center).build();
+        change.add_css_class("sheet-button");
+        change.add_css_class("small");
+        row.append(&change);
+        sheet.append(&row);
+        let status = label("", "about-authors");
+        sheet.append(&status);
+        sheet.append(&label(tr("Other devices"), "question-body"));
+        let devices = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        sheet.append(&devices);
+
+        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        buttons.set_homogeneous(true);
+        buttons.set_margin_top(12);
+        let close = gtk::Button::builder().label(tr("Close")).focusable(false).hexpand(true).build();
+        let sync = gtk::Button::builder().label(tr("Sync Now")).focusable(false).hexpand(true).build();
+        close.add_css_class("sheet-button");
+        sync.add_css_class("sheet-button");
+        sync.add_css_class("filled");
+        buttons.append(&close);
+        buttons.append(&sync);
+        sheet.append(&buttons);
+        backdrop.append(&sheet);
+
+        let weak = Rc::downgrade(self);
+        change.connect_clicked(move |_| {
+            if let Some(l) = weak.upgrade() {
+                l.choose_books_folder();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        close.connect_clicked(move |_| {
+            if let Some(l) = weak.upgrade() {
+                l.close_settings();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        sync.connect_clicked(move |_| {
+            if let Some(l) = weak.upgrade() {
+                l.sync_now();
+            }
+        });
+        let click = gtk::GestureClick::new();
+        let (weak, s) = (Rc::downgrade(self), sheet.clone());
+        click.connect_released(move |_, _, x, y| {
+            let inside =
+                s.compute_bounds(&s.parent().unwrap()).is_some_and(|b| b.contains_point(&graphene::Point::new(x as f32, y as f32)));
+            if !inside && let Some(l) = weak.upgrade() {
+                l.close_settings();
+            }
+        });
+        backdrop.add_controller(click);
+        self.overlay.add_overlay(&backdrop);
+        *self.settings.borrow_mut() = Some(SettingsSheet { sheet: backdrop.upcast(), folder, status, devices, sync });
+        self.read_sync_status();
+    }
+
+    fn close_settings(self: &Rc<Self>) {
+        if let Some(settings) = self.settings.borrow_mut().take() {
+            self.overlay.remove_overlay(&settings.sheet);
+        }
+    }
+
+    /// The settings' sync status (`sync::status`), read off the main thread: the other devices' files may be slow.
+    fn read_sync_status(self: &Rc<Self>) {
+        if self.settings.borrow().is_none() {
+            return;
+        }
+        let (state, weak) = (self.store.borrow().path().to_owned(), Rc::downgrade(self));
+        let offset = glib::DateTime::now_local().map_or(0, |d| d.utc_offset().as_seconds());
+        glib::spawn_future_local(async move {
+            let status = gio::spawn_blocking(move || forzac_core::sync::status(&Store::open(state), offset)).await;
+            let (Some(l), Ok(status)) = (weak.upgrade(), status) else { return };
+            let settings = l.settings.borrow();
+            let Some(s) = settings.as_ref() else { return };
+            let path = status.folder.unwrap_or_default();
+            let shown = match path.strip_prefix(glib::home_dir()) {
+                Ok(rest) => Path::new("~").join(rest),
+                Err(_) => path.clone(),
+            };
+            s.folder.set_text(&shown.to_string_lossy());
+            s.folder.set_tooltip_text(Some(&path.to_string_lossy()));
+            s.status.set_text(&status.state);
+            s.sync.set_sensitive(true);
+            while let Some(child) = s.devices.first_child() {
+                s.devices.remove(&child);
+            }
+            for (name, when) in &status.devices {
+                s.devices.append(&label(&format!("{name} · {when}"), "about-authors"));
+            }
+            if status.devices.is_empty() {
+                s.devices.append(&label(tr("None yet"), "about-authors"));
+            }
+        });
+    }
+
+    /// "Sync Now": the sync a book window runs when it is left (`sync`), then the status again.
+    fn sync_now(self: &Rc<Self>) {
+        if let Some(s) = self.settings.borrow().as_ref() {
+            s.status.set_text(tr("Syncing…"));
+            s.sync.set_sensitive(false);
+        }
+        let (state, weak) = (self.store.borrow().path().to_owned(), Rc::downgrade(self));
+        glib::spawn_future_local(async move {
+            let _ = gio::spawn_blocking(move || crate::sync_state(&state)).await;
+            let Some(l) = weak.upgrade() else { return };
+            l.store.borrow_mut().reload();
+            l.read_sync_status();
+        });
     }
 
     /// Closes "About the book"; opens the book when `read`.
@@ -2190,7 +2374,7 @@ impl Library {
                 l.ask_shelf(book as usize);
             }
         });
-        for (name, act) in [("showfolder", 0), ("changefolder", 1), ("addfolder", 2)] {
+        for (name, act) in [("showfolder", 0), ("changefolder", 1), ("addfolder", 2), ("settings", 3)] {
             let action = gio::SimpleAction::new(name, None);
             let weak = Rc::downgrade(self);
             action.connect_activate(move |_, _| {
@@ -2198,7 +2382,8 @@ impl Library {
                 match act {
                     0 => l.show_folder(),
                     1 => l.choose_books_folder(),
-                    _ => l.choose_folder(),
+                    2 => l.choose_folder(),
+                    _ => l.show_settings(),
                 }
             });
             actions.add_action(&action);
@@ -2226,7 +2411,11 @@ impl Library {
             controller.add_shortcut(gtk::Shortcut::new(gtk::ShortcutTrigger::parse_string(trigger), Some(action)));
         };
         let asking = |l: &Rc<Library>| {
-            l.question.borrow().is_some() || l.about.borrow().is_some() || l.naming.borrow().is_some() || l.editing.borrow().is_some()
+            l.question.borrow().is_some()
+                || l.about.borrow().is_some()
+                || l.naming.borrow().is_some()
+                || l.editing.borrow().is_some()
+                || l.settings.borrow().is_some()
         };
         add(
             "h|KP_Left",
@@ -2390,7 +2579,9 @@ impl Library {
             "Escape",
             false,
             Box::new(move |l| {
-                if l.editing.borrow().is_some() {
+                if l.settings.borrow().is_some() {
+                    l.close_settings();
+                } else if l.editing.borrow().is_some() {
                     l.close_edit(None);
                 } else if l.naming.borrow().is_some() {
                     l.name_shelf(false);

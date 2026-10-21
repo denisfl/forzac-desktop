@@ -145,9 +145,6 @@ fn open_book_window(w: &glib::WeakRef<gtk::ApplicationWindow>) -> Option<gtk::Ap
 
 fn main() -> glib::ExitCode {
     let start = Instant::now();
-    // The interface language, from the environment as GLib reads it (`LANGUAGE`, `LC_ALL`, `LC_MESSAGES`, `LANG`).
-    let languages = glib::language_names();
-    forzac_core::i18n::set_language(forzac_core::i18n::Language::from_locales(languages.iter().map(|l| l.as_str())));
     // The Wayland app_id comes from the program name; it must match the .desktop file name for the compositor,
     // docks and `StartupWMClass`-less matching to tie windows to Forzac.
     glib::set_prgname(Some(APP_ID));
@@ -197,6 +194,12 @@ fn main() -> glib::ExitCode {
     // Under X11 the window icon comes from the theme by this name; on Wayland the compositor finds it by app id.
     app.connect_startup(|_| gtk::Window::set_default_icon_name(APP_ID));
     let store: SharedStore = Rc::new(RefCell::new(Store::open(glib::user_data_dir().join("forzac").join("state"))));
+    // The interface language: the reader's choice in the settings, else the environment as GLib reads it (`LANGUAGE`,
+    // `LC_ALL`, `LC_MESSAGES`, `LANG`).
+    let languages = glib::language_names();
+    let setting = store.borrow().setting(forzac_core::i18n::SETTING).map(str::to_owned);
+    forzac_core::i18n::set_language(forzac_core::i18n::Language::choose(setting.as_deref(), languages.iter().map(|l| l.as_str())));
+    forzac_core::sync::set_device_name(&glib::host_name());
     let (opts, st) = (options.clone(), store.clone());
     app.connect_open(move |app, files, _| {
         for file in files {

@@ -395,6 +395,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var showingLibrary = false
     var readers: [Reader] = []
     var library: LibraryWindow?
+    private var settings: SettingsWindow?
     private var checkingUpdate = false
     private var appearance: NSKeyValueObservation?
 
@@ -411,6 +412,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let path = value(after: "--state") ?? support.appendingPathComponent("Forzac/state").path
             state = forzac_state_open(path)
             worker = forzac_state_open(path)
+            // The reader's choice of language first (`settings`), before any window or menu asks for a string.
+            forzac_choose_language(state, Locale.preferredLanguages.joined(separator: ","))
+            forzac_set_device_name(computerName())
         }
         buildMenu()
     }
@@ -646,6 +650,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             DispatchQueue.main.async {
                 guard let self else { return }
                 if let state = self.state { forzac_state_reload(state) }
+                self.readSyncStatus()
                 guard let library = self.library else { return }
                 if changed { library.folderChanged(folder, books: books) }
                 if let message {
@@ -777,15 +782,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     /// Syncs with the other devices (`sync`) after saving the open books' unsaved moves; an open book whose place came
-    /// from another device goes there, keeping the place left for going back.
+    /// from another device goes there, keeping the place left for going back. The settings window shows how it ended.
     func sync() {
         guard worker != nil else { return }
         readers.forEach { $0.savePendingPosition() }
         let starts = readers.map { ($0, $0.view.locator) }
         importQueue.async { [weak self] in
-            guard let worker = self?.worker, forzac_sync(worker) else { return }
-            let moved = Self.moved(worker)
-            DispatchQueue.main.async { self?.synced(moved, starts: starts) }
+            guard let worker = self?.worker else { return }
+            let moved = forzac_sync(worker) ? Self.moved(worker) : nil
+            DispatchQueue.main.async {
+                if let moved { self?.synced(moved, starts: starts) }
+                self?.readSyncStatus()
+            }
+        }
+    }
+
+    /// The settings window (`settings`), or the open one brought forward.
+    func openSettings() {
+        guard let state else { return }
+        if settings == nil {
+            let settings = SettingsWindow(state: state)
+            settings.onChangeFolder = { [weak self] in self?.changeBooksFolder(nil) }
+            settings.onSyncNow = { [weak self] in self?.sync() }
+            settings.onClose = { [weak self] in self?.settings = nil }
+            self.settings = settings
+        }
+        settings?.show()
+        readSyncStatus()
+    }
+
+    /// The settings window's sync status, read on the background queue (the other devices' files may be slow to read).
+    private func readSyncStatus() {
+        guard settings != nil else { return }
+        let offset = Int32(TimeZone.current.secondsFromGMT())
+        importQueue.async { [weak self] in
+            guard let worker = self?.worker else { return }
+            let text = String(cString: forzac_sync_status(worker, offset))
+            DispatchQueue.main.async { self?.settings?.update(text) }
         }
     }
 
@@ -824,7 +857,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    @objc func showSettings(_ sender: Any?) { key?.run(.settings) }
+    /// Forzac › Settings… (`⌘,`): the reader's "Aa" in a book window, else the settings window.
+    @objc func showSettings(_ sender: Any?) {
+        if let reader = readers.first(where: { $0.window.isKeyWindow }) { reader.run(.settings) } else { openSettings() }
+    }
     @objc func showContents(_ sender: Any?) { key?.run(.contents) }
     @objc func showBookmarks(_ sender: Any?) { key?.run(.bookmarks) }
     @objc func showHighlights(_ sender: Any?) { key?.run(.highlights) }

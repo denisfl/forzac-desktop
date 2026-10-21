@@ -1294,11 +1294,15 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
 
     private func chooseFile() { (NSApp.delegate as? AppDelegate)?.openDocument(nil) }
 
-    /// The head's menu: "Show the Books folder", "Change the Books folder…", "Add a Folder…".
+    /// The head's menu: "Show the Books folder", "Change the Books folder…", "Add a Folder…", then "Settings…".
     private func headMenu() {
         let menu = NSMenu()
         for (title, action) in [(tr("Show the Books folder"), #selector(menuShowFolder(_:))), (tr("Change the Books folder…"), #selector(menuChangeFolder(_:))),
-                                (tr("Add a Folder…"), #selector(menuAddFolder(_:)))] {
+                                (tr("Add a Folder…"), #selector(menuAddFolder(_:))), ("", nil), (tr("Settings…"), #selector(menuSettings(_:)))] {
+            guard let action else {
+                menu.addItem(.separator())
+                continue
+            }
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self
             menu.addItem(item)
@@ -1309,6 +1313,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     @objc private func menuShowFolder(_ sender: Any?) { showFolder() }
     @objc private func menuChangeFolder(_ sender: Any?) { chooseBooksFolder() }
     @objc private func menuAddFolder(_ sender: Any?) { (NSApp.delegate as? AppDelegate)?.addFolder(nil) }
+    @objc private func menuSettings(_ sender: Any?) { (NSApp.delegate as? AppDelegate)?.openSettings() }
 
     /// "Change the Books folder…": the folder panel, then "Move the books…?" (Move, Leave them, Cancel).
     func chooseBooksFolder() {

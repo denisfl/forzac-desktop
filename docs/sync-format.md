@@ -26,6 +26,8 @@ shelf	<book>	<time>	<deleted>	<name>
 edit	<book>	<time>	<title>	<authors>	<series>	<number>	<genres>
 ```
 
+- `device`: the file's device id and a name for people — the computer's name (macOS: as in Sharing settings; Linux:
+  the host name), the phone's on Android; the settings list the other devices by it.
 - `<book>`: the book's id — the first 16 bytes of the SHA-256 of its file, 32 lowercase hex digits (both apps already
   name books so).
 - `<time>`: when the item last changed, milliseconds since the Unix epoch.

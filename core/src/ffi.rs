@@ -1365,6 +1365,46 @@ pub unsafe extern "C" fn forzac_set_language(locales: *const c_char) {
     crate::i18n::set_language(crate::i18n::Language::from_locales(locales.split(',').map(str::trim)));
 }
 
+/// Sets the interface language: the reader's choice kept in `state`, else the first of the preferred languages, comma
+/// separated, preferred first (`ru-RU,en`).
+///
+/// # Safety
+/// `state` from [`forzac_state_open`]; `locales` a valid NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_choose_language(state: *const State, locales: *const c_char) {
+    let (state, locales) = (unsafe { &*state }, unsafe { str(locales) });
+    let setting = state.store.setting(crate::i18n::SETTING);
+    crate::i18n::set_language(crate::i18n::Language::choose(setting, locales.split(',').map(str::trim)));
+}
+
+/// The reader's choice of language in the settings: 0 as the system, 1 English, 2 Russian.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_language_choice(state: *const State) -> u32 {
+    match unsafe { &*state }.store.setting(crate::i18n::SETTING) {
+        Some("en") => 1,
+        Some("ru") => 2,
+        _ => 0,
+    }
+}
+
+/// Keeps the reader's choice of language (as [`forzac_language_choice`] returns it); false when the state cannot be
+/// written. It takes effect at the next start.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_set_language_choice(state: *mut State, choice: u32) -> bool {
+    let code = match choice {
+        1 => crate::i18n::Language::English.code(),
+        2 => crate::i18n::Language::Russian.code(),
+        _ => "",
+    };
+    unsafe { &mut *state }.store.set_setting(crate::i18n::SETTING, code).is_ok()
+}
+
 /// A static string as a C string, made once.
 fn c_static(s: &'static str) -> *const c_char {
     static STRINGS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<&'static str, CString>>> = std::sync::OnceLock::new();
@@ -1587,6 +1627,8 @@ pub struct State {
     shelf_names: CString,
     /// The books whose position the last sync set, one id a line.
     synced: CString,
+    /// The settings' sync status, as last returned.
+    status: CString,
 }
 
 /// A book of the library.
@@ -1659,6 +1701,7 @@ pub unsafe extern "C" fn forzac_state_open(path: *const c_char) -> *mut State {
         notice: CString::default(),
         message: CString::default(),
         synced: CString::default(),
+        status: CString::default(),
         shelf_names: CString::default(),
         path: CString::default(),
     }))
@@ -1834,6 +1877,34 @@ pub unsafe extern "C" fn forzac_sync(state: *mut State) -> bool {
     let moved = crate::library::remembered_folder(&state.store).map(|folder| crate::sync::sync(&folder, &mut state.store));
     state.synced = cstring(&moved.as_ref().and_then(|m| m.as_ref().ok()).map(|ids| ids.join("\n")).unwrap_or_default());
     matches!(moved, Some(Ok(_)))
+}
+
+/// Names this computer in its sync file (`sync::set_device_name`), at start.
+///
+/// # Safety
+/// `name` must be a valid NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_set_device_name(name: *const c_char) {
+    crate::sync::set_device_name(&unsafe { str(name) });
+}
+
+/// The settings' sync status (`sync::status`), the times in the time zone `offset` seconds east of UTC, as lines: the
+/// Books folder (empty when none), the state line, then each other device as `name\twhen`, the latest first. Valid
+/// until the next call on `state`; reads the other devices' files, so off the main thread.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_sync_status(state: *mut State, offset: i32) -> *const c_char {
+    let state = unsafe { &mut *state };
+    let status = crate::sync::status(&state.store, offset.into());
+    let line = |s: &str| s.replace(['\n', '\t'], " ");
+    let mut text = format!("{}\n{}", line(&status.folder.unwrap_or_default().to_string_lossy()), line(&status.state));
+    for (name, when) in &status.devices {
+        text.push_str(&format!("\n{}\t{}", line(name), when));
+    }
+    state.status = cstring(&text);
+    state.status.as_ptr()
 }
 
 /// The books whose position the last [`forzac_sync`] on `state` set, one id a line; valid until the next call on `state`.

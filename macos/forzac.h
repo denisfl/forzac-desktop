@@ -328,6 +328,16 @@ const char *forzac_send_to_kindle(ForzacState *state, const char *path, const ch
 bool forzac_sync(ForzacState *state);
 // The books whose position the last forzac_sync on `state` set, one id a line; valid until the next call on `state`.
 const char *forzac_synced(const ForzacState *state);
+// The settings (settings): the computer's name for the sync file (at start); the sync status as lines — the Books
+// folder (empty: none), the state line, then "name\twhen" per other device, the latest first — with times in the zone
+// `offset` seconds east of UTC, valid until the next call on `state` (reads the folder: on the background queue).
+void forzac_set_device_name(const char *name);
+const char *forzac_sync_status(ForzacState *state, int32_t offset);
+// The reader's choice of language kept in the state: 0 as the system, 1 English, 2 Russian; it takes effect when
+// forzac_choose_language runs at the next start (the choice, else the preferred languages as forzac_set_language).
+uint32_t forzac_language_choice(const ForzacState *state);
+bool forzac_set_language_choice(ForzacState *state, uint32_t choice);
+void forzac_choose_language(const ForzacState *state, const char *locales);
 
 // The library: search rank (lower first, -1 no match), generated covers, the empty state's sample page (lines: head,
 // title, subtitle, folio, paragraphs; valid for good).

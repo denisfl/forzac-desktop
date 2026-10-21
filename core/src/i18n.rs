@@ -1,6 +1,6 @@
 //! The interface in English and Russian (`localization`): one catalogue for both shells, keyed by the English text,
-//! in the Android app's words (`values/strings.xml`, `values-ru/strings.xml`). The language is chosen once, at start,
-//! from the system's preferred languages.
+//! in the Android app's words (`values/strings.xml`, `values-ru/strings.xml`). The language is chosen once, at start:
+//! the reader's choice in the settings, else the system's preferred languages.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -14,7 +14,23 @@ pub enum Language {
 
 static LANGUAGE: AtomicU8 = AtomicU8::new(Language::English as u8);
 
+/// The state's setting with the reader's choice of language (`settings`): `en`, `ru`, or empty or none for the system's.
+pub const SETTING: &str = "language";
+
 impl Language {
+    /// The language's code as `SETTING` keeps it.
+    pub fn code(self) -> &'static str {
+        match self {
+            Language::English => "en",
+            Language::Russian => "ru",
+        }
+    }
+
+    /// The reader's choice (`SETTING`'s value), else the first of the system's `locales` that Forzac has.
+    pub fn choose<'a>(setting: Option<&'a str>, locales: impl IntoIterator<Item = &'a str>) -> Language {
+        Language::from_locales(setting.into_iter().filter(|s| !s.is_empty()).chain(locales))
+    }
+
     /// The first of `locales` (preferred first, such as `ru_RU.UTF-8`, `ru-RU`, `en`) that Forzac has; English when none.
     pub fn from_locales<'a>(locales: impl IntoIterator<Item = &'a str>) -> Language {
         for locale in locales {
@@ -574,6 +590,41 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Minimize", "Свернуть"),
     ("Help", "Справка"),
     ("Keys", "Клавиши"),
+    // The settings (`settings`).
+    ("Settings", "Настройки"),
+    ("Language", "Язык"),
+    ("As the system", "Как в\u{a0}системе"),
+    ("Forzac will speak the chosen language after a restart.", "Форзац заговорит на\u{a0}выбранном языке после перезапуска."),
+    ("Sync", "Синхронизация"),
+    (
+        "Your place, bookmarks, highlights, shelves and book details are the same in Forzac on every computer and phone that shares the Books folder. Keep the folder in sync with Dropbox, iCloud Drive or Syncthing; on Android only Syncthing keeps a folder on the phone.",
+        "Место чтения, закладки, цитаты, полки и\u{a0}правки книг\u{a0}— одни и\u{a0}те\u{a0}же в\u{a0}Форзаце на\u{a0}всех компьютерах и\u{a0}телефонах с\u{a0}общей папкой «Книги». Синхронизируйте папку через Dropbox, iCloud Drive или Syncthing; на\u{a0}Android папку на\u{a0}телефоне держит только Syncthing.",
+    ),
+    ("Books folder", "Папка «Книги»"),
+    ("Change…", "Сменить…"),
+    ("Syncing…", "Синхронизация…"),
+    ("Synced {when}", "Синхронизировано {when}"),
+    ("Couldn't sync: {reason}", "Не\u{a0}удалось синхронизировать: {reason}"),
+    ("Not synced yet", "Ещё не\u{a0}синхронизировано"),
+    ("Other devices", "Другие устройства"),
+    ("Another device", "Другое устройство"),
+    ("None yet", "Пока нет"),
+    ("Sync Now", "Синхронизировать сейчас"),
+    ("today", "сегодня"),
+    ("yesterday", "вчера"),
+    ("{date} at {time}", "{date} в\u{a0}{time}"),
+    ("January", "января"),
+    ("February", "февраля"),
+    ("March", "марта"),
+    ("April", "апреля"),
+    ("May", "мая"),
+    ("June", "июня"),
+    ("July", "июля"),
+    ("August", "августа"),
+    ("September", "сентября"),
+    ("October", "октября"),
+    ("November", "ноября"),
+    ("December", "декабря"),
 ];
 
 /// English "other" form → Russian one, few, many.
