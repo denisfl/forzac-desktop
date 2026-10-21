@@ -228,7 +228,7 @@ fn errors_and_previews_through_the_c_functions() {
         assert!(forzac_open(c("/nonexistent/book.fb2").as_ptr(), &mut error).is_null());
         assert_eq!(error, 5, "unavailable");
         let path = book_file().with_file_name("photo.png");
-        std::fs::write(&path, b"\x89PNG not a book").unwrap();
+        std::fs::write(&path, b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR not a book").unwrap();
         assert!(forzac_open(c(path.to_str().unwrap()).as_ptr(), &mut error).is_null());
         assert_eq!(error, 1, "not a book");
 
@@ -426,7 +426,7 @@ fn the_books_folder_through_the_c_functions() {
         other.push(b' ');
         std::fs::write(home.join("Books/new.fb2"), other).unwrap();
         let photo = path.with_file_name("photo.jpg");
-        std::fs::write(&photo, b"\xff\xd8 not a book").unwrap();
+        std::fs::write(&photo, b"\xff\xd8\xff\xe0\0\x10JFIF\0 not a book").unwrap();
         assert!(forzac_import(worker, c(photo.to_str().unwrap()).as_ptr(), &mut error).is_null());
         assert_eq!(error, 1);
         let mut n = 0;
@@ -453,7 +453,7 @@ fn adding_a_folder_through_the_c_functions() {
     let (home, src) = (root.join("home"), root.join("old"));
     std::fs::create_dir_all(src.join("sub")).unwrap();
     std::fs::copy(&path, src.join("sub/book.fb2")).unwrap();
-    std::fs::write(src.join("broken.fb2"), b"not a book").unwrap();
+    std::fs::write(src.join("broken.fb2"), b"\0 not a book").unwrap();
     unsafe {
         let state = forzac_state_open(c(root.join("state").to_str().unwrap()).as_ptr());
         let mut calls: Vec<(u32, u32)> = Vec::new();

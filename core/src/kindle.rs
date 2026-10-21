@@ -181,6 +181,7 @@ impl Writer<'_> {
             }
             Block::Paragraph { text, kind } => match kind {
                 Kind::Body => self.paragraph("height=\"0pt\" width=\"2em\" align=\"justify\"", text, ("", "")),
+                Kind::ListItem(_) => self.paragraph("height=\"0pt\" width=\"0pt\" align=\"left\"", text, ("", "")),
                 Kind::Epigraph => {
                     self.out.push_str("<blockquote height=\"0pt\" width=\"0pt\" align=\"left\"><i>");
                     self.styled(text);

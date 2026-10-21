@@ -1176,7 +1176,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         show.isHidden = folder == nil
         let rule = LayerView()
         rule.layer!.backgroundColor = color(palette.line)
-        let formats = wrapping(tr("FB2, FB2.ZIP, FB3 and EPUB are supported."), interfaceFont(14), palette.muted)
+        let formats = wrapping(tr("FB2, FB2.ZIP, FB3, EPUB, TXT and Markdown are supported."), interfaceFont(14), palette.muted)
         let page = SamplePageView(palette: palette)
         body = [heading, lead, button, hint, show, rule, formats, page]
         body.forEach { $0.translatesAutoresizingMaskIntoConstraints = true; content.addSubview($0) }

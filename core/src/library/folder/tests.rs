@@ -198,7 +198,7 @@ fn a_failed_copy_leaves_nothing() {
     let home = home();
     let mut s = store(&home);
     let src = write(&home.join("oz.fb2"), &fb2("Oz", "", "oz"));
-    let photo = write(&home.join("photo.jpg"), b"\xff\xd8\xff not a book");
+    let photo = write(&home.join("photo.jpg"), b"\xff\xd8\xff\xe0\0\x10JFIF\0 not a book");
     let folder = home.join("Books");
     std::fs::create_dir_all(&folder).unwrap();
     assert_eq!(import(&photo, &folder, &mut s), Err(crate::Error::NotABook));
@@ -392,6 +392,27 @@ fn adding_the_home_folder_skips_the_books_folder() {
     assert_eq!(book_files(&home, &folder), [home.join("Downloads/Out.fb2")]);
     assert_eq!(import_folder(&home, &folder, &mut s, |_, _| {}), Added { added: 1, known: 0, failed: 0 });
     assert_eq!(names(&folder), ["In.fb2", "Out.fb2"]);
+}
+
+#[test]
+fn text_books_in_the_folder_but_not_gathered_from_one() {
+    let home = home();
+    let mut s = store(&home);
+    let folder = books_folder(&home, Language::English, &mut s).unwrap();
+    write(&folder.join("ответ.md"), "## Коротко\n\nТекст.\n".as_bytes());
+    write(&folder.join("Shopping.TXT"), b"Buy milk.\nCall mum.\n");
+    write(&folder.join("photo.txt"), b"\xff\xd8\xff\xe0\0\x10JFIF\0");
+    assert_eq!(titles(&scan(&folder, &mut s)), ["Shopping", "ответ"], "titled by their names; a photo named .txt ignored");
+
+    write(&home.join("Downloads/answer"), "# Answer\n\n| a | b |\n|---|---|\n".as_bytes());
+    write(&home.join("Downloads/notes"), b"Plain lines.\nAnother.\n");
+    let opened = import(&home.join("Downloads/answer"), &folder, &mut s).unwrap();
+    assert_eq!(opened.file_name().unwrap(), "Answer.md", "no extension: by the content");
+    assert_eq!(import(&home.join("Downloads/notes"), &folder, &mut s).unwrap().file_name().unwrap(), "notes.txt");
+
+    write(&home.join("Old/README.md"), b"# Read me\n");
+    write(&home.join("Old/War.fb2"), &fb2("War", "", "war"));
+    assert_eq!(book_files(&home.join("Old"), &folder), [home.join("Old/War.fb2")], "not every README and log of a folder");
 }
 
 #[cfg(unix)]

@@ -38,5 +38,5 @@ shasum -a 256 -c --ignore-missing SHA256SUMS
 
 It prints `OK` when the file is the one published here.
 
-Forzac opens FB2 (`.fb2`, `.fb2.zip`), FB3 and EPUB books: double-click a book after choosing Forzac in Finder's
+Forzac opens FB2 (`.fb2`, `.fb2.zip`), FB3, EPUB, TXT and Markdown (`.md`) books: double-click a book after choosing Forzac in Finder's
 **Get Info › Open with › Change All…**, drop books on the Dock icon, or press `⌘O`.

@@ -432,7 +432,7 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Reading a book", "Чтение книги"),
     // Opening books.
     ("Couldn't open “{name}”: {reason}", "Не удалось открыть «{name}»: {reason}"),
-    ("unsupported format — FB2, FB3 or EPUB needed", "формат не поддерживается — нужен FB2, FB3 или EPUB"),
+    ("unsupported format — FB2, FB3, EPUB, TXT or Markdown needed", "формат не поддерживается — нужен FB2, FB3, EPUB, TXT или Markdown"),
     ("the file is damaged", "файл повреждён"),
     ("the book is DRM-protected and can't be opened", "книга защищена (DRM) — такие файлы открыть нельзя"),
     ("the book has no text", "в книге нет текста"),
@@ -450,7 +450,7 @@ const RUSSIAN: &[(&str, &str)] = &[
     ),
     ("or drop a file into this window", "или перетащите файл в\u{a0}это окно"),
     ("Show the Books folder", "Показать папку «Книги»"),
-    ("FB2, FB2.ZIP, FB3 and EPUB are supported.", "Поддерживаются FB2, FB2.ZIP, FB3 и\u{a0}EPUB."),
+    ("FB2, FB2.ZIP, FB3, EPUB, TXT and Markdown are supported.", "Поддерживаются FB2, FB2.ZIP, FB3, EPUB, TXT и\u{a0}Markdown."),
     ("Release the file to open it", "Отпустите файл, чтобы открыть"),
     ("Add a Folder…", "Добавить папку…"),
     ("Adding books… {n} of {m}", "Добавляю книги… {n} из\u{a0}{m}"),

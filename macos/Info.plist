@@ -36,6 +36,13 @@
       <key>LSItemContentTypes</key><array><string>org.gribuser.fictionbook</string><string>ru.litres.fb3</string></array>
     </dict>
     <dict>
+      <!-- Text and Markdown (markdown-txt): offered in "Open With", never taking them over from editors. -->
+      <key>CFBundleTypeName</key><string>Text</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key><array><string>public.plain-text</string><string>net.daringfireball.markdown</string></array>
+    </dict>
+    <dict>
       <!-- .fb2.zip is a zip to macOS: Forzac is offered in "Open With" without taking zips over. -->
       <key>CFBundleTypeName</key><string>Zipped FictionBook</string>
       <key>CFBundleTypeRole</key><string>Viewer</string>
@@ -45,6 +52,12 @@
   </array>
   <key>UTImportedTypeDeclarations</key>
   <array>
+    <dict>
+      <key>UTTypeIdentifier</key><string>net.daringfireball.markdown</string>
+      <key>UTTypeDescription</key><string>Markdown</string>
+      <key>UTTypeConformsTo</key><array><string>public.plain-text</string></array>
+      <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>md</string><string>markdown</string></array><key>public.mime-type</key><array><string>text/markdown</string></array></dict>
+    </dict>
     <dict>
       <key>UTTypeIdentifier</key><string>org.gribuser.fictionbook</string>
       <key>UTTypeDescription</key><string>FictionBook</string>

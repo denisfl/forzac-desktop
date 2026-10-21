@@ -518,7 +518,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Says why `path` cannot be opened (`code` as `forzac_open` gives it); then, when no book is open, the library.
     private func cannotOpen(_ path: String, _ code: UInt32) {
         // In the Android app's words, without PDF.
-        let reason = [1: tr("unsupported format — FB2, FB3 or EPUB needed"), 2: tr("the book has no text"),
+        let reason = [1: tr("unsupported format — FB2, FB3, EPUB, TXT or Markdown needed"), 2: tr("the book has no text"),
                       3: tr("the book is DRM-protected and can't be opened"), 4: tr("the file is damaged"), 5: tr("the file is unavailable")][code] ?? tr("the file is damaged")
         let message = fill(tr("Couldn't open “{name}”: {reason}"), ["name": URL(fileURLWithPath: path).lastPathComponent, "reason": reason])
         fputs(message + "\n", stderr)

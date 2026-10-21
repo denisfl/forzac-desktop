@@ -312,6 +312,9 @@ struct Spec {
     space_before: f32,
     space_after: f32,
     indent: bool,
+    /// How far lines after the first start right of the first: a list item's wrapped lines under its text, not its
+    /// marker.
+    hang: f32,
     keep_with_next: bool,
     italic: bool,
     bold: bool,
@@ -373,6 +376,7 @@ impl Typesetter {
             space_before: 0.0,
             space_after: 0.0,
             indent: false,
+            hang: 0.0,
             keep_with_next: false,
             italic: false,
             bold: false,
@@ -468,6 +472,14 @@ impl Typesetter {
                         scale: 0.85,
                         ..base
                     },
+                    // As on Android: ragged right, no first-line indent, a nested item further right (four levels at
+                    // most), wrapped lines under the text after the marker.
+                    Kind::ListItem(level) => {
+                        let x = (*level).min(MAX_LIST_LEVEL) as f32 * self.style.text_size * 1.5;
+                        let marker = text.text.find(' ').map_or(0, |at| at + 1);
+                        let hang = self.width_of(self.font_of(Face::Regular), &text.text[..marker], self.style.text_size);
+                        Spec { width: w - x, x, hang, group: Group::Kind(Kind::ListItem(0)), space_before: half, space_after: half, ..base }
+                    }
                 };
                 Some(self.make(text, spec))
             }
@@ -513,7 +525,7 @@ impl Typesetter {
         let segments = segments(text, size, spec.italic, spec.bold, spec.mono);
         let indent = if spec.indent { self.style.text_size * 1.5 } else { 0.0 };
         let (items, meta, pieces) = self.items(&text.text, &segments, indent, spec.justify, spec.hyphenate, spec.mono);
-        let breaks = knuth_plass::break_lines(&items, |_| spec.width);
+        let breaks = knuth_plass::break_lines(&items, |line| if line == 0 { spec.width } else { spec.width - spec.hang });
         let (lines, starts) = self.lines(&items, &meta, &pieces, &segments, &breaks, spec);
 
         let line_height = (size * self.style.line_height * spec.line_scale).floor();
@@ -721,7 +733,7 @@ impl Typesetter {
                 s += 1;
             }
             let mut line = Line::default();
-            let mut x = 0.0;
+            let mut x = if n == 0 { 0.0 } else { spec.hang };
             let mut line_start = None;
             for k in s..br.index {
                 match (items[k], meta[k]) {
@@ -784,6 +796,9 @@ enum Cut {
     /// Between Chinese or Japanese characters.
     Ideographic,
 }
+
+/// Deeper list items are not moved further right: a narrow window would leave no room for their text.
+const MAX_LIST_LEVEL: u32 = 4;
 
 /// Characters that may not start a line (closing punctuation, small kana, the prolonged sound mark).
 const NO_LINE_START: &str =

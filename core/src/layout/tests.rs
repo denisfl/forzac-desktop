@@ -513,3 +513,26 @@ fn foot_with_book_pages() {
     let old = format!("2 / {} · {}%", ch.pages.len(), (ch.progress(1) * 100.0).round() as u32);
     assert_eq!(foot(&ch.render_numbered(1, &style, &mut t, Some(&other))), t.shaper.shape(font, &old).len());
 }
+
+#[test]
+fn list_items_hang_under_their_text() {
+    let style = PageStyle::for_window(600.0, 900.0, 20.0);
+    let mut t = typesetter(style);
+    let item =
+        |level: u32| Block::Paragraph { text: StyledText { text: format!("1. {TEXT}"), styles: vec![] }, kind: Kind::ListItem(level) };
+    let b = book(vec![item(0), item(1), item(9)]);
+    let top = t.layout(&b.chapters[0].blocks[0], &b).unwrap();
+    let lines = &text_of(&top).lines;
+    assert!(lines.len() >= 2);
+    let first = lines[0].runs[0].positions[0][0];
+    let second = lines[1].runs[0].positions[0][0];
+    assert!(first.abs() < 0.01, "the marker at the edge, no first-line indent: {first}");
+    let marker = t.width_of(t.font_of(Face::Regular), "1. ", 20.0);
+    assert!((second - marker).abs() < 0.5, "wrapped lines under the text: {second} vs {marker}");
+    assert_eq!(top.x, 0.0);
+    let nested = t.layout(&b.chapters[0].blocks[1], &b).unwrap();
+    assert!((nested.x - 30.0).abs() < 0.01, "a level further right by 1.5 em");
+    let deep = t.layout(&b.chapters[0].blocks[2], &b).unwrap();
+    assert!((deep.x - 4.0 * 30.0).abs() < 0.01, "at most four levels");
+    assert_eq!(top.group, nested.group, "items of one list go without spacing between them");
+}

@@ -257,7 +257,7 @@ fn main() -> glib::ExitCode {
 /// Why a file cannot be read, in the Android app's words (without PDF).
 fn reason(e: forzac_core::Error) -> &'static str {
     match e {
-        forzac_core::Error::NotABook => tr("unsupported format — FB2, FB3 or EPUB needed"),
+        forzac_core::Error::NotABook => tr("unsupported format — FB2, FB3, EPUB, TXT or Markdown needed"),
         forzac_core::Error::Damaged => tr("the file is damaged"),
         forzac_core::Error::Protected => tr("the book is DRM-protected and can't be opened"),
         forzac_core::Error::NoText => tr("the book has no text"),

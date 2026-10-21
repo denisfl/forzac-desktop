@@ -15,6 +15,7 @@ pub mod knuth_plass;
 mod language;
 pub mod layout;
 pub mod library;
+mod markdown;
 pub mod model;
 pub mod quotes;
 pub mod search;
@@ -22,6 +23,7 @@ pub mod selection;
 pub mod settings;
 pub mod state;
 pub mod sync;
+mod text;
 mod typography;
 pub mod update;
 mod xml;
@@ -48,15 +50,20 @@ pub enum Error {
     Unavailable,
 }
 
-/// Reads and parses a book file: FB2 (`.fb2`, `.fb2.zip`), FB3 or EPUB, whatever its name says.
+/// Reads and parses a book file: FB2 (`.fb2`, `.fb2.zip`), FB3, EPUB, plain text or Markdown, whatever its name says.
+/// A book without a title is titled by the file's name ([`library::file_title`]).
 pub fn open(path: &std::path::Path) -> Result<Book, Error> {
     let bytes = std::fs::read(path).map_err(|_| Error::Unavailable)?;
-    parse(&bytes)
+    let mut book = parse(&bytes)?;
+    if book.title.trim().is_empty() {
+        book.title = library::file_title(&path.file_name().unwrap_or_default().to_string_lossy());
+    }
+    Ok(book)
 }
 
 /// Parses a book, the format decided by the content: a zip with `META-INF/container.xml` is EPUB, a zip with a
-/// FictionBook 3 relationship is FB3, anything else is tried as FB2. A book that names no language gets one from
-/// its text.
+/// FictionBook 3 relationship is FB3, anything else is tried as FB2, then as text (plain or Markdown, `text`). A book
+/// that names no language gets one from its text.
 pub fn parse(bytes: &[u8]) -> Result<Book, Error> {
     let mut book = parse_format(bytes)?;
     book.id = state::book_id(bytes);
@@ -77,7 +84,10 @@ fn parse_format(bytes: &[u8]) -> Result<Book, Error> {
             return fb3::read(&files);
         }
     }
-    fb2::parse(bytes)
+    match fb2::parse(bytes) {
+        Err(Error::NotABook) if text::is_text(bytes) => text::parse(bytes),
+        result => result,
+    }
 }
 
 #[cfg(test)]
@@ -87,6 +97,6 @@ mod tests {
         use crate::Error;
         assert_eq!(crate::open(std::path::Path::new("/nonexistent/book.fb2")).err(), Some(Error::Unavailable));
         assert_eq!(crate::parse(b"PK\x03\x04 broken archive").err(), Some(Error::Damaged));
-        assert_eq!(crate::parse(b"\x89PNG not a book").err(), Some(Error::NotABook));
+        assert_eq!(crate::parse(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR not a book").err(), Some(Error::NotABook));
     }
 }

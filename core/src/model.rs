@@ -284,6 +284,9 @@ pub enum Kind {
     TextAuthor,
     /// Preformatted text: line breaks and spaces are kept.
     Code,
+    /// A list item (Markdown): its text starts with the marker and a space ("• ", "1. ", "☐ ", "☑ " for an open and a
+    /// done task), so search, quotes and `Locator` count it; the number is its nesting, 0 at the top.
+    ListItem(u32),
 }
 
 /// Plain text plus style ranges. Ranges are byte offsets into `text`, always on char boundaries.

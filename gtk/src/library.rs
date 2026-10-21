@@ -2031,7 +2031,7 @@ impl Library {
             });
             text.append(&show);
         }
-        let formats = label(tr("FB2, FB2.ZIP, FB3 and EPUB are supported."), "privacy");
+        let formats = label(tr("FB2, FB2.ZIP, FB3, EPUB, TXT and Markdown are supported."), "privacy");
         formats.set_max_width_chars(48);
         formats.set_margin_top(42);
         text.append(&formats);
@@ -2104,7 +2104,7 @@ impl Library {
     fn choose_file(self: &Rc<Self>) {
         let filter = gtk::FileFilter::new();
         filter.set_name(Some(tr("Books")));
-        for suffix in ["fb2", "zip", "fb3", "epub"] {
+        for suffix in ["fb2", "zip", "fb3", "epub", "txt", "md", "markdown"] {
             filter.add_suffix(suffix);
         }
         let filters = gio::ListStore::new::<gtk::FileFilter>();

@@ -16,7 +16,10 @@ const IDS: &str = "books.ids";
 /// The longest name of a copy, in characters, before ` (2)` and the extension.
 const NAME_CHARS: usize = 120;
 /// Extensions of the books the library reads, longest first: `.fb2.zip` is one extension.
-const EXTENSIONS: [&str; 4] = [".fb2.zip", ".fb2", ".fb3", ".epub"];
+const EXTENSIONS: [&str; 7] = [".fb2.zip", ".markdown", ".fb2", ".fb3", ".epub", ".txt", ".md"];
+/// Extensions of text books (`markdown-txt`): read in the Books folder and when opened, but not gathered from a folder
+/// being added, where every README and log would come along.
+const TEXT_EXTENSIONS: [&str; 3] = [".markdown", ".txt", ".md"];
 
 /// The Books folder: the remembered one, else `~/Книги` (a Russian interface) or `~/Books` in `home`, made when missing.
 /// The first time, the remembered books are moved in ([`move_in`]) before the folder is remembered; a state of 0.11.0
@@ -77,6 +80,14 @@ fn extension(name: &str) -> Option<&str> {
     EXTENSIONS.iter().find(|e| lower.ends_with(*e)).map(|e| &name[name.len() - e.len()..])
 }
 
+/// The title of a book that has none in it: its file's name without the book's extension (`ответ.md` → `ответ`).
+pub fn file_title(name: &str) -> String {
+    match extension(name).filter(|ext| ext.len() < name.len()) {
+        Some(ext) => name[..name.len() - ext.len()].to_owned(),
+        None => name.to_owned(),
+    }
+}
+
 /// A copy's name: `Author — Title.ext` with the first author, the title alone without one, the original name's stem
 /// without a title; characters file systems refuse and a leading dot replaced, at most 120 characters, ` (2)`, ` (3)`…
 /// while `taken` says the name is in use. The extension is `original`'s, or `fallback` when it is not a book's.
@@ -109,7 +120,7 @@ pub fn file_name(title: &str, authors: &[String], original: &str, fallback: &str
 /// The extension for a book whose file name does not say its format: by its content.
 fn content_extension(bytes: &[u8]) -> &'static str {
     if !bytes.starts_with(b"PK") {
-        return ".fb2";
+        return if crate::fb2::parse(bytes).is_ok() { ".fb2" } else { crate::text::extension(bytes) };
     }
     match crate::archive::unzip(bytes, crate::archive::MAX_UNPACKED) {
         Ok(files) if files.contains_key(crate::epub::CONTAINER) => ".epub",
@@ -128,7 +139,10 @@ fn read_file(name: String, meta: &std::fs::Metadata, path: &Path) -> (Cached, Op
     let (size, mtime) = (meta.len(), mtime(meta));
     let bytes = std::fs::read(path).ok();
     match bytes.as_deref().and_then(|b| crate::parse(b).ok().map(|book| (book, legacy_id(b)))) {
-        Some((b, old)) => {
+        Some((mut b, old)) => {
+            if b.title.trim().is_empty() {
+                b.title = file_title(&name);
+            }
             (Cached { name, size, mtime, id: b.id, title: b.title, authors: b.authors.join(", "), series: b.series }, Some(old))
         }
         None => (Cached { name, size, mtime, ..Cached::default() }, None),
@@ -140,7 +154,7 @@ pub fn folder_books(folder: &Path, store: &mut Store) -> HashMap<String, PathBuf
     folder_files(folder, store).into_iter().filter(|f| !f.id.is_empty()).map(|f| (f.id, folder.join(f.name))).collect()
 }
 
-/// Reads the folder's books (FB2, FB2.ZIP, FB3, EPUB at its top level; not dotfiles, not subfolders), parsing only the
+/// Reads the folder's books (FB2, FB2.ZIP, FB3, EPUB, TXT, Markdown at its top level; not dotfiles, not subfolders), parsing only the
 /// files that are new or changed since the cache in `store`, which is written once when anything changed. Unreadable
 /// files are ignored; files with one id count once. Data a new file's old id still holds (a book put back from the
 /// Trash after the move to new ids) is renamed to its new id.
@@ -385,8 +399,8 @@ impl Added {
     }
 }
 
-/// The book files (FB2, FB2.ZIP, FB3, EPUB) in `dir` and its subfolders at any depth, in path order: not dotfiles or
-/// dot-folders, not symbolic links to folders, nothing inside `skip` (the Books folder).
+/// The book files (FB2, FB2.ZIP, FB3, EPUB; not text) in `dir` and its subfolders at any depth, in path order: not
+/// dotfiles or dot-folders, not symbolic links to folders, nothing inside `skip` (the Books folder).
 pub fn book_files(dir: &Path, skip: &Path) -> Vec<PathBuf> {
     let skip = skip.canonicalize().unwrap_or_else(|_| skip.to_owned());
     let (mut found, mut dirs) = (Vec::new(), vec![dir.to_owned()]);
@@ -402,7 +416,7 @@ pub fn book_files(dir: &Path, skip: &Path) -> Vec<PathBuf> {
             }
             if kind.is_dir() {
                 dirs.push(item.path());
-            } else if extension(&name).is_some() && item.path().is_file() {
+            } else if extension(&name).is_some_and(|e| !TEXT_EXTENSIONS.contains(&e.to_lowercase().as_str())) && item.path().is_file() {
                 found.push(item.path());
             }
         }

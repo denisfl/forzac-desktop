@@ -155,7 +155,7 @@ fn recognised_by_content() {
     assert!(parse(&docs(&[("a.xhtml", "<p>Текст</p>")]).bytes()).is_ok());
     // A zip without `META-INF/container.xml` goes to the FB2 reader: an empty FictionBook is "no text".
     assert_eq!(parse(&zip(&[("book.fb2", b"<FictionBook/>")])).err(), Some(Error::NoText));
-    assert_eq!(parse("не zip".as_bytes()).err(), Some(Error::NotABook));
+    assert_eq!(parse(b"\0\0 not zip").err(), Some(Error::NotABook));
 }
 
 #[test]
