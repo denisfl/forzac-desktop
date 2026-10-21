@@ -18,8 +18,8 @@ _release=https://github.com/denisfl/forzac-desktop/releases/download/v$pkgver
 # The release files have no version in their names (stable download links); saved under one here.
 source_x86_64=("forzac-$pkgver-linux-x86_64.tar.gz::$_release/forzac-linux-x86_64.tar.gz")
 source_aarch64=("forzac-$pkgver-linux-aarch64.tar.gz::$_release/forzac-linux-aarch64.tar.gz")
-sha256sums_x86_64=('a2e4347fe1da039fed0a473e1ed30b7b6127d48db94004fa0cbb5247ca3c6ccf')
-sha256sums_aarch64=('8f3367881240e988e48949fc48ee354811cf6a442ff4bfe633543e2befad3653')
+sha256sums_x86_64=('c701868867d825aa3e5bc2cbfefc57a09dae4b9825b54aff8ccce9f2d9205267')
+sha256sums_aarch64=('3402a6b296f020ba955c87ed14230ef7d6b4088ab3bb005ed2cea944eef31cd0')
 
 package() {
   install -d "$pkgdir/usr"
