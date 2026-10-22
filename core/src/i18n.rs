@@ -169,7 +169,10 @@ pub fn help_text(platform: Platform) -> String {
 }
 
 const MOUSE: &str = "Mouse";
-const SUPPORT: &str = "Forzac is free. Support it: forzac.app";
+const SUPPORT: &str = "There could be an ad here. There isn’t, and there won’t be, so Forzac runs on your thanks 😀";
+/// The words of `SUPPORT` that link to the site's support section (`SUPPORT_URL`).
+pub const SUPPORT_LINK: &str = "your thanks";
+pub const SUPPORT_URL: &str = "https://forzac.app/#support";
 
 /// A help row: Linux keys, macOS keys, meaning; empty keys: not on that platform (but see `MOUSE`).
 type HelpRow = (&'static str, &'static str, &'static str);
@@ -247,7 +250,7 @@ const HELP: &[(&str, &[HelpRow])] = &[
 #[cfg(test)]
 fn asked_by_help() -> Vec<&'static str> {
     let rows = HELP.iter().flat_map(|(title, rows)| std::iter::once(*title).chain(rows.iter().map(|r| r.2)));
-    ["Keys", SUPPORT].into_iter().chain(rows).collect()
+    ["Keys", SUPPORT, SUPPORT_LINK].into_iter().chain(rows).collect()
 }
 
 /// The common FB2 genre codes (FictionBook 2.1's list) with their English and Russian names.
@@ -424,7 +427,8 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Picture or table", "Картинка или таблица"),
     ("zoom, fit", "масштаб, целиком"),
     ("move", "сдвиг"),
-    ("Forzac is free. Support it: forzac.app", "Форзац бесплатный. Поддержать: forzac.app"),
+    ("There could be an ad here. There isn’t, and there won’t be, so Forzac runs on your thanks 😀", "Здесь могла быть ваша реклама. Её нет и не будет, так что Форзац живёт на ваши спасибо 😀"),
+    ("your thanks", "ваши спасибо"),
     ("Made by Denis Fedosov-Ledovskikh", "Сделал Денис Федосов-Ледовских"),
     // The app and its windows.
     ("Forzac", "Форзац"),

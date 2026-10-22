@@ -11,7 +11,6 @@ use gtk::{gdk, gio, glib, prelude::*};
 use crate::icons::{self, Icon};
 
 const CLOSE: Duration = Duration::from_millis(150);
-const SITE: &str = "forzac.app";
 /// A column's width, its key area's and the meaning's (`design.md`).
 const COLUMN: i32 = 416;
 const KEYS: i32 = 168;
@@ -95,7 +94,8 @@ impl Help {
         card.append(&rule);
         let support = gtk::Label::new(None);
         let escaped = glib::markup_escape_text(help.support);
-        support.set_markup(&escaped.replace(SITE, &format!("<a href=\"https://{SITE}\">{SITE}</a>")));
+        let thanks = i18n::tr(i18n::SUPPORT_LINK);
+        support.set_markup(&escaped.replace(thanks, &format!("<a href=\"{}\">{thanks}</a>", i18n::SUPPORT_URL)));
         support.add_css_class("help-support");
         support.set_xalign(0.0);
         support.set_wrap(true);

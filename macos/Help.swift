@@ -7,7 +7,7 @@ import QuartzCore
 
 private let column: CGFloat = 416, keysWidth: CGFloat = 168, gap: CGFloat = 12, columnGap: CGFloat = 40
 private let padding: CGFloat = 28, margin: CGFloat = 24, line: CGFloat = 40
-private let site = "forzac.app"
+private let supportURL = URL(string: "https://forzac.app/#support")!
 
 /// The help from the core: the title, sections of (keys, meaning), the support line.
 private struct Text {
@@ -35,12 +35,12 @@ private class Flipped: NSView {
     override func mouseDown(with e: NSEvent) {}
 }
 
-/// A label whose click opens the support site, with the pointing hand over it.
+/// The support line: a click on it opens the site's support section, the pointing hand over it.
 private final class Link: NSTextField {
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
     override func mouseDown(with e: NSEvent) {}
     override func mouseUp(with e: NSEvent) {
-        if bounds.contains(convert(e.locationInWindow, from: nil)), let url = URL(string: "https://\(site)") { NSWorkspace.shared.open(url) }
+        if bounds.contains(convert(e.locationInWindow, from: nil)) { NSWorkspace.shared.open(supportURL) }
     }
 }
 
@@ -81,7 +81,7 @@ private final class CloseButton: Flipped {
 final class HelpView: NSView {
     private let text = Text()
     private let card = Flipped(), close = CloseButton(), rule = Flipped()
-    private let title: NSTextField, prefix: NSTextField, link: Link
+    private let title: NSTextField, support: Link
     private let scroll = NSScrollView(), document = Flipped()
     /// Per section: its title, and per row its caps and its meaning.
     private var sections: [(title: NSTextField, rows: [(caps: [NSTextField], meaning: NSTextField)])] = []
@@ -94,9 +94,7 @@ final class HelpView: NSView {
 
     init() {
         title = label(text.title, interfaceFont(20, .semibold), 0)
-        let parts = text.support.components(separatedBy: site)
-        prefix = label(parts[0], interfaceFont(13), 0)
-        link = Link(labelWithString: site)
+        support = Link(wrappingLabelWithString: text.support)
         super.init(frame: .zero)
         wantsLayer = true
         isHidden = true
@@ -108,17 +106,17 @@ final class HelpView: NSView {
         card.layer?.shadowOffset = CGSize(width: 0, height: -12)
         card.layer?.borderWidth = 1
         rule.wantsLayer = true
-        link.font = interfaceFont(13)
-        link.isSelectable = false
+        support.font = interfaceFont(13)
+        support.isSelectable = false
         close.action = { [weak self] in self?.hide() }
-        for v: NSView in [title, prefix, link] { v.translatesAutoresizingMaskIntoConstraints = true }
+        for v: NSView in [title, support] { v.translatesAutoresizingMaskIntoConstraints = true }
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.documentView = document
         document.wantsLayer = true
         addSubview(card)
-        [title, close, scroll, rule, prefix, link].forEach(card.addSubview)
+        [title, close, scroll, rule, support].forEach(card.addSubview)
         for s in text.sections {
             let t = label(s.title.uppercased(), interfaceFont(12, .medium), 0)
             t.attributedStringValue = NSAttributedString(string: s.title.uppercased(), attributes: [.font: interfaceFont(12, .medium), .kern: 0.72])
@@ -196,10 +194,13 @@ final class HelpView: NSView {
         card.layer?.shadowColor = .black
         rule.layer?.backgroundColor = color(p.line)
         title.textColor = nsColor(p.ink)
-        prefix.textColor = nsColor(p.muted)
-        link.attributedStringValue = NSAttributedString(string: site, attributes: [
-            .font: interfaceFont(13), .foregroundColor: nsColor(p.link), .underlineStyle: NSUnderlineStyle.single.rawValue,
-        ])
+        // The line in the muted colour, its thanks in the link's, underlined.
+        let words = NSMutableAttributedString(string: text.support, attributes: [.font: interfaceFont(13), .foregroundColor: nsColor(p.muted)])
+        if let thanks = text.support.range(of: tr("your thanks")) {
+            words.addAttributes([.foregroundColor: nsColor(p.link), .underlineStyle: NSUnderlineStyle.single.rawValue],
+                               range: NSRange(thanks, in: text.support))
+        }
+        support.attributedStringValue = words
         close.tint = p.ink
         close.icon.tint = nsColor(p.ink)
         for s in sections {
@@ -244,10 +245,10 @@ final class HelpView: NSView {
         document.frame = CGRect(x: 0, y: 0, width: width, height: contentHeight)
 
         title.sizeToFit()
-        prefix.sizeToFit()
-        link.sizeToFit()
+        support.preferredMaxLayoutWidth = width
+        let supportHeight = ceil(support.sizeThatFits(NSSize(width: width, height: .greatestFiniteMagnitude)).height)
         let head = max(32, title.frame.height)
-        let foot = 20 + 1 + 16 + prefix.frame.height
+        let foot = 20 + 1 + 16 + supportHeight
         let available = bounds.height - 2 * margin - 2 * 20 - head - 16 - foot
         let shown = max(0, min(contentHeight, available))
         let cardSize = CGSize(width: width + 2 * padding, height: 20 + head + 16 + shown + foot + 20)
@@ -258,8 +259,7 @@ final class HelpView: NSView {
         close.frame = CGRect(x: cardSize.width - padding - 32 + 6, y: 20 + (head - 32) / 2, width: 32, height: 32)
         scroll.frame = CGRect(x: padding, y: 20 + head + 16, width: width, height: shown)
         rule.frame = CGRect(x: padding, y: scroll.frame.maxY + 20, width: width, height: 1)
-        prefix.frame.origin = CGPoint(x: padding, y: rule.frame.maxY + 16)
-        link.frame.origin = CGPoint(x: prefix.frame.maxX, y: prefix.frame.minY)
+        support.frame = CGRect(x: padding, y: rule.frame.maxY + 16, width: width, height: supportHeight)
     }
 
     /// The caps from (x, y) in lines no wider than the key area; their height.
