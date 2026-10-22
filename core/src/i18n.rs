@@ -604,8 +604,8 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Forzac will speak the chosen language after a restart.", "Форзац заговорит на\u{a0}выбранном языке после перезапуска."),
     ("Sync", "Синхронизация"),
     (
-        "Your place, bookmarks, highlights, shelves and book details are the same in Forzac on every computer and phone that shares the Books folder. Keep the folder in sync with Dropbox, iCloud Drive or Syncthing; on Android only Syncthing keeps a folder on the phone.",
-        "Место чтения, закладки, цитаты, полки и\u{a0}правки книг\u{a0}— одни и\u{a0}те\u{a0}же в\u{a0}Форзаце на\u{a0}всех компьютерах и\u{a0}телефонах с\u{a0}общей папкой «Книги». Синхронизируйте папку через Dropbox, iCloud Drive или Syncthing; на\u{a0}Android папку на\u{a0}телефоне держит только Syncthing.",
+        "Your place, bookmarks, highlights, shelves, book details and reading stats are the same in Forzac on every computer and phone that shares the Books folder. Keep the folder in sync with Dropbox, iCloud Drive or Syncthing; on Android only Syncthing keeps a folder on the phone.",
+        "Место чтения, закладки, цитаты, полки, правки книг и\u{a0}статистика\u{a0}— одни и\u{a0}те\u{a0}же в\u{a0}Форзаце на\u{a0}всех компьютерах и\u{a0}телефонах с\u{a0}общей папкой «Книги». Синхронизируйте папку через Dropbox, iCloud Drive или Syncthing; на\u{a0}Android папку на\u{a0}телефоне держит только Syncthing.",
     ),
     ("Books folder", "Папка «Книги»"),
     ("Change…", "Сменить…"),
@@ -632,10 +632,25 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("October", "октября"),
     ("November", "ноября"),
     ("December", "декабря"),
+    ("Reading stats", "Статистика"),
+    ("Month", "Месяц"),
+    ("Year", "Год"),
+    ("Save Image…", "Сохранить картинку…"),
+    ("{n} min", "{n} мин"),
+    ("{n} h", "{n} ч"),
+    ("reading", "за чтением"),
+    ("not read", "не читали"),
+    ("What you finish will appear here", "Здесь появится то, что вы прочитаете"),
 ];
 
 /// English "other" form → Russian one, few, many.
 const PLURALS: &[(&str, [&str; 3])] = &[
+    ("books finished", ["книга прочитана", "книги прочитано", "книг прочитано"]),
+    ("days with a book", ["день с\u{a0}книгой", "дня с\u{a0}книгой", "дней с\u{a0}книгой"]),
+    ("{n} books", ["{n} книга", "{n} книги", "{n} книг"]),
+    ("{n} days", ["{n} день", "{n} дня", "{n} дней"]),
+    ("{n} highlights", ["{n} цитата", "{n} цитаты", "{n} цитат"]),
+    ("{n} bookmarks", ["{n} закладка", "{n} закладки", "{n} закладок"]),
     ("{n} matches", ["{n} совпадение", "{n} совпадения", "{n} совпадений"]),
     ("Added {n} books.", ["Добавлена {n} книга.", "Добавлены {n} книги.", "Добавлено {n} книг."]),
     (

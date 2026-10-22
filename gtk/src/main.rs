@@ -30,6 +30,7 @@ mod menu;
 mod page_view;
 mod panels;
 mod settings_sheet;
+mod stats;
 mod viewer;
 
 use std::cell::{Cell, RefCell};
@@ -37,10 +38,11 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use forzac_core::Locator;
 use forzac_core::i18n::{fill, language, tr};
+use forzac_core::log;
 use forzac_core::settings::{DEFAULT_SIZE, Setting, Settings, Turning};
 use forzac_core::state::Store;
+use forzac_core::{EndLines, Locator};
 use gtk::{gio, glib, graphene, prelude::*};
 use page_view::{Mode, Open, PageView};
 
@@ -160,6 +162,7 @@ fn main() -> glib::ExitCode {
     let strokes = args.iter().position(|a| a == "--strokes").and_then(|i| args.get(i + 1)).and_then(|n| n.parse().ok()).unwrap_or(0);
     let mouse = args.iter().position(|a| a == "--mouse").and_then(|i| args.get(i + 1)).cloned();
     let size_arg = args.iter().position(|a| a == "--size").and_then(|i| args.get(i + 1));
+    let stats_dir = args.iter().position(|a| a == "--stats").and_then(|i| args.get(i + 1)).map(PathBuf::from);
     let size = size_arg.and_then(|s| s.split_once('x')).and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
     let options = Options {
         start,
@@ -183,11 +186,19 @@ fn main() -> glib::ExitCode {
                 && Some(PathBuf::from(a.as_str())) != options.png
                 && Some(*a) != options.mouse.as_ref()
                 && Some(*a) != size_arg
+                && Some(PathBuf::from(a.as_str())) != stats_dir
         })
         .collect();
 
     let mut flags = gio::ApplicationFlags::HANDLES_OPEN;
-    if options.measure || options.png.is_some() || options.turns > 0 || options.scrolls > 0 || options.toggles > 0 || options.strokes > 0 {
+    if options.measure
+        || options.png.is_some()
+        || options.turns > 0
+        || options.scrolls > 0
+        || options.toggles > 0
+        || options.strokes > 0
+        || stats_dir.is_some()
+    {
         flags |= gio::ApplicationFlags::NON_UNIQUE;
     }
     let app = gtk::Application::builder().application_id(APP_ID).flags(flags).build();
@@ -225,6 +236,10 @@ fn main() -> glib::ExitCode {
     }
     let opts = options.clone();
     app.connect_activate(move |app| {
+        if let Some(dir) = &stats_dir {
+            stats::save_pngs(&store, dir);
+            return;
+        }
         let o = opts.clone();
         library_window(app, &opts, &store, move |library| {
             if !o.measure && o.png.is_none() {
@@ -574,6 +589,7 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
         &window,
         save_style,
     ));
+    let stats_store = store.clone();
     view.connect_open(glib::clone!(
         #[weak]
         overlay,
@@ -587,6 +603,7 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             Open::External(url) => gtk::UriLauncher::new(&url).launch(Some(&window), gio::Cancellable::NONE, |_| {}),
             Open::Image(id) => *viewer.borrow_mut() = viewer::open(&overlay, &view, viewer::Subject::Image(id)).map(|v| v.downgrade()),
             Open::Table(at) => *viewer.borrow_mut() = viewer::open(&overlay, &view, viewer::Subject::Table(at)).map(|v| v.downgrade()),
+            Open::Stats => stats::open(&window, &stats_store),
         }
     ));
     // For screenshots: `wtype` cannot type `?`.
@@ -868,20 +885,54 @@ fn save_window_png(window: &gtk::ApplicationWindow, path: &std::path::Path) {
     }
 }
 
-/// Saves the reading position when the book opens, `SAVE_DELAY` after the last move and when the window closes.
+/// Saves the reading position when the book opens, `SAVE_DELAY` after the last move and when the window closes; with
+/// it, the reading log (`reading-log`): the reader's keys, clicks, scrolls, moves and jumps are counted, and appended
+/// at most once a minute with the delayed save and always when the window is left or closed.
 fn remember_position(view: &PageView, window: &gtk::ApplicationWindow, path: &Path, store: &SharedStore, refresh: Rc<dyn Fn()>) {
+    let reading = Rc::new(RefCell::new(log::Reading::new(now_ms())));
+    let event: Rc<dyn Fn(log::Event)> = {
+        let (view, reading) = (view.downgrade(), reading.clone());
+        Rc::new(move |e| {
+            if let Some(view) = view.upgrade() {
+                reading.borrow_mut().event(&view.book(), e, view.locator(), now_ms(), utc_offset());
+            }
+        })
+    };
+    // The reading appended: everything when the window is `leaving`, else once a minute.
+    let append: Rc<dyn Fn(bool)> = {
+        let (view, store, reading) = (view.downgrade(), store.clone(), reading.clone());
+        Rc::new(move |leaving| {
+            let Some(view) = view.upgrade() else { return };
+            if leaving {
+                reading.borrow_mut().event(&view.book(), log::Event::Paused, view.locator(), now_ms(), utc_offset());
+            }
+            let sums = reading.borrow_mut().due(now_ms(), leaving);
+            if let Err(e) = log::append(&mut store.borrow_mut(), &view.book().id, &sums, now_ms()) {
+                eprintln!("cannot write the reading log: {e}");
+            }
+        })
+    };
     let save = {
-        let (view, store, path) = (view.downgrade(), store.clone(), path.to_owned());
+        let (view, store, path, append) = (view.downgrade(), store.clone(), path.to_owned(), append.clone());
         Rc::new(move || {
             let Some(view) = view.upgrade() else { return };
             if let Err(e) = store.borrow_mut().save_position(&view.book(), &path, view.locator(), view.finished()) {
                 eprintln!("cannot save the reading state: {e}");
             }
+            if view.finished()
+                && let Err(e) = log::finish(&store.borrow(), &view.book(), now_ms())
+            {
+                eprintln!("cannot write the reading log: {e}");
+            }
+            append(false);
         })
     };
     let pending: Rc<RefCell<Option<glib::SourceId>>> = Rc::default();
-    let (p, s) = (pending.clone(), save.clone());
+    let (p, s, ev, v) = (pending.clone(), save.clone(), event.clone(), view.downgrade());
     view.connect_moved(move || {
+        if let Some(view) = v.upgrade() {
+            ev(if view.jumped() { log::Event::Jumped } else { log::Event::Moved });
+        }
         if let Some(id) = p.borrow_mut().take() {
             id.remove();
         }
@@ -891,23 +942,71 @@ fn remember_position(view: &PageView, window: &gtk::ApplicationWindow, path: &Pa
             s2();
         }));
     });
-    let (s, waiting) = (save.clone(), pending.clone());
+    // Every key, click and scroll in the window is the reader's action.
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let ev = event.clone();
+    keys.connect_key_pressed(move |_, _, _, _| {
+        ev(log::Event::Active);
+        glib::Propagation::Proceed
+    });
+    window.add_controller(keys);
+    let click = gtk::GestureClick::new();
+    click.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let ev = event.clone();
+    click.connect_pressed(move |_, _, _, _| ev(log::Event::Active));
+    window.add_controller(click);
+    let wheel = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
+    wheel.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let ev = event.clone();
+    wheel.connect_scroll(move |_, _, _| {
+        ev(log::Event::Active);
+        glib::Propagation::Proceed
+    });
+    window.add_controller(wheel);
+    let waiting = pending.clone();
+    let (s2, a) = (save.clone(), append.clone());
     window.connect_close_request(move |_| {
         if let Some(id) = pending.borrow_mut().take() {
             id.remove();
         }
-        s();
+        s2();
+        a(true);
         glib::Propagation::Proceed
+    });
+    // The end page's totals from the log (`reading-stats`).
+    let (st, v) = (store.clone(), view.downgrade());
+    view.connect_end_lines(move || {
+        let Some(view) = v.upgrade() else { return EndLines::default() };
+        let (book, store, now) = (view.book(), st.borrow(), now_ms());
+        let log = log::load(&store).unwrap_or_default().as_if_finished(&book, now);
+        EndLines {
+            book: forzac_core::stats::book_line(
+                &log,
+                &book.id,
+                store.quotes_of(&book.id).len(),
+                store.bookmarks_of(&book.id).len(),
+                now,
+                utc_offset(),
+            ),
+            month: forzac_core::stats::month_line(&log, now, utc_offset()),
+        }
     });
     // Leaving the book window gives the reading away, coming back takes the other devices' (`sync`); then the marks come
     // from the state again, and a place that came from another device moves the book there (keeping the place left for
     // going back) unless the book was moved since the sync began. Only an unsaved move is saved first: an unmoved book
     // keeps the time it was last read.
     let (v, st, p, s) = (view.downgrade(), store.clone(), path.to_owned(), save.clone());
-    window.connect_is_active_notify(move |_| {
+    let (ev, a) = (event.clone(), append.clone());
+    window.connect_is_active_notify(move |w| {
         if let Some(id) = waiting.borrow_mut().take() {
             id.remove();
             s();
+        }
+        if w.is_active() {
+            ev(log::Event::Active);
+        } else {
+            a(true);
         }
         let Some(view) = v.upgrade() else { return };
         let (v, st, p, refresh, start) = (v.clone(), st.clone(), p.clone(), refresh.clone(), view.locator());
@@ -929,6 +1028,18 @@ fn remember_position(view: &PageView, window: &gtk::ApplicationWindow, path: &Pa
         });
     });
     save(); // an opened book is in the library, even if it is closed without turning a page
+    if let Err(e) = log::opened(&store.borrow(), &view.book().id, now_ms()) {
+        eprintln!("cannot write the reading log: {e}");
+    }
+}
+
+/// Now in milliseconds since the Unix epoch, and the local time zone's offset east of UTC in seconds (`reading-log`).
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
+fn utc_offset() -> i64 {
+    glib::DateTime::now_local().map_or(0, |d| d.utc_offset().as_seconds())
 }
 
 /// The library in the reader's theme, or the open one brought forward (then `shown` is not called); opening a book

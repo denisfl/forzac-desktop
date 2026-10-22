@@ -1386,7 +1386,8 @@ impl Library {
         popover.popup();
     }
 
-    /// The head's menu: "Show the Books folder", "Change the Books folder…", "Add a Folder…", then "Settings…".
+    /// The head's menu: "Show the Books folder", "Change the Books folder…", "Add a Folder…", then "Reading stats" and
+    /// "Settings…".
     fn head_menu(self: &Rc<Self>) {
         let model = gio::Menu::new();
         let folders = gio::Menu::new();
@@ -1395,6 +1396,7 @@ impl Library {
         folders.append(Some(tr("Add a Folder…")), Some("lib.addfolder"));
         model.append_section(None, &folders);
         let settings = gio::Menu::new();
+        settings.append(Some(tr("Reading stats")), Some("lib.stats"));
         settings.append(Some(tr("Settings…")), Some("lib.settings"));
         model.append_section(None, &settings);
         let popover = gtk::PopoverMenu::from_model(Some(&model));
@@ -1823,7 +1825,7 @@ impl Library {
 
         sheet.append(&label(tr("Sync"), "settings-heading"));
         sheet.append(&label(
-            tr("Your place, bookmarks, highlights, shelves and book details are the same in Forzac on every computer and phone that shares the Books folder. Keep the folder in sync with Dropbox, iCloud Drive or Syncthing; on Android only Syncthing keeps a folder on the phone."),
+            tr("Your place, bookmarks, highlights, shelves, book details and reading stats are the same in Forzac on every computer and phone that shares the Books folder. Keep the folder in sync with Dropbox, iCloud Drive or Syncthing; on Android only Syncthing keeps a folder on the phone."),
             "question-body",
         ));
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
@@ -2374,7 +2376,7 @@ impl Library {
                 l.ask_shelf(book as usize);
             }
         });
-        for (name, act) in [("showfolder", 0), ("changefolder", 1), ("addfolder", 2), ("settings", 3)] {
+        for (name, act) in [("showfolder", 0), ("changefolder", 1), ("addfolder", 2), ("settings", 3), ("stats", 4)] {
             let action = gio::SimpleAction::new(name, None);
             let weak = Rc::downgrade(self);
             action.connect_activate(move |_, _| {
@@ -2383,7 +2385,8 @@ impl Library {
                     0 => l.show_folder(),
                     1 => l.choose_books_folder(),
                     2 => l.choose_folder(),
-                    _ => l.show_settings(),
+                    3 => l.show_settings(),
+                    _ => crate::stats::open(&l.window, &l.store),
                 }
             });
             actions.add_action(&action);
@@ -2561,6 +2564,15 @@ impl Library {
             Box::new(move |l| {
                 if !asking(l) && !l.books.borrow().is_empty() {
                     l.set_searching(true)
+                }
+            }),
+        );
+        add(
+            "s",
+            true,
+            Box::new(move |l| {
+                if !asking(l) {
+                    crate::stats::open(&l.window, &l.store)
                 }
             }),
         );

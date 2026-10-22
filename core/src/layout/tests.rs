@@ -354,12 +354,25 @@ fn the_end_page_shows_the_title_authors_and_finished() {
     let mut b = book(vec![paragraph(TEXT)]);
     b.title = "Погребение ангела".into();
     b.authors = vec!["Евгений Гришковец".into()];
-    let page = end_page(&b, &style, &mut t);
+    let page = end_page(&b, &style, &mut t, &EndLines::default());
     let ys: Vec<f32> = page.runs.iter().map(|r| r.positions[0][1]).collect();
     assert!(ys.windows(2).all(|w| w[0] < w[1]), "title, authors, then Finished: {ys:?}");
     assert!(ys[0] > 300.0 && *ys.last().unwrap() < 600.0, "in the middle of the window: {ys:?}");
     assert_eq!(page.runs.last().unwrap().ink, Ink::Secondary);
     assert!(page.areas.is_empty() && page.images.is_empty());
+
+    // With the totals: the book's line, then the month's, which leads to the stats.
+    let lines = EndLines { book: "6 h · 12 days".into(), month: "October: 3 books · 14 h".into() };
+    let with = end_page(&b, &style, &mut t, &lines);
+    let ys: Vec<f32> = with.runs.iter().map(|r| r.positions[0][1]).collect();
+    assert!(ys.windows(2).all(|w| w[0] < w[1]), "{ys:?}");
+    assert_eq!(with.runs.iter().map(|r| r.ink).collect::<Vec<_>>()[with.runs.len() - 2..], [Ink::Secondary, Ink::Link]);
+    assert_eq!(with.areas.len(), 1);
+    let (area, month) = (&with.areas[0], with.runs.last().unwrap());
+    assert_eq!(area.target, Target::Stats);
+    let [x, y] = month.positions[0];
+    assert!(area.rect.x < x && area.rect.y < y && area.rect.y + area.rect.h > y, "{area:?} around {x}, {y}");
+    assert!((area.rect.x + area.rect.w / 2.0 - 300.0).abs() < 1.0, "centred");
 }
 
 #[test]

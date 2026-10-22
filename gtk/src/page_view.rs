@@ -18,8 +18,8 @@ use forzac_core::model::LinkTarget;
 use forzac_core::search::Hit;
 use forzac_core::settings::{Setting, Settings, Turning};
 use forzac_core::{
-    Area, Block, Book, BookPages, ChapterLayout, CountControl, Ink, Locator, PageContent, PageStyle, Rect, Shape, Target, Typesetter,
-    end_page, fonts, layout_note, layout_preview, layout_table, paginate,
+    Area, Block, Book, BookPages, ChapterLayout, CountControl, EndLines, Ink, Locator, PageContent, PageStyle, Rect, Shape, Target,
+    Typesetter, end_page, fonts, layout_note, layout_preview, layout_table, paginate,
 };
 use gtk::subclass::prelude::*;
 use gtk::{gdk, gio, glib, graphene, gsk, prelude::*};
@@ -110,6 +110,8 @@ pub enum Open {
     /// An image (by id) or a table (by its first row) for the view (`viewer`).
     Image(String),
     Table(Locator),
+    /// The reading stats, from the end page's month (`reading-stats`).
+    Stats,
 }
 
 pub(crate) fn rgba(rgb: u32) -> gdk::RGBA {
@@ -232,6 +234,15 @@ pub struct State {
     column_end: bool,
     /// The end page for the current style and theme.
     end: Option<gsk::RenderNode>,
+    /// The end page's areas (its month, which opens the stats), from its top; where the end screen's top is in "Scroll"
+    /// while it is in the window.
+    end_areas: Vec<Area>,
+    end_top: Option<f32>,
+    /// Gives the end page's totals when it is drawn (`reading-stats`).
+    end_lines: Option<Box<dyn Fn() -> EndLines>>,
+    /// The last move was a jump (contents, link, search, chapter keys, back, the slider), not a turn or a scroll: the
+    /// reading log counts no text for it (`reading-log`).
+    jumped: bool,
     /// The frame before a theme change, cross-fading into the new colours, and the fade's first frame time.
     fade: Option<(gsk::RenderNode, Option<i64>)>,
     /// The matches of the last search gone to, and the one highlighted (`n`/`N` move it; `None`: no highlight).
@@ -363,6 +374,10 @@ impl PageView {
             at_end: false,
             column_end: false,
             end: None,
+            end_areas: Vec::new(),
+            end_top: None,
+            end_lines: None,
+            jumped: false,
             fade: None,
             search: None,
             bookmarks: Vec::new(),
@@ -617,6 +632,7 @@ impl PageView {
             Target::Image(id) => Some(Err(Open::Image(id))),
             Target::Table(at) => Some(Err(Open::Table(at))),
             Target::Highlight(_) => None,
+            Target::Stats => Some(Err(Open::Stats)),
             Target::Link(key) => match s.book.links.get(&key)? {
                 LinkTarget::Place { .. } if s.book.preview(&key).is_some() => Some(Err(Open::Preview(key))),
                 LinkTarget::Place { start, .. } => Some(Ok(*start)),
@@ -746,6 +762,7 @@ impl PageView {
             s.turn = None;
             s.focus = None;
             s.at_end = false;
+            s.jumped = true;
             if let Some(layout) = s.layout.as_ref().filter(|l| l.chapter == at.chapter) {
                 s.page = Self::left(s, layout.page_of(at));
             }
@@ -855,6 +872,9 @@ impl PageView {
     /// The note markers, links, images, tables and highlights of the pages shown, the left page's first (view
     /// coordinates).
     fn shown_areas(s: &mut State) -> Vec<Area> {
+        if s.at_end {
+            return s.end_areas.clone();
+        }
         let mut out = Vec::new();
         for (page, _) in Self::shown_pages(s) {
             if Self::page_node(s, page).is_some() {
@@ -963,6 +983,16 @@ impl PageView {
     /// The reading position: where the current page starts.
     pub fn locator(&self) -> Locator {
         self.with(|s| s.locator)
+    }
+
+    /// Whether the last move was a jump rather than a turn or a scroll (`reading-log`).
+    pub fn jumped(&self) -> bool {
+        self.with(|s| s.jumped)
+    }
+
+    /// Gives the end page its totals (`reading-stats`), asked for each time it is drawn anew.
+    pub fn connect_end_lines(&self, f: impl Fn() -> EndLines + 'static) {
+        self.with(|s| s.end_lines = Some(Box::new(f)));
     }
 
     /// Whether the book's end page (or end screen) is shown: the position is saved as finished.
@@ -1310,13 +1340,18 @@ impl PageView {
     /// The end page's node for the current style and theme.
     pub(super) fn end_node(s: &mut State) -> Option<gsk::RenderNode> {
         if s.end.is_none() {
+            let lines = s.end_lines.as_ref().map(|f| f()).unwrap_or_default();
             let (style, t) = (s.style?, s.typesetter.as_mut()?);
-            let content = end_page(&s.book, &style, t);
+            let content = end_page(&s.book, &style, t, &lines);
             s.end = content_node(&content, s.theme, &mut s.fonts, &mut s.textures, &s.book);
+            s.end_areas = content.areas;
             // In a spread, centred on the window.
             if s.spread {
                 let centre = graphene::Point::new(style.width / 2.0, 0.0);
                 s.end = s.end.take().map(|n| gsk::TransformNode::new(n, Some(&gsk::Transform::new().translate(&centre))).upcast());
+                for a in &mut s.end_areas {
+                    a.rect.x += centre.x();
+                }
             }
         }
         s.end.clone()
@@ -1501,6 +1536,7 @@ impl PageView {
             let from_ribbon = Self::ribbon_dx(s, h);
             let from = Self::screen_node(s);
             let step = if s.spread { 2 } else { 1 };
+            s.jumped = false;
             let Some(layout) = &s.layout else { return false };
             if s.at_end {
                 // Back from the end page to the last page of the text; forward does nothing.
@@ -1518,6 +1554,7 @@ impl PageView {
             if delta > 0 && target as usize >= layout.pages.len() && s.chapter + 1 == s.book.chapters.len() {
                 // Past the book's last page: the end page; the position stays at the last page.
                 s.at_end = true;
+                s.end = None; // the totals as of now
                 s.turn = from.map(|from| Turn { from, from_ribbon, dir: 1.0, start: None });
                 s.focus = None;
                 return true;
@@ -1579,6 +1616,7 @@ impl PageView {
         self.with(|s| {
             let target = (s.chapter as i64 + delta as i64).clamp(0, s.book.chapters.len() as i64 - 1) as usize;
             s.at_end = false;
+            s.jumped = true;
             s.chapter = target;
             s.locator = Locator { chapter: target, ..Locator::default() };
             s.turn = None;
@@ -1603,6 +1641,7 @@ impl PageView {
                 s.turn = None;
                 s.focus = None;
                 s.at_end = false;
+                s.jumped = true;
             }
         });
         self.moved();
@@ -1616,6 +1655,7 @@ impl PageView {
                 s.page = Self::left(s, page.min(layout.pages.len() - 1));
                 s.locator = layout.page_start(s.page);
                 s.turn = None;
+                s.jumped = true;
             }
             if s.mode == Mode::Scroll {
                 Self::align_column(s);

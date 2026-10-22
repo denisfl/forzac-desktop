@@ -9,6 +9,14 @@ use gtk::{glib, gsk, prelude::*};
 pub type Paths = &'static [&'static str];
 
 pub const CHEVRON_LEFT: Paths = &["m15 18-6-6 6-6"];
+pub const CHEVRON_RIGHT: Paths = &["m9 18 6-6-6-6"];
+pub const SHARE: Paths = &[
+    "M21 5a3 3 0 1 1-6 0a3 3 0 1 1 6 0",
+    "M9 12a3 3 0 1 1-6 0a3 3 0 1 1 6 0",
+    "M21 19a3 3 0 1 1-6 0a3 3 0 1 1 6 0",
+    "m8.59 13.51 6.83 3.98",
+    "m15.41 6.51-6.82 3.98",
+];
 pub const LIST: Paths = &["M3 12h.01", "M3 18h.01", "M3 6h.01", "M8 12h13", "M8 18h13", "M8 6h13"];
 pub const X: Paths = &["M18 6 6 18", "m6 6 12 12"];
 pub const SEARCH: Paths = &["M19 11a8 8 0 1 1-16 0a8 8 0 1 1 16 0", "m21 21-4.3-4.3"];
@@ -23,6 +31,15 @@ pub const MARGINS: [Paths; 3] = [
     &["M3 3h18v18H3z", "M8 8h8", "M8 12h8", "M8 16h8"],
     &["M3 3h18v18H3z", "M10 8h4", "M10 12h4", "M10 16h4"],
 ];
+
+/// Adds `paths` to the cairo path of `cr` (drawn as `Icon` draws them).
+pub fn trace(cr: &gtk::cairo::Context, paths: Paths) {
+    for d in paths {
+        if let Ok(path) = gsk::Path::parse(d) {
+            path.to_cairo(cr);
+        }
+    }
+}
 
 mod imp {
     use super::*;

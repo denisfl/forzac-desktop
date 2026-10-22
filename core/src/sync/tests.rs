@@ -364,3 +364,108 @@ fn the_other_devices_by_their_files() {
     assert_eq!(devices(&folder, None).len(), 3);
     assert!(devices(&folder.join("missing"), None).is_empty());
 }
+
+/// Two devices' states in folders of their own (each has its own reading log beside its state), and a Books folder.
+fn two_logs() -> (PathBuf, Store, Store) {
+    let root = dir();
+    let folder = root.join("Books");
+    std::fs::create_dir_all(&folder).unwrap();
+    (folder, Store::open(root.join("a/state")), Store::open(root.join("b/state")))
+}
+
+fn minutes(store: &mut Store, minutes: u64, now: u64) {
+    let sum = crate::log::Sum { day: "2026-10-18".into(), seconds: minutes * 60, chars: 0, pages: 0 };
+    crate::log::append(store, "book", &[sum], now).unwrap();
+}
+
+/// The log's minutes of the day by device.
+fn day_minutes(store: &Store) -> Vec<(String, u64)> {
+    let mut days: Vec<(String, u64)> = crate::log::load(store).unwrap().days.iter().map(|d| (d.device.clone(), d.seconds / 60)).collect();
+    days.sort();
+    days
+}
+
+#[test]
+fn log_lines_survive_their_file() {
+    let read = Record {
+        book: "b".into(),
+        time: 5,
+        deleted: false,
+        item: Item::Read { device: "d".into(), day: "2026-10-18".into(), seconds: 60, chars: 900, pages: 0 },
+        local: None,
+    };
+    let finish = Record {
+        book: "b".into(),
+        time: 6,
+        deleted: false,
+        item: Item::Finish { title: "Т\tх".into(), authors: "А".into(), started: Some(3), approximate: false },
+        local: None,
+    };
+    for r in [read, finish] {
+        let mut line = String::new();
+        write_record(&mut line, &r, true);
+        assert_eq!(parse_record(line.trim_end_matches('\n')).as_ref(), Some(&r), "{line}");
+    }
+    assert_eq!(parse_record("read\tb\t5\td\t2026-10-18\t60\t900\t0\tmore\tfields").unwrap().key().2, "d/2026-10-18");
+    assert!(parse_record("finish\tb\t6\tT\tA\tlater\t0").is_none());
+}
+
+#[test]
+fn a_day_on_two_devices_is_both_devices_minutes() {
+    let (folder, mut a, mut b) = two_logs();
+    minutes(&mut a, 20, 1000);
+    minutes(&mut b, 30, 1000);
+    sync(&folder, &mut a).unwrap();
+    sync(&folder, &mut b).unwrap();
+    sync(&folder, &mut a).unwrap();
+    let (da, db) = (a.setting(DEVICE).unwrap().to_owned(), b.setting(DEVICE).unwrap().to_owned());
+    let mut both = vec![(da.clone(), 20), (db.clone(), 30)];
+    both.sort();
+    assert_eq!(day_minutes(&a), both);
+    assert_eq!(day_minutes(&b), both);
+
+    // A reads ten more minutes the same day: B has A's 30, not 50.
+    minutes(&mut a, 10, 2000);
+    sync(&folder, &mut a).unwrap();
+    sync(&folder, &mut b).unwrap();
+    assert!(day_minutes(&b).contains(&(da.clone(), 30)), "{:?}", day_minutes(&b));
+    let file = std::fs::read_to_string(folder.join(DIR).join(format!("{db}.sync"))).unwrap();
+    assert!(file.contains(&format!("read\tbook\t2000\t{da}\t2026-10-18\t1800\t0\t0\n")), "B's file carries A's day: {file}");
+
+    // A's file goes away: B keeps A's days, in its log and its file.
+    std::fs::remove_file(folder.join(DIR).join(format!("{da}.sync"))).unwrap();
+    sync(&folder, &mut b).unwrap();
+    assert!(day_minutes(&b).contains(&(da.clone(), 30)));
+    assert!(std::fs::read_to_string(folder.join(DIR).join(format!("{db}.sync"))).unwrap().contains(&format!("\t{da}\t2026-10-18\t1800")));
+}
+
+#[test]
+fn a_devices_own_days_come_only_from_itself() {
+    let (folder, mut a, _) = two_logs();
+    minutes(&mut a, 20, 1000);
+    sync(&folder, &mut a).unwrap();
+    let da = a.setting(DEVICE).unwrap().to_owned();
+    let other = format!("forzac-sync 1\ndevice\tffff\tPhone\nread\tbook\t9999\t{da}\t2026-10-18\t6000\t0\t0\n");
+    std::fs::write(folder.join(DIR).join("ffff.sync"), other).unwrap();
+    sync(&folder, &mut a).unwrap();
+    assert_eq!(day_minutes(&a), [(da, 20)]);
+}
+
+#[test]
+fn the_phones_lines_arrive_once() {
+    let (folder, mut a, _) = two_logs();
+    let phone = "forzac-sync 1\ndevice\tpppp\tPixel\n\
+        read\tbook\t1792300000000\tpppp\t2026-10-18\t1800\t25000\t0\n\
+        finish\tbook\t1792300000000\tКнига\tАвтор\t1791000000000\t0\n";
+    std::fs::create_dir_all(folder.join(DIR)).unwrap();
+    std::fs::write(folder.join(DIR).join("pppp.sync"), phone).unwrap();
+    sync(&folder, &mut a).unwrap();
+    sync(&folder, &mut a).unwrap();
+    let log = crate::log::load(&a).unwrap();
+    assert_eq!(log.finishes.len(), 1);
+    assert_eq!((log.finishes[0].title.as_str(), log.finishes[0].started), ("Книга", Some(1_791_000_000_000)));
+    assert_eq!(log.day("pppp", "book", "2026-10-18").map(|d| (d.seconds, d.chars)), Some((1800, 25000)));
+    let own = std::fs::read_to_string(folder.join(DIR).join(format!("{}.sync", a.setting(DEVICE).unwrap()))).unwrap();
+    assert!(own.contains("finish\tbook\t1792300000000\tКнига\tАвтор\t1791000000000\t0\n"), "{own}");
+    assert!(own.contains("read\tbook\t1792300000000\tpppp\t2026-10-18\t1800\t25000\t0\n"));
+}

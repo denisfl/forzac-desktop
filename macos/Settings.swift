@@ -9,11 +9,6 @@ func computerName() -> String { SCDynamicStoreCopyComputerName(nil, nil) as Stri
 
 private let width: CGFloat = 420
 
-/// Esc closes the window.
-private final class EscWindow: NSWindow {
-    override func cancelOperation(_ sender: Any?) { performClose(sender) }
-}
-
 final class SettingsWindow: NSObject, NSWindowDelegate {
     let window: NSWindow = EscWindow(contentRect: .zero, styleMask: [.titled, .closable], backing: .buffered, defer: false)
     private let state: OpaquePointer
@@ -59,7 +54,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
 
         let stack = NSStackView(views: [
             heading(tr("Language")), language, note(tr("Forzac will speak the chosen language after a restart.")),
-            heading(tr("Sync")), note(tr("Your place, bookmarks, highlights, shelves and book details are the same in Forzac on every computer and phone that shares the Books folder. Keep the folder in sync with Dropbox, iCloud Drive or Syncthing; on Android only Syncthing keeps a folder on the phone.")),
+            heading(tr("Sync")), note(tr("Your place, bookmarks, highlights, shelves, book details and reading stats are the same in Forzac on every computer and phone that shares the Books folder. Keep the folder in sync with Dropbox, iCloud Drive or Syncthing; on Android only Syncthing keeps a folder on the phone.")),
             folderRow, status, caption(tr("Other devices")), devices, syncNow,
         ])
         stack.orientation = .vertical

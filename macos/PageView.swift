@@ -12,6 +12,8 @@ enum Command {
     case preview(String)
     /// An image (by id) or a table (by its first row) in the view (`Viewer`).
     case image(String), table(ForzacLocator)
+    /// The reading stats (`reading-stats`), from the end page's month.
+    case stats
 }
 
 /// The pill after a jump, as on Android: it goes when the reader turns this many pages (or screens) away.
@@ -76,6 +78,15 @@ final class PageView: NSView {
     private var columnEnd = false
     private var endImage: CGImage?
     private let endLayer = CALayer()
+    /// The end page's areas (its month, which opens the stats), y down from its top; where the end screen's top is in
+    /// "Scroll" while it is in the window.
+    private var endAreas: [Area] = []
+    private var endTop: CGFloat?
+    /// Fills the end page's totals before it is drawn (`forzac_state_end_lines`).
+    var onEndPage: (() -> Void)?
+    /// The last move was a jump (contents, link, search, chapter keys, back, the slider), not a turn or a scroll: the
+    /// reading log counts no text for it (`reading-log`).
+    private(set) var jumped = false
     /// The end page (or end screen) is shown: the position is saved as finished.
     var finished: Bool { scrolling ? columnEnd : atEnd }
     /// The bookmarks' places (the document holds them) and the ribbons of the two page layers.
@@ -322,9 +333,12 @@ final class PageView: NSView {
         if let i = endImage { return i }
         let h = bounds.height
         let centre = (bounds.width - pageWidth) / 2 // in a spread, centred on the window
+        onEndPage?()
         endImage = bitmap(bounds.size, scale: scale, background: palette.paper) { ctx in
             ctx.translateBy(x: centre, y: 0)
-            drawPage(forzac_end_page(doc), in: ctx, height: h, palette: palette, fonts: fonts, pictures: &pictures)
+            let page = forzac_end_page(doc)
+            endAreas = areas(of: page).map { $0.offsetBy(dx: centre) }
+            drawPage(page, in: ctx, height: h, palette: palette, fonts: fonts, pictures: &pictures)
         }
         return endImage
     }
@@ -387,6 +401,7 @@ final class PageView: NSView {
             // Back from the end page to the last page of the text; forward does nothing.
             guard delta < 0 else { return }
             atEnd = false
+            jumped = false
             show(animated: -1)
             onMoved?()
             return
@@ -397,6 +412,8 @@ final class PageView: NSView {
             // Past the book's last page: the end page; the position stays at the last page.
             atEnd = true
             focus = nil
+            endImage = nil // the totals as of now
+            jumped = false
             show(animated: 1)
             onMoved?()
             return
@@ -417,6 +434,7 @@ final class PageView: NSView {
             return
         }
         focus = nil
+        jumped = false
         show(animated: CGFloat(delta.signum()))
         onMoved?()
     }
@@ -433,13 +451,14 @@ final class PageView: NSView {
             let h = CGFloat(forzac_flow_height(doc, chapter))
             offset = end ? max(0, h - bounds.height) : 0
             placeTiles()
-            settle()
+            settle(jump: true)
             return
         }
         page = end ? left(pageCount - 1) : 0
         locator = forzac_page_start(doc, page)
         focus = nil
         atEnd = false
+        jumped = true
         show(animated: 0)
         onMoved?()
     }
@@ -460,6 +479,7 @@ final class PageView: NSView {
         laidOutFor = nil
         relayout()
         if scrolling { offset = CGFloat(forzac_flow_y(doc, locator)) - marginTop }
+        jumped = true
         show(animated: 0)
         onMoved?()
     }
@@ -696,8 +716,10 @@ final class PageView: NSView {
             endLayer.contentsScale = scale
             endLayer.frame = CGRect(x: 0, y: h - top - bounds.height, width: bounds.width, height: bounds.height)
             endLayer.isHidden = false
+            endTop = top
         } else {
             endLayer.isHidden = true
+            endTop = nil
         }
         CATransaction.commit()
         if tiles.count > 16 {
@@ -747,10 +769,12 @@ final class PageView: NSView {
     }
 
     /// The column stopped: the reading position is its top line; the tiles a screen around are drawn in idle time.
-    private func settle() {
+    /// `jump`: it got there by `g`/`G`, not by scrolling.
+    private func settle(jump: Bool = false) {
         locator = forzac_flow_locator(doc, chapter, Float(offset + marginTop))
         columnEnd = chapter + 1 == forzac_chapter_count(doc) && offset >= CGFloat(forzac_flow_height(doc, chapter)) - 0.5
         updatePill()
+        jumped = jump
         onMoved?()
         DispatchQueue.main.async { [weak self] in
             guard let self, self.motion == nil, self.scrolling else { return }
@@ -762,12 +786,13 @@ final class PageView: NSView {
 
     /// The markers and links on screen, y down.
     private func visibleAreas() -> [Area] {
-        if atEnd { return [] }
+        if atEnd { return endAreas }
         if !scrolling { return shownPages(page).flatMap { pageAreas[$0.0] ?? [] } }
         var out: [Area] = []
         forTiles(from: 0, to: bounds.height) { top, key in
             out += (tileAreas[key] ?? []).map { $0.offsetBy(dy: top) }
         }
+        if let endTop { out += endAreas.map { $0.offsetBy(dy: endTop) } }
         return out.filter { $0.rect.maxY > 0 && $0.rect.minY < bounds.height }
     }
 
@@ -985,6 +1010,7 @@ final class PageView: NSView {
     /// browser), an image or a table (in the view).
     func open(_ area: Area) {
         if area.kind == 4 { return openHighlight(area.at) }
+        if area.kind == 5 { return onCommand?(.stats) ?? () }
         if area.isNote { return onCommand?(.note(area.target)) ?? () }
         if area.kind == 2 { return onCommand?(.image(area.target)) ?? () }
         if area.kind == 3 { return onCommand?(.table(area.at)) ?? () }

@@ -46,7 +46,7 @@ typedef struct {
 typedef struct {
     ForzacRect rect;
     uint8_t kind;           // 0 note marker, 1 link, 2 image (opens in the view), 3 table (opens in the view), 4 a
-                            // highlight (the shell's own; the core never sets it)
+                            // highlight (the shell's own; the core never sets it), 5 the end page's month (the stats)
     const char *target;     // note id, link key or image id; empty for a table
     ForzacLocator at;       // a table's first row
 } ForzacArea;
@@ -288,7 +288,7 @@ void forzac_settings_step(ForzacSettings *settings, uint32_t setting, int32_t de
 // Reading state: positions, the library's books and settings in the file at `path`.
 ForzacState *forzac_state_open(const char *path);
 bool forzac_state_position(const ForzacState *state, const ForzacDocument *doc, ForzacLocator *out);
-// `finished`: the end page was shown; the book reads 100 %.
+// `finished`: the end page was shown; the book reads 100 % and is finished in the reading log.
 bool forzac_state_save_position(ForzacState *state, const ForzacDocument *doc, ForzacLocator at, bool finished);
 // The last opened first, files that exist only; valid until the next call on `state`.
 const ForzacRecent *forzac_state_recent(ForzacState *state, uint32_t n, uint32_t *count);
@@ -423,3 +423,56 @@ bool forzac_state_save_quotes(ForzacState *state, ForzacDocument *doc);
 ForzacSettings forzac_state_settings(const ForzacState *state);
 bool forzac_state_save_settings(ForzacState *state, const ForzacSettings *settings);
 void forzac_state_close(ForzacState *state);
+
+// The reading log (reading-log). An event at `at`: 0 a key, click or scroll, 1 a move by turning or scrolling, 2 a
+// jump, 3 leaving the book; `offset` the local time zone, seconds east of UTC. forzac_state_log appends the reading:
+// everything when `leaving`, else once a minute; `opened` also remembers the book's first opening.
+void forzac_reading_event(ForzacDocument *doc, uint32_t kind, ForzacLocator at, int32_t offset);
+bool forzac_state_log(ForzacState *state, ForzacDocument *doc, bool leaving, bool opened);
+// The end page's totals from the log (reading-stats), shown by the next forzac_end_page.
+void forzac_state_end_lines(const ForzacState *state, ForzacDocument *doc, int32_t offset);
+
+// The stats window (reading-stats): a period's numbers, calendar and finished books, valid until the next call on
+// `state`. `month` 1–12 of `year`, 0 for the year, or the current month when `year` is 0; the calendar `width` points
+// wide at `scale` (1 the window, 2.5 the picture), a year `columns` months a row.
+typedef struct {
+    int64_t day;            // days since 1970-01-01
+    ForzacRect rect;
+    uint8_t level;          // 0–4
+    bool today;
+    bool future;
+    uint32_t number;        // the day of the month; 0 in a year
+    uint32_t minutes;
+} ForzacStatsCell;
+typedef struct {
+    const char *text;
+    ForzacRect rect;
+    bool centered;
+} ForzacStatsLabel;
+typedef struct {
+    const char *title;
+    const char *caption;    // "authors · date"
+} ForzacStatsBook;
+typedef struct {
+    int32_t year;
+    uint32_t month;         // 0 for a year
+    const char *title;      // "October 2026", "2026"
+    const char *big;        // the picture's: "October" and "2026", or "2026" and ""
+    const char *small;
+    const char *file_name;  // "forzac-2026-10.png"
+    const char *figures[3]; // time, books, days
+    const char *captions[3];
+    bool can_previous;
+    bool can_next;
+    float height;
+    float radius;
+    const ForzacStatsCell *cells;
+    uint32_t cell_count;
+    const ForzacStatsLabel *labels;
+    uint32_t label_count;
+    const ForzacStatsBook *books;
+    uint32_t book_count;
+} ForzacStats;
+ForzacStats forzac_stats(ForzacState *state, int32_t year, uint32_t month, float width, float scale, uint32_t columns, int32_t offset);
+// "18 October · 52 min", valid until the next call on `state`.
+const char *forzac_stats_day(ForzacState *state, int64_t day, uint32_t minutes);

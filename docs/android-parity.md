@@ -59,7 +59,7 @@ modules (`core/typesetting/src/main/kotlin/app/truenrth/forzac/typesetting/…` 
 | M4 | Switching modes keeps the line (A spec page-turning) | `m` keeps the top line (spec page-turning) | same |
 | M5 | Asks for the highest refresh rate while moving, nothing drawn at rest (`HighRefreshRate`) | Frame clock / `CADisplayLink`, nothing drawn at rest | same |
 | M6 | Tablet in landscape (short side ≥ 600 dp, wider than tall): two pages side by side (`ReaderScreen.kt` `spread`, `ReaderSurface.kt` `PagedSurface.perScreen`) | Since `two-page-spread`: two pages side by side in "Slide" when the window is wider than tall and each half holds a 28 em column; every chapter starts on a left page (`core/src/settings.rs` `spread`, `page_view.rs` `shown_pages`, `macos/PageView.swift` `shownPages`) | same (chapters start on the left: pages are counted in the background) |
-| M7 | After the last page an end page: the book closes into its cover, "Finished", days read, highlights and bookmarks, "Share highlights", "Back to library"; the book is marked 100 % (`BookOpening.kt` `FinishPage`, A spec reader-ui "Финальная страница") | Turning past the last page does nothing; the last page shows the share before it, never 100 % (`page_view.rs` `turn`, `core/src/state.rs` `progress`) | unclear |
+| M7 | After the last page an end page: the book closes into its cover, "Finished", days read, highlights and bookmarks, "Share highlights", "Back to library"; the book is marked 100 % (`BookOpening.kt` `FinishPage`, A spec reader-ui "Финальная страница") | Turning past the last page does nothing; the last page shows the share before it, never 100 % (`page_view.rs` `turn`, `core/src/state.rs` `progress`) | unclear; since `reading-stats`: under "Finished" the book's time, days, highlights and bookmarks and the month that opens the stats (`core/src/layout/page.rs` `end_page`) |
 
 ## 4. Contents, notes and links
 
@@ -154,7 +154,8 @@ modules (`core/typesetting/src/main/kotlin/app/truenrth/forzac/typesetting/…` 
 
 | # | Android | Desktop | Status |
 |---|---|---|---|
-| L1 | Reading log by day, finish dates, history that survives deletion (A change reading-log, tasks open, nothing in the app yet) | None | unclear |
+| L1 | Reading log by day, finish dates, history that survives deletion (A change reading-log, tasks open, nothing in the app yet) | None | unclear; since `reading-log` (2026-10-22): the same rules, kept in `reading-log` beside the state (`core/src/log.rs`) and synced with the phone as `read` and `finish` lines (`core/src/sync.rs`, A change sync-reading-log) — same |
+| L2 | Reading stats: a month or a year, the reading calendar, the figures, the finished books, the 1080 × 1920 picture to share; the totals and the month on the end page; "⋯" in the library (A spec reading-stats, `StatsScreen.kt`, `StatsImage.kt`) | Since `reading-stats` (2026-10-22): a window of its own from the library's "⋯" menu, `s` and the end page's month (`macos/Stats.swift`, `gtk/src/stats.rs`, `core/src/stats.rs`); the picture goes to the share menu on macOS and is saved on Linux (no share menu); one reading marked on two devices counts once | same |
 
 ## 14. Between the two desktop shells
 

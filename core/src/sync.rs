@@ -13,6 +13,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::i18n::{fill, tr};
+use crate::log::{Day, Finish, Line};
 use crate::model::{Book, Locator};
 use crate::state::{Edits, Store, escape, unescape};
 
@@ -100,11 +101,29 @@ pub fn locate(book: &Book, place: &Place) -> Locator {
 /// What an item says.
 #[derive(Debug, Clone, PartialEq)]
 enum Item {
-    Position { place: Place, progress: f32 },
+    Position {
+        place: Place,
+        progress: f32,
+    },
     Bookmark(Place),
     Highlight(Place, Place),
     Shelf(String),
     Edit(Edits),
+    /// A day of the reading log (`reading-log`): changed only by its device.
+    Read {
+        device: String,
+        day: String,
+        seconds: u64,
+        chars: u64,
+        pages: u64,
+    },
+    /// A finish: never changed.
+    Finish {
+        title: String,
+        authors: String,
+        started: Option<u64>,
+        approximate: bool,
+    },
 }
 
 /// An item of a sync file.
@@ -127,7 +146,42 @@ impl Record {
             Item::Highlight(a, b) => (2, self.book.clone(), format!("{}-{}", a.key(), b.key())),
             Item::Shelf(name) => (3, self.book.clone(), name.to_lowercase()),
             Item::Edit(_) => (4, self.book.clone(), String::new()),
+            Item::Read { device, day, .. } => (5, self.book.clone(), format!("{device}/{day}")),
+            Item::Finish { .. } => (6, self.book.clone(), self.time.to_string()),
         }
+    }
+
+    /// A log line as a record.
+    fn of_log(line: Line) -> Option<Record> {
+        let (book, time, item) = match line {
+            Line::Read(d) => {
+                (d.book, d.time, Item::Read { device: d.device, day: d.day, seconds: d.seconds, chars: d.chars, pages: d.pages })
+            }
+            Line::Finish(f) => {
+                (f.book, f.time, Item::Finish { title: f.title, authors: f.authors, started: f.started, approximate: f.approximate })
+            }
+            Line::First(..) => return None,
+        };
+        Some(Record { book, time, deleted: false, item, local: None })
+    }
+
+    /// The record as a log line, if it is one.
+    fn log_line(&self) -> Option<Line> {
+        let (book, time) = (self.book.clone(), self.time);
+        Some(match &self.item {
+            Item::Read { device, day, seconds, chars, pages } => {
+                Line::Read(Day { book, time, device: device.clone(), day: day.clone(), seconds: *seconds, chars: *chars, pages: *pages })
+            }
+            Item::Finish { title, authors, started, approximate } => Line::Finish(Finish {
+                book,
+                time,
+                title: title.clone(),
+                authors: authors.clone(),
+                started: *started,
+                approximate: *approximate,
+            }),
+            _ => return None,
+        })
     }
 }
 
@@ -174,6 +228,11 @@ fn write_record(out: &mut String, r: &Record, own: bool) {
             let fields = [e.title.clone(), e.authors.clone(), series, number, e.genres.as_ref().map(|g| g.join(", "))];
             write!(out, "edit\t{book}\t{time}\t{}", fields.iter().map(edit_field).collect::<Vec<_>>().join("\t"))
         }
+        Item::Read { .. } | Item::Finish { .. } => match r.log_line() {
+            Some(Line::Read(d)) => write!(out, "{}", crate::log::day_line(&d)),
+            Some(Line::Finish(f)) => write!(out, "{}", crate::log::finish_line(&f)),
+            _ => Ok(()),
+        },
     };
     if let (true, Some(l)) = (own, &r.local) {
         let _ = write!(out, "\t{l}");
@@ -192,6 +251,9 @@ fn parse_place(f: &[String]) -> Option<Place> {
 
 fn parse_record(line: &str) -> Option<Record> {
     let f: Vec<String> = line.split('\t').map(unescape).collect();
+    if matches!(f.first().map(String::as_str), Some("read" | "finish")) {
+        return Record::of_log(crate::log::parse_line(&f)?);
+    }
     let (book, time) = (f.get(1)?.clone(), f.get(2)?.parse::<u64>().ok()?);
     let deleted = |i: usize| f.get(i).map(|d| d == "1");
     let (deleted, item, local_at) = match f.first()?.as_str() {
@@ -251,12 +313,12 @@ fn device_name() -> String {
 
 // endregion
 
-fn now() -> u64 {
+pub(crate) fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
 /// This device's id, made once and remembered in the state.
-fn device(store: &mut Store) -> io::Result<String> {
+pub(crate) fn device(store: &mut Store) -> io::Result<String> {
     match store.setting(DEVICE) {
         Some(id) => Ok(id.to_owned()),
         None => new_device(store),
@@ -357,8 +419,16 @@ fn sync_folder(folder: &Path, store: &mut Store) -> io::Result<Vec<String>> {
     let positions: HashMap<String, Locator> = store.entries().iter().map(|e| (e.id.clone(), e.position)).collect();
     let now = now();
     local_changes(store, &mut own, &mut books, now);
+    // The reading log's days and finishes, the log winning a tie.
+    for r in crate::log::load(store)?.lines().into_iter().filter_map(Record::of_log) {
+        let key = r.key();
+        if own.get(&key).is_none_or(|o| r.time >= o.time) {
+            own.insert(key, r);
+        }
+    }
 
-    // The other devices' newer items; a tombstone keeps the local place of what it removes.
+    // The other devices' newer items; a tombstone keeps the local place of what it removes. Only this device changes
+    // its days of the log.
     let mut adopted = Vec::new();
     for entry in std::fs::read_dir(&dir)?.flatten() {
         let path = entry.path();
@@ -366,6 +436,9 @@ fn sync_folder(folder: &Path, store: &mut Store) -> io::Result<Vec<String>> {
             continue;
         }
         for mut r in read(&path) {
+            if matches!(&r.item, Item::Read { device: d, .. } if *d == device) {
+                continue;
+            }
             let key = r.key();
             if own.get(&key).is_none_or(|o| r.time > o.time) {
                 r.local = own.get(&key).and_then(|o| o.local.clone()).filter(|_| r.deleted);
@@ -375,6 +448,19 @@ fn sync_folder(folder: &Path, store: &mut Store) -> io::Result<Vec<String>> {
         }
     }
     let moved = apply(store, &mut own, &mut books, &adopted, &positions)?;
+    // The others' days and finishes into the log, in one write.
+    let lines: Vec<Line> = adopted.iter().filter_map(|k| own.get(k)?.log_line()).collect();
+    if !lines.is_empty() {
+        crate::log::change(store, |log| {
+            for line in lines {
+                match line {
+                    Line::Read(d) if log.day(&d.device, &d.book, &d.day).is_none_or(|o| o.time < d.time) => log.set_day(d),
+                    Line::Finish(f) => log.add_finish(f),
+                    _ => {}
+                }
+            }
+        })?;
+    }
 
     let text = serialize(&device, &own);
     let path_text = own_path.to_string_lossy().into_owned();
@@ -584,6 +670,8 @@ fn apply(
                 store.set_edits(&id, edits.clone())?;
                 None
             }
+            // Into the log after the state (`sync_folder`).
+            Item::Read { .. } | Item::Finish { .. } => None,
         };
         if let Some(record) = own.get_mut(&key) {
             record.local = local_now;
@@ -700,7 +788,7 @@ pub fn when(time: u64, now: u64, offset: i64) -> String {
 }
 
 /// The year, month (1–12) and day of the day `days` after 1970-01-01 (the proleptic Gregorian calendar).
-fn civil(days: i64) -> (i64, u32, u32) {
+pub(crate) fn civil(days: i64) -> (i64, u32, u32) {
     let z = days + 719_468;
     let (era, doe) = (z.div_euclid(146_097), z.rem_euclid(146_097));
     let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;

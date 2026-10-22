@@ -216,6 +216,10 @@ pub struct Document {
     /// The book's pages counted for a style ([`forzac_count_install`]), and what [`forzac_chapter_starts`] returned.
     pages: Option<BookPages>,
     chapter_starts: Vec<u32>,
+    /// The reading being logged (`reading-log`).
+    reading: crate::log::Reading,
+    /// The end page's totals ([`forzac_state_end_lines`]).
+    end_lines: crate::layout::EndLines,
 }
 
 /// A page's contents as the C arrays a [`ForzacPage`] points to.
@@ -263,6 +267,7 @@ impl Published {
                 Target::Image(id) => ((2, none), cstring(id)),
                 Target::Table(at) => ((3, (*at).into()), CString::default()),
                 Target::Highlight(at) => ((4, (*at).into()), CString::default()),
+                Target::Stats => ((5, none), CString::default()),
             })
             .unzip();
         self.targets = targets;
@@ -395,6 +400,8 @@ pub unsafe extern "C" fn forzac_open(path: *const c_char, error: *mut u32) -> *m
         quote_strings: Vec::new(),
         pages: None,
         chapter_starts: Vec::new(),
+        reading: crate::log::Reading::new(crate::sync::now()),
+        end_lines: crate::layout::EndLines::default(),
     }))
 }
 
@@ -671,7 +678,7 @@ pub unsafe extern "C" fn forzac_link_preview(
 pub unsafe extern "C" fn forzac_end_page(doc: *mut Document) -> ForzacPage {
     let doc = unsafe { &mut *doc };
     if let (Some(style), Some(t)) = (doc.style, doc.typesetter.as_mut()) {
-        doc.page = end_page(&doc.book, &style, t);
+        doc.page = end_page(&doc.book, &style, t, &doc.end_lines);
     }
     doc.publish()
 }
@@ -1631,6 +1638,8 @@ pub struct State {
     synced: CString,
     /// The settings' sync status, as last returned.
     status: CString,
+    /// The stats window's period as last returned ([`forzac_stats`]).
+    stats: Option<StatsOut>,
 }
 
 /// A book of the library.
@@ -1706,6 +1715,7 @@ pub unsafe extern "C" fn forzac_state_open(path: *const c_char) -> *mut State {
         status: CString::default(),
         shelf_names: CString::default(),
         path: CString::default(),
+        stats: None,
     }))
 }
 
@@ -1728,7 +1738,9 @@ pub unsafe extern "C" fn forzac_state_position(state: *const State, doc: *const 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn forzac_state_save_position(state: *mut State, doc: *const Document, at: ForzacLocator, finished: bool) -> bool {
     let (state, doc) = unsafe { (&mut *state, &*doc) };
-    state.store.save_position(&doc.book, &doc.path, at.into(), finished).is_ok()
+    let saved = state.store.save_position(&doc.book, &doc.path, at.into(), finished).is_ok();
+    // A finished book is in the log (`reading-log`).
+    saved && (!finished || crate::log::finish(&state.store, &doc.book, crate::sync::now()).is_ok())
 }
 
 /// Up to `n` books whose files still exist, the last read first; valid until the next call on `state`.
@@ -2439,6 +2451,220 @@ pub unsafe extern "C" fn forzac_state_close(state: *mut State) {
         drop(unsafe { Box::from_raw(state) });
     }
 }
+
+// region The reading log and the stats (`reading-log`, `reading-stats`)
+
+/// Counts a reader's event at `at`: 0 a key, click or scroll, 1 a move by turning or scrolling, 2 a jump, 3 leaving;
+/// `offset`: the local time zone, seconds east of UTC.
+///
+/// # Safety
+/// `doc` from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_reading_event(doc: *mut Document, kind: u32, at: ForzacLocator, offset: i32) {
+    use crate::log::Event;
+    let doc = unsafe { &mut *doc };
+    let event = match kind {
+        1 => Event::Moved,
+        2 => Event::Jumped,
+        3 => Event::Paused,
+        _ => Event::Active,
+    };
+    doc.reading.event(&doc.book, event, at.into(), crate::sync::now(), offset.into());
+}
+
+/// Appends the document's reading to the log: when `leaving`, everything; else only once a minute. On `opened`, also
+/// remembers the book's first opening. False when the log cannot be written.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`], `doc` from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_state_log(state: *mut State, doc: *mut Document, leaving: bool, opened: bool) -> bool {
+    let (state, doc) = unsafe { (&mut *state, &mut *doc) };
+    let now = crate::sync::now();
+    if opened && crate::log::opened(&state.store, &doc.book.id, now).is_err() {
+        return false;
+    }
+    let sums = doc.reading.due(now, leaving);
+    crate::log::append(&mut state.store, &doc.book.id, &sums, now).is_ok()
+}
+
+/// Fills the document's end page totals (the book's line and the month's) from the log, as of now in the zone
+/// `offset`; the next [`forzac_end_page`] shows them.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`], `doc` from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_state_end_lines(state: *const State, doc: *mut Document, offset: i32) {
+    let (state, doc) = unsafe { (&*state, &mut *doc) };
+    let (now, offset) = (crate::sync::now(), i64::from(offset));
+    let log = crate::log::load(&state.store).unwrap_or_default().as_if_finished(&doc.book, now);
+    doc.end_lines = crate::layout::EndLines {
+        book: crate::stats::book_line(&log, &doc.book.id, doc.quotes.len(), doc.bookmarks.len(), now, offset),
+        month: crate::stats::month_line(&log, now, offset),
+    };
+}
+
+/// A day of the stats window's calendar.
+#[repr(C)]
+pub struct ForzacStatsCell {
+    /// Days since 1970-01-01.
+    pub day: i64,
+    pub rect: ForzacRect,
+    /// 0–4.
+    pub level: u8,
+    pub today: bool,
+    pub future: bool,
+    /// The day of the month; 0 when the calendar shows no numbers (a year).
+    pub number: u32,
+    pub minutes: u32,
+}
+
+/// A weekday's or month's name over the calendar.
+#[repr(C)]
+pub struct ForzacStatsLabel {
+    pub text: *const c_char,
+    pub rect: ForzacRect,
+    pub centered: bool,
+}
+
+/// A finished book: its title and "authors · date".
+#[repr(C)]
+pub struct ForzacStatsBook {
+    pub title: *const c_char,
+    pub caption: *const c_char,
+}
+
+/// What the stats window shows for a period ([`forzac_stats`]); valid until the next call on the state.
+#[repr(C)]
+pub struct ForzacStats {
+    pub year: i32,
+    /// 1–12; 0 for a year.
+    pub month: u32,
+    /// "October 2026" or "2026".
+    pub title: *const c_char,
+    /// For the picture: "October" and "2026", or "2026" and "".
+    pub big: *const c_char,
+    pub small: *const c_char,
+    /// "forzac-2026-10.png".
+    pub file_name: *const c_char,
+    /// Time, books, days: the figures and their captions.
+    pub figures: [*const c_char; 3],
+    pub captions: [*const c_char; 3],
+    pub can_previous: bool,
+    pub can_next: bool,
+    pub height: f32,
+    pub radius: f32,
+    pub cells: *const ForzacStatsCell,
+    pub cell_count: u32,
+    pub labels: *const ForzacStatsLabel,
+    pub label_count: u32,
+    pub books: *const ForzacStatsBook,
+    pub book_count: u32,
+}
+
+/// The owned data behind a [`ForzacStats`].
+struct StatsOut {
+    strings: Vec<CString>,
+    cells: Vec<ForzacStatsCell>,
+    labels: Vec<ForzacStatsLabel>,
+    books: Vec<ForzacStatsBook>,
+    day: CString,
+}
+
+/// The stats of a period as of now in the zone `offset` (seconds east of UTC): `month` 1–12 of `year`, 0 for the
+/// year, or the current month when `year` is 0; the calendar laid out `width` points wide at `scale`, a year `columns`
+/// months a row. Reads the log.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_stats(
+    state: *mut State,
+    year: i32,
+    month: u32,
+    width: f32,
+    scale: f32,
+    columns: u32,
+    offset: i32,
+) -> ForzacStats {
+    use crate::stats::{Period, view};
+    let state = unsafe { &mut *state };
+    let (now, offset) = (crate::sync::now(), i64::from(offset));
+    let period = match (year, month) {
+        (0, _) => Period::month_of(crate::log::day_number(now, offset)),
+        (y, 0) => Period::Year(y.into()),
+        (y, m) => Period::Month { year: y.into(), month: m.clamp(1, 12) },
+    };
+    let log = crate::log::load(&state.store).unwrap_or_default();
+    let v = view(&log, period, now, offset, width, scale, columns as usize);
+    let (big, small) = period.big_and_small();
+    let mut strings: Vec<CString> = [v.title.clone(), big, small, period.file_name()].iter().map(|s| cstring(s)).collect();
+    strings.extend(v.figures.iter().flat_map(|(f, c)| [cstring(f), cstring(c)]));
+    let cells = v
+        .cells
+        .iter()
+        .map(|c| ForzacStatsCell {
+            day: c.day,
+            rect: c.rect.into(),
+            level: c.level,
+            today: c.today,
+            future: c.future,
+            number: c.number.unwrap_or(0),
+            minutes: c.minutes as u32,
+        })
+        .collect();
+    let label_texts: Vec<CString> = v.labels.iter().map(|l| cstring(&l.text)).collect();
+    let book_texts: Vec<(CString, CString)> = v.books.iter().map(|(t, c)| (cstring(t), cstring(c))).collect();
+    let labels = v
+        .labels
+        .iter()
+        .zip(&label_texts)
+        .map(|(l, t)| ForzacStatsLabel { text: t.as_ptr(), rect: l.rect.into(), centered: l.centered })
+        .collect();
+    let books = book_texts.iter().map(|(t, c)| ForzacStatsBook { title: t.as_ptr(), caption: c.as_ptr() }).collect();
+    strings.extend(label_texts);
+    strings.extend(book_texts.into_iter().flat_map(|(t, c)| [t, c]));
+    let out = state.stats.insert(StatsOut { strings, cells, labels, books, day: CString::default() });
+    let s = &out.strings;
+    let (y, m) = match period {
+        Period::Month { year, month } => (year as i32, month),
+        Period::Year(year) => (year as i32, 0),
+    };
+    ForzacStats {
+        year: y,
+        month: m,
+        title: s[0].as_ptr(),
+        big: s[1].as_ptr(),
+        small: s[2].as_ptr(),
+        file_name: s[3].as_ptr(),
+        figures: [s[4].as_ptr(), s[6].as_ptr(), s[8].as_ptr()],
+        captions: [s[5].as_ptr(), s[7].as_ptr(), s[9].as_ptr()],
+        can_previous: v.can_previous,
+        can_next: v.can_next,
+        height: v.height,
+        radius: v.radius,
+        cells: out.cells.as_ptr(),
+        cell_count: out.cells.len() as u32,
+        labels: out.labels.as_ptr(),
+        label_count: out.labels.len() as u32,
+        books: out.books.as_ptr(),
+        book_count: out.books.len() as u32,
+    }
+}
+
+/// The line under the calendar for a clicked day ("18 October · 52 min"); valid until the next call on the state.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`], after [`forzac_stats`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_stats_day(state: *mut State, day: i64, minutes: u32) -> *const c_char {
+    let state = unsafe { &mut *state };
+    let Some(out) = state.stats.as_mut() else { return c"".as_ptr() };
+    out.day = cstring(&crate::stats::day_line(day, minutes.into()));
+    out.day.as_ptr()
+}
+
+// endregion
 
 #[cfg(test)]
 mod tests;

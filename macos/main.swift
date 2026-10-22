@@ -12,8 +12,9 @@
 // first, 0.3 s apart: letters, digits, + - =, \t Tab, \r Return, \e Esc, an upper-case letter with Shift; --mouse
 // "down X Y; drag X Y; up X Y; move X Y; click X Y N" then sends those mouse events to the page, 0.15 s apart, at
 // points of the page, y down), --scroll (in "Scroll"), --menus (prints the menus' titles and quits); with any of them the reading
-// state is neither read nor written. --library shows the library from the state (with --png: saves it once its covers
-// have arrived, after --keys, and quits).
+// state is neither read nor written, unless --state names one. --library shows the library from the state (with
+// --png: saves it once its covers have arrived, after --keys, and quits; when a key opened the stats, saves them
+// instead, and --picture out.png their picture).
 
 import AppKit
 
@@ -63,7 +64,7 @@ final class Reader: NSObject, NSWindowDelegate {
         guard let doc = forzac_open(path, &Reader.openError) else { return nil }
         self.path = path
         self.state = state
-        var at = ForzacLocator(chapter: chapter ?? 0, block: 0, offset: 0)
+        var at = ForzacLocator(chapter: min(chapter ?? 0, max(forzac_chapter_count(doc), 1) - 1), block: 0, offset: 0)
         if let state, chapter == nil { _ = forzac_state_position(state, doc, &at) }
         // Measurements use the defaults in Light.
         var settings = forzac_state_settings(state)
@@ -123,9 +124,15 @@ final class Reader: NSObject, NSWindowDelegate {
         view.menuOpen = { [weak self] in self?.menu?.isOpen ?? false }
         view.menuKey = { [weak self] e in self?.menu?.key(e) ?? false }
         view.onMoved = { [weak self] in
-            self?.bar.updateBookmark()
-            self?.saveTimer?.invalidate()
-            self?.saveTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: false) { _ in self?.savePosition() }
+            guard let self else { return }
+            self.logEvent(self.view.jumped ? 2 : 1)
+            self.bar.updateBookmark()
+            self.saveTimer?.invalidate()
+            self.saveTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: false) { [weak self] _ in self?.savePosition() }
+        }
+        view.onEndPage = { [weak self] in
+            guard let self, let state = self.state else { return }
+            forzac_state_end_lines(state, self.view.doc, zoneOffset())
         }
         view.onSettings = { [weak self] in
             guard let self else { return }
@@ -135,11 +142,15 @@ final class Reader: NSObject, NSWindowDelegate {
         }
         window.appearance = NSAppearance(named: view.palette.paper < 0x808080 ? .darkAqua : .aqua)
         savePosition() // an opened book is in the library, even if it is closed without turning a page
+        if let state { _ = forzac_state_log(state, doc, false, true) } // its first opening (`reading-log`)
         NSDocumentController.shared.noteNewRecentDocumentURL(URL(fileURLWithPath: path))
         if state != nil { cacheCover(doc) }
         if state != nil {
             inputMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .scrollWheel, .swipe]) { [weak self] e in
-                if let self, e.window === self.window { self.touch() }
+                if let self, e.window === self.window {
+                    self.touch()
+                    self.logEvent(0)
+                }
                 return e
             }
         }
@@ -162,8 +173,29 @@ final class Reader: NSObject, NSWindowDelegate {
         activity = nil
     }
 
-    func windowDidBecomeKey(_ notification: Notification) { if state != nil { touch() } }
-    func windowDidResignKey(_ notification: Notification) { sleepAllowed() }
+    func windowDidBecomeKey(_ notification: Notification) {
+        if state != nil { touch() }
+        logEvent(0)
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        sleepAllowed()
+        leave()
+    }
+
+    /// Counts a reader's event for the reading log (`reading-log`): 0 a key, click or scroll, 1 a move, 2 a jump, 3
+    /// leaving.
+    private func logEvent(_ kind: UInt32) {
+        if state != nil { forzac_reading_event(view.doc, kind, view.locator, zoneOffset()) }
+    }
+
+    /// The window is left (another window, app or quitting): its reading goes into the log now.
+    func leave() {
+        guard let state else { return }
+        logEvent(3)
+        if !forzac_state_log(state, view.doc, true, false) { fputs("cannot write the reading log\n", stderr) }
+    }
+
     func windowDidEndLiveResize(_ notification: Notification) { saveFrame() }
     func windowDidMove(_ notification: Notification) { saveFrame() }
 
@@ -253,6 +285,8 @@ final class Reader: NSObject, NSWindowDelegate {
         case .closePanels:
             closePanels()
             window.makeFirstResponder(view)
+        case .stats:
+            (NSApp.delegate as? AppDelegate)?.openStats()
         case .menu:
             closePanels()
             if menu == nil {
@@ -315,7 +349,8 @@ final class Reader: NSObject, NSWindowDelegate {
         guard let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: shift ? .shift : [], timestamp: 0, windowNumber: window.windowNumber,
                                        context: nil, characters: text, charactersIgnoringModifiers: text, isARepeat: false, keyCode: codes[key] ?? 0xFFFF)
         else { return }
-        NSApp.sendEvent(e)
+        // Through the app (its key monitors) when the window is key; else (a run in the background) to the window.
+        if window.isKeyWindow { NSApp.sendEvent(e) } else { window.sendEvent(e) }
     }
 
     /// A mouse event at `(x, y)` of the page (y down) as the mouse would send it (`--mouse`): `down`, `drag`, `up`,
@@ -370,11 +405,13 @@ final class Reader: NSObject, NSWindowDelegate {
         saveTimer = nil
         guard let state else { return }
         if !forzac_state_save_position(state, view.doc, view.locator, view.finished) { fputs("cannot save the reading state\n", stderr) }
+        _ = forzac_state_log(state, view.doc, false, false) // at most once a minute
     }
 
     func windowWillClose(_ notification: Notification) {
         saveFrame()
         savePosition()
+        leave()
         sleepAllowed()
         if let inputMonitor { NSEvent.removeMonitor(inputMonitor) }
         if let barMonitor { NSEvent.removeMonitor(barMonitor) }
@@ -396,6 +433,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var readers: [Reader] = []
     var library: LibraryWindow?
     private var settings: SettingsWindow?
+    private var stats: StatsWindow?
     private var checkingUpdate = false
     private var appearance: NSKeyValueObservation?
 
@@ -407,7 +445,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var measuring: Bool { ["--measure", "--png", "--chapter", "--page", "--panel", "--scroll", "--menus"].contains { args.contains($0) } }
 
     func applicationWillFinishLaunching(_ note: Notification) {
-        if !measuring || args.contains("--library") {
+        if !measuring || args.contains("--library") || args.contains("--state") {
             let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             let path = value(after: "--state") ?? support.appendingPathComponent("Forzac/state").path
             state = forzac_state_open(path)
@@ -430,7 +468,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let png = value(after: "--png")
         // Values of the flags that take one are not books.
-        let values = Set(["--png", "--chapter", "--page", "--panel", "--theme", "--keys", "--mouse", "--state", "--size", "-AppleLanguages"].compactMap { value(after: $0) })
+        let values = Set(["--png", "--chapter", "--page", "--panel", "--theme", "--keys", "--mouse", "--state", "--size", "--picture", "-AppleLanguages"].compactMap { value(after: $0) })
         if let path = args.dropFirst().first(where: { !$0.hasPrefix("-") && !values.contains($0) && UInt32($0) == nil }) {
             if measuring {
                 guard let reader = open(path, chapter: value(after: "--chapter").flatMap { UInt32($0) }) else {
@@ -714,10 +752,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             print(String(format: "library: %d books, covers loaded %.1f ms", library.bookCount, Date().timeIntervalSince(processStart) * 1000))
             let keys = Array(self?.value(after: "--keys").map(unescape) ?? "")
             for (i, key) in keys.enumerated() {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5 + 0.3 * Double(i)) { library.send(key) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5 + 0.3 * Double(i)) {
+                    if let stats = self?.stats { stats.send(key) } else { library.send(key) }
+                }
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8 + 0.3 * Double(keys.count)) {
-                (self?.library ?? library).savePNG(png)
+                // The stats when a key opened them (`--picture PATH`: also their picture).
+                if let stats = self?.stats {
+                    stats.savePNG(png)
+                    let start = Date()
+                    if let path = self?.value(after: "--picture"), let state = self?.state,
+                       let data = statsPicture(state, year: stats.page.model?.year ?? 0, month: stats.page.model?.month ?? 0, palette: stats.page.palette) {
+                        try? data.write(to: URL(fileURLWithPath: path))
+                        print(String(format: "picture: %.1f ms", Date().timeIntervalSince(start) * 1000))
+                    }
+                } else {
+                    (self?.library ?? library).savePNG(png)
+                }
                 NSApp.terminate(nil)
             }
         }
@@ -777,7 +828,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { false }
 
     func applicationWillTerminate(_ notification: Notification) {
-        readers.forEach { $0.savePosition() }
+        readers.forEach {
+            $0.savePosition()
+            $0.leave()
+        }
         if !measuring, let worker { importQueue.sync { _ = forzac_sync(worker) } }
     }
 
@@ -809,6 +863,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         settings?.show()
         readSyncStatus()
+    }
+
+    /// The reading stats (`reading-stats`): their window on the current month, brought forward when it is open.
+    func openStats() {
+        guard let state else { return }
+        if stats == nil {
+            let window = StatsWindow(state: state)
+            window.onClose = { [weak self] in self?.stats = nil }
+            stats = window
+        }
+        stats?.show()
     }
 
     /// The settings window's sync status, read on the background queue (the other devices' files may be slow to read).

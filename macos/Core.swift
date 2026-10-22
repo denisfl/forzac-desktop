@@ -45,6 +45,9 @@ func color(_ rgb: UInt32, alpha: CGFloat = 1) -> CGColor {
     CGColor(srgbRed: CGFloat((rgb >> 16) & 0xFF) / 255, green: CGFloat((rgb >> 8) & 0xFF) / 255, blue: CGFloat(rgb & 0xFF) / 255, alpha: alpha)
 }
 
+/// The local time zone now, seconds east of UTC (the core's dates are local).
+func zoneOffset() -> Int32 { Int32(TimeZone.current.secondsFromGMT()) }
+
 func nsColor(_ rgb: UInt32, alpha: CGFloat = 1) -> NSColor { NSColor(cgColor: color(rgb, alpha: alpha))! }
 
 /// Where the bundled assets are: the app's resources, else the source tree (a development build).

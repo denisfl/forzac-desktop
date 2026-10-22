@@ -24,6 +24,8 @@ bookmark	<book>	<time>	<deleted>	<place>
 highlight	<book>	<time>	<deleted>	<place>	<place>
 shelf	<book>	<time>	<deleted>	<name>
 edit	<book>	<time>	<title>	<authors>	<series>	<number>	<genres>
+read	<book>	<time>	<device>	<day>	<seconds>	<chars>	<pages>
+finish	<book>	<time>	<title>	<authors>	<started>	<approximate>
 ```
 
 - `device`: the file's device id and a name for people — the computer's name (macOS: as in Sharing settings; Linux:
@@ -38,6 +40,12 @@ edit	<book>	<time>	<title>	<authors>	<series>	<number>	<genres>
   blocks differently.
 - `<progress>`: the share read, 0 to 1, decimal with a dot.
 - `<name>`: a shelf's name as the reader typed it.
+- `read`: a day of the reading log (`reading-log`): `device` the id of the device that read, `day` its local date
+  `yyyy-mm-dd`, then the seconds read, the characters read (code points on the desktop, UTF-16 units on Android) and
+  the pages (PDF and picture books; 0 on the desktop).
+- `finish`: a book finished: a copy of its `title` and `authors`, `started` — when it was first opened on the device
+  that finished it, in milliseconds, or `-` — and `approximate`, `1` when the date is the book's last opening from
+  before the log, else `0`.
 - `edit`: the reader's edits of a book's details; each field is `-` for "the book's own" or `=` followed by the value
   (`=` alone: empty — for `series` that means "no series"); `authors` and `genres` are separated by `, `.
 
@@ -47,10 +55,13 @@ coordinates there); other devices ignore them.
 ## Keys and merging
 
 An item's key: `position` — the book; `bookmark` — the book and its place's `chapter.block.offset`; `highlight` — the
-book and both places' `chapter.block.offset`; `shelf` — the book and the name in lower case; `edit` — the book. The key
+book and both places' `chapter.block.offset`; `shelf` — the book and the name in lower case; `edit` — the book; `read`
+— the device, the book and the day; `finish` — the book and its time. The key
 of a bookmark or highlight is fixed by the device that made it and is kept by every device that copies the item.
 
-For every key, the item with the latest `<time>` across all files wins (a tie: either). A device writes into its own
+For every key, the item with the latest `<time>` across all files wins (a tie: either). A `read` line is changed only by
+its own device (a device never takes a line with its own id from another file), and a book's day is the sum over the
+devices; a `finish` never changes and is added where it is missing. A device writes into its own
 file every item it knows — its own changes with the time of the change, the others' with their times — so the files
 converge. Tombstones are kept.
 

@@ -493,9 +493,18 @@ fn label(typesetter: &mut Typesetter, text: &str, ink: Ink, size: f32, center: f
     run
 }
 
-/// The end page after the book's last page: its title (set like a chapter heading), its authors and "Finished",
-/// centred in a window of `style`, without running head or foot.
-pub fn end_page(book: &Book, style: &PageStyle, typesetter: &mut Typesetter) -> PageContent {
+/// The end page's totals under "Finished" (`reading-stats`): the book's line and the current month's, which leads to the
+/// stats; empty strings show nothing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EndLines {
+    pub book: String,
+    pub month: String,
+}
+
+/// The end page after the book's last page: its title (set like a chapter heading), its authors, "Finished" and the
+/// totals (`lines`), centred in a window of `style`, without running head or foot. The month's line is an area leading
+/// to the stats (`Target::Stats`).
+pub fn end_page(book: &Book, style: &PageStyle, typesetter: &mut Typesetter, lines: &EndLines) -> PageContent {
     let mut out = PageContent::default();
     let size = style.text_size;
     let heading = Block::Heading { text: crate::model::StyledText { text: book.title.clone(), styles: Vec::new() }, level: 1 };
@@ -503,8 +512,9 @@ pub fn end_page(book: &Book, style: &PageStyle, typesetter: &mut Typesetter) -> 
     let title_height = title.as_ref().map_or(0.0, BlockLayout::height);
     let lh = typesetter.line_height;
     let authors = book.authors.join(", ");
-    // Title, a line, the authors, two lines, "Finished".
-    let height = title_height + if authors.is_empty() { 0.0 } else { 2.0 * lh } + 3.0 * lh;
+    let totals = [&lines.book, &lines.month].iter().filter(|l| !l.is_empty()).count() as f32;
+    // Title, a line, the authors, two lines, "Finished", then a line and a half before the totals, a line apart.
+    let height = title_height + if authors.is_empty() { 0.0 } else { 2.0 * lh } + 3.0 * lh + totals * 1.5 * lh;
     let mut y = ((style.height - height) / 2.0).max(style.margin_top);
     if let Some(title) = &title {
         draw_block(&mut out, title, 0..title.line_count(), style.margin_h + title.x, y);
@@ -516,6 +526,20 @@ pub fn end_page(book: &Book, style: &PageStyle, typesetter: &mut Typesetter) -> 
         y += 2.0 * lh;
     }
     out.runs.push(label(typesetter, crate::i18n::tr("Finished"), Ink::Secondary, size * 0.85, center, y + size, width));
+    y += 0.5 * lh;
+    for (text, ink) in [(&lines.book, Ink::Secondary), (&lines.month, Ink::Link)] {
+        if text.is_empty() {
+            continue;
+        }
+        y += 1.5 * lh;
+        let run = label(typesetter, text, ink, size * 0.8, center, y + size, width);
+        if ink == Ink::Link {
+            let half = run.positions.first().map_or(0.0, |p| center - p[0]);
+            let rect = Rect { x: center - half - 4.0, y: y + size - size * 0.95, w: 2.0 * half + 8.0, h: size * 1.3 };
+            out.areas.push(Area { rect, target: Target::Stats });
+        }
+        out.runs.push(run);
+    }
     out
 }
 

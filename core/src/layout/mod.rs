@@ -12,7 +12,7 @@ mod table;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-pub use page::{ChapterLayout, Page, PageContent, PageImage, Rule, Word, end_page, layout_note, layout_preview, paginate};
+pub use page::{ChapterLayout, EndLines, Page, PageContent, PageImage, Rule, Word, end_page, layout_note, layout_preview, paginate};
 pub use pages::{BookPages, CountControl};
 pub use table::{TableView, layout_table};
 
@@ -100,6 +100,8 @@ pub enum Target {
     Table(Locator),
     /// A highlight, by its start. The core never sets it: the shells add their highlights' lines to a page's areas.
     Highlight(Locator),
+    /// The end page's month: the reading stats (`reading-stats`).
+    Stats,
 }
 
 impl Target {

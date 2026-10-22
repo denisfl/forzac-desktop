@@ -168,6 +168,7 @@ impl PageView {
             s.focus = None;
             s.at_end = false;
             s.column_end = false;
+            s.jumped = true;
             s.mode
         });
         self.moved();
@@ -210,7 +211,7 @@ impl PageView {
             s.focus = None;
             normalize(s, h);
         });
-        self.settle();
+        self.settle(false);
         self.queue_draw();
     }
 
@@ -276,15 +277,17 @@ impl PageView {
             if running {
                 glib::ControlFlow::Continue
             } else {
-                view.settle();
+                view.settle(false);
                 glib::ControlFlow::Break
             }
         });
     }
 
-    /// The column has stopped: the reading position is its top line.
-    fn settle(&self) {
+    /// The column has stopped: the reading position is its top line. `jump`: it got there by `g`/`G`, not by
+    /// scrolling.
+    fn settle(&self, jump: bool) {
         self.with(|s| {
+            s.jumped = jump;
             let margin = s.style.map_or(0.0, |st| st.margin_top);
             if let Some(l) = &s.layout {
                 s.locator = l.flow_locator(s.column.offset + margin);
@@ -339,6 +342,12 @@ impl PageView {
                     .filter(|a| a.rect.y + a.rect.h > 0.0 && a.rect.y < h),
             );
         });
+        // The end screen's month, when the end screen is in the window.
+        if let Some(top) = s.end_top {
+            visible.extend(
+                s.end_areas.iter().map(|a| Area { rect: forzac_core::Rect { y: a.rect.y + top, ..a.rect }, target: a.target.clone() }),
+            );
+        }
         s.column.visible = visible;
         &s.column.visible
     }
@@ -364,6 +373,7 @@ impl PageView {
         });
         // The end screen after the last chapter's column, when it reaches into the window.
         let last = s.book.chapters.len() - 1;
+        s.end_top = None;
         let (mut chapter, mut top) = (s.chapter, -s.column.offset.round());
         while chapter < last
             && let Some(length) = layout(s, chapter, false).map(|l| l.flow_height())
@@ -376,6 +386,7 @@ impl PageView {
             && top + length < h
             && let Some(node) = Self::end_node(s)
         {
+            s.end_top = Some(top + length);
             snapshot.save();
             snapshot.translate(&graphene::Point::new(0.0, top + length));
             snapshot.append_node(&node);
@@ -435,7 +446,7 @@ impl PageView {
             s.column.offset = if end { s.layout.as_ref().map_or(0.0, |l| (l.flow_height() - h).max(0.0)) } else { 0.0 };
             s.focus = None;
         });
-        self.settle();
+        self.settle(true);
         self.queue_draw();
     }
 

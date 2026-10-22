@@ -1294,11 +1294,13 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
 
     private func chooseFile() { (NSApp.delegate as? AppDelegate)?.openDocument(nil) }
 
-    /// The head's menu: "Show the Books folder", "Change the Books folder…", "Add a Folder…", then "Settings…".
+    /// The head's menu: "Show the Books folder", "Change the Books folder…", "Add a Folder…", then "Reading stats" and
+    /// "Settings…".
     private func headMenu() {
         let menu = NSMenu()
         for (title, action) in [(tr("Show the Books folder"), #selector(menuShowFolder(_:))), (tr("Change the Books folder…"), #selector(menuChangeFolder(_:))),
-                                (tr("Add a Folder…"), #selector(menuAddFolder(_:))), ("", nil), (tr("Settings…"), #selector(menuSettings(_:)))] {
+                                (tr("Add a Folder…"), #selector(menuAddFolder(_:))), ("", nil), (tr("Reading stats"), #selector(menuStats(_:))),
+                                (tr("Settings…"), #selector(menuSettings(_:)))] {
             guard let action else {
                 menu.addItem(.separator())
                 continue
@@ -1314,6 +1316,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     @objc private func menuChangeFolder(_ sender: Any?) { chooseBooksFolder() }
     @objc private func menuAddFolder(_ sender: Any?) { (NSApp.delegate as? AppDelegate)?.addFolder(nil) }
     @objc private func menuSettings(_ sender: Any?) { (NSApp.delegate as? AppDelegate)?.openSettings() }
+    @objc private func menuStats(_ sender: Any?) { (NSApp.delegate as? AppDelegate)?.openStats() }
 
     /// "Change the Books folder…": the folder panel, then "Move the books…?" (Move, Leave them, Cancel).
     func chooseBooksFolder() {
@@ -1496,6 +1499,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             case 0x28: step(dy: -1)
             case 0x02: if selected < items.count { ask(items[selected].index) }
             case 0x22: if selected < items.count { showAbout(items[selected].index) }
+            case 0x01: (NSApp.delegate as? AppDelegate)?.openStats()
             case 0x2C: if !books.isEmpty && e.characters != "?" { setSearching(true) } else { return false }
             case 0x03 where e.modifierFlags.contains(.shift): showFolder()
             case 0x0C: window.close()
