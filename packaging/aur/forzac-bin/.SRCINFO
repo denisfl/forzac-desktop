@@ -1,6 +1,6 @@
 pkgbase = forzac-bin
 	pkgdesc = Offline FB2 and EPUB reader with book-quality typesetting (release build)
-	pkgver = 0.16.0
+	pkgver = 0.16.1
 	pkgrel = 1
 	url = https://forzac.app
 	install = forzac.install
@@ -15,9 +15,9 @@ pkgbase = forzac-bin
 	provides = forzac
 	conflicts = forzac
 	options = !debug
-	source_x86_64 = forzac-0.16.0-linux-x86_64.tar.gz::https://github.com/denisfl/forzac-desktop/releases/download/v0.16.0/forzac-linux-x86_64.tar.gz
-	sha256sums_x86_64 = 2ef1edd615b5218812bd583eb09a77c73fd6654a7f518d80440e3b8b882d4cee
-	source_aarch64 = forzac-0.16.0-linux-aarch64.tar.gz::https://github.com/denisfl/forzac-desktop/releases/download/v0.16.0/forzac-linux-aarch64.tar.gz
-	sha256sums_aarch64 = 2f99316a8fda570bf35ad61b6f3fdb46cfd1725b58c52e5885c61469e58ab429
+	source_x86_64 = forzac-0.16.1-linux-x86_64.tar.gz::https://github.com/denisfl/forzac-desktop/releases/download/v0.16.1/forzac-linux-x86_64.tar.gz
+	sha256sums_x86_64 = 0ebf0cd94d727816e34f8e732a79154c5c7f6267406778a941d81e837528218a
+	source_aarch64 = forzac-0.16.1-linux-aarch64.tar.gz::https://github.com/denisfl/forzac-desktop/releases/download/v0.16.1/forzac-linux-aarch64.tar.gz
+	sha256sums_aarch64 = 16b57ea7d99670de113152b9a21d62f3bf85730c498cceadf8547d53c6df136a
 
 pkgname = forzac-bin

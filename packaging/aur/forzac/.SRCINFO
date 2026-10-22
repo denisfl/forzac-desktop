@@ -1,6 +1,6 @@
 pkgbase = forzac
 	pkgdesc = Offline FB2 and EPUB reader with book-quality typesetting
-	pkgver = 0.16.0
+	pkgver = 0.16.1
 	pkgrel = 1
 	url = https://forzac.app
 	install = forzac.install
@@ -13,7 +13,7 @@ pkgbase = forzac
 	depends = gtk4
 	depends = fontconfig
 	depends = perl-file-mimeinfo
-	source = forzac-0.16.0.tar.gz::https://github.com/denisfl/forzac-desktop/archive/v0.16.0.tar.gz
-	sha256sums = 7b856d4fa3594598313742a477eef57d43a25330588f413c7c78f8dd4fa9c426
+	source = forzac-0.16.1.tar.gz::https://github.com/denisfl/forzac-desktop/archive/v0.16.1.tar.gz
+	sha256sums = 56d1724aff587725d1ef779ca52a999da09e06a0b42efe89069baa4e2647c5b5
 
 pkgname = forzac
