@@ -427,7 +427,10 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Picture or table", "Картинка или таблица"),
     ("zoom, fit", "масштаб, целиком"),
     ("move", "сдвиг"),
-    ("There could be an ad here. There isn’t, and there won’t be, so Forzac runs on your thanks 😀", "Здесь могла быть ваша реклама. Её нет и не будет, так что Форзац живёт на ваши спасибо 😀"),
+    (
+        "There could be an ad here. There isn’t, and there won’t be, so Forzac runs on your thanks 😀",
+        "Здесь могла быть ваша реклама. Её нет и не будет, так что Форзац живёт на ваши спасибо 😀",
+    ),
     ("your thanks", "ваши спасибо"),
     ("Made by Denis Fedosov-Ledovskikh", "Сделал Денис Федосов-Ледовских"),
     // The app and its windows.
