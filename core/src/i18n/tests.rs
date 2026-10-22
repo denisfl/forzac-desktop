@@ -116,7 +116,7 @@ fn the_help_has_every_key_in_its_sections() {
     assert!(linux.sections[5].rows.iter().all(|r| r.keys.is_empty()));
     assert_eq!(linux.sections[0].rows[0].keys, "j l → ↓ Space PgDn");
     assert_eq!(mac.sections[2].rows[1].keys, "b ⌘D");
-    assert_eq!(linux.support, "Forzac is free. Support it: forzac.truenrth.app");
+    assert_eq!(linux.support, "Forzac is free. Support it: forzac.app");
 }
 
 #[test]
@@ -125,5 +125,5 @@ fn the_help_text_for_the_mac() {
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines[..3], ["Keys", "# Reading", "j l → ↓ Space PgDn\tnext page (in Scroll: a line)"]);
     assert!(lines.contains(&"\ta click on a picture or a table opens it"));
-    assert_eq!(lines.last(), Some(&"Forzac is free. Support it: forzac.truenrth.app"));
+    assert_eq!(lines.last(), Some(&"Forzac is free. Support it: forzac.app"));
 }

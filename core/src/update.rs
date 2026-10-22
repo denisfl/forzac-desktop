@@ -10,7 +10,7 @@ use crate::state::Store;
 /// The latest release, as GitHub's API gives it (pre-releases and drafts are never "latest").
 pub const RELEASES: &str = "https://api.github.com/repos/denisfl/forzac-desktop/releases/latest";
 /// Where a newer version is downloaded.
-pub const PAGE: &str = "https://forzac.truenrth.app/desktop/";
+pub const PAGE: &str = "https://forzac.app/desktop/";
 /// This build's version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

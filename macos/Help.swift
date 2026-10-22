@@ -7,7 +7,7 @@ import QuartzCore
 
 private let column: CGFloat = 416, keysWidth: CGFloat = 168, gap: CGFloat = 12, columnGap: CGFloat = 40
 private let padding: CGFloat = 28, margin: CGFloat = 24, line: CGFloat = 40
-private let site = "forzac.truenrth.app"
+private let site = "forzac.app"
 
 /// The help from the core: the title, sections of (keys, meaning), the support line.
 private struct Text {

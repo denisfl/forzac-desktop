@@ -1,5 +1,5 @@
 #!/bin/bash
-# Wraps the built app (macos/build.sh) as the download for forzac.truenrth.app: a disk image with Forzac.app and a link
+# Wraps the built app (macos/build.sh) as the download for forzac.app: a disk image with Forzac.app and a link
 # to /Applications, and its SHA-256 checksum in the format `shasum -a 256 -c` reads.
 #   macos/build.sh && scripts/package-macos.sh 0.2.0
 #     -> ./Forzac-0.2.0-macos-arm64.dmg, ./Forzac-0.2.0-macos-arm64.dmg.sha256

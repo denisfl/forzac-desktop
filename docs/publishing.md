@@ -1,7 +1,7 @@
 # Publishing a release
 
 How a version of Forzac for desktop gets from this repository to readers: a public GitHub repository with a release
-per tag, the download links on forzac.truenrth.app, and the AUR. Nothing here is automatic and nothing has been
+per tag, the download links on forzac.app, and the AUR. Nothing here is automatic and nothing has been
 published yet; each step is run by the maintainer. Dry-run for 0.1.0 on 2026-10-17 (an M1 Mac with Docker): every
 local build and checksum command in step 4, and in step 7 `updpkgsums`, `.SRCINFO` and `makepkg -si` of `forzac-bin`
 (makepkg takes a source file lying next to the PKGBUILD instead of downloading it, so the URLs did not have to exist).

@@ -9,7 +9,7 @@ Russian work on Linux and macOS; the first release is being prepared ([docs/publ
 is described in [ADR 0001](docs/adr/0001-stack.md), the spike results in [docs/spike.md](docs/spike.md), the plan to 1.0
 in [docs/roadmap.md](docs/roadmap.md).
 
-**Try it in your browser:** [forzac.truenrth.app/read](https://forzac.truenrth.app/read/) opens your own FB2, FB3 or
+**Try it in your browser:** [forzac.app/read](https://forzac.app/read/) opens your own FB2, FB3 or
 EPUB with Forzac's typesetting, themes and fonts. The book stays on your computer. It is the web reader of Forzac for
 Android, a separate implementation from this app, so some keys and details differ.
 
@@ -43,7 +43,7 @@ macos/build.sh && open macos/build/Forzac.app
 ```
 
 `Forzac.app` opens books from Finder ("Open With", or set it as the default app for EPUB and FB2), from `⌘O` and from
-the Dock icon. The build is signed ad hoc, without a Developer ID. The download for forzac.truenrth.app is a disk image
+the Dock icon. The build is signed ad hoc, without a Developer ID. The download for forzac.app is a disk image
 with a SHA-256 checksum (`scripts/package-macos.sh X.Y.Z`); a downloaded copy needs a first-open step in macOS,
 described for the download page in [docs/macos-first-open.md](docs/macos-first-open.md).
 

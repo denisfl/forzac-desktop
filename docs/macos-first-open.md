@@ -1,6 +1,6 @@
 # Installing Forzac on a Mac
 
-The text for the download page of forzac.truenrth.app. Checked on macOS 14.5; the macOS 15 steps follow Apple's
+The text for the download page of forzac.app. Checked on macOS 14.5; the macOS 15 steps follow Apple's
 [guide](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac) and still need
 a check on a macOS 15 Mac before publishing.
 

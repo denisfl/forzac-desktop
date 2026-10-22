@@ -575,11 +575,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func showAbout(_ sender: Any?) {
         let centred = NSMutableParagraphStyle()
         centred.alignment = .center
-        let text = tr("Made by Denis Fedosov-Ledovskikh") + "\n\n" + tr("Forzac is free. Support it: forzac.truenrth.app")
+        let text = tr("Made by Denis Fedosov-Ledovskikh") + "\n\n" + tr("Forzac is free. Support it: forzac.app")
         let credits = NSMutableAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
                                                                            .foregroundColor: NSColor.labelColor, .paragraphStyle: centred])
-        if let site = text.range(of: "forzac.truenrth.app") {
-            credits.addAttribute(.link, value: URL(string: "https://forzac.truenrth.app/#support")!, range: NSRange(site, in: text))
+        if let site = text.range(of: "forzac.app") {
+            credits.addAttribute(.link, value: URL(string: "https://forzac.app/#support")!, range: NSRange(site, in: text))
         }
         NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
         NSApp.activate(ignoringOtherApps: true)

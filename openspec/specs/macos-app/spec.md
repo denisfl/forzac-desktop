@@ -62,7 +62,7 @@ app. Started without a book, it SHALL show the library
 - **THEN** Forzac is in the list; a double-click still opens the file in the app that opened it before
 
 ### Requirement: Distribution
-The Mac app SHALL be distributed as a disk image `Forzac-X.Y.Z-macos-arm64.dmg` downloaded from forzac.truenrth.app,
+The Mac app SHALL be distributed as a disk image `Forzac-X.Y.Z-macos-arm64.dmg` downloaded from forzac.app,
 without a Developer ID, notarisation, the App Store or Homebrew. The image SHALL hold `Forzac.app` and a link to
 `/Applications` for dragging it there, under the volume name "Forzac". The app SHALL be signed ad hoc as a whole
 bundle (its resources sealed, so `codesign --verify --deep --strict` passes), with the bundle identifier

@@ -60,7 +60,7 @@ While the remembered release is newer than Forzac and has not been dismissed, th
 the brand and the buttons, one line in the muted interface colour at 13 px: "Version 0.9.1 is out — download"
 (Russian "Вышла версия 0.9.1 — скачать") on Linux and "Version 0.9.1 is out — install" (Russian "Вышла версия 0.9.1 —
 установить") on macOS, the last word in the link colour, followed by a small "×". "download" SHALL open
-`https://forzac.truenrth.app/desktop/` in the browser; "install" SHALL install the update as "Installing on macOS"
+`https://forzac.app/desktop/` in the browser; "install" SHALL install the update as "Installing on macOS"
 says. The "×" SHALL hide the line and remember the dismissed version (`update-dismissed`); the line SHALL come back only
 for a newer release. The line SHALL be hidden while searching and SHALL give way (be elided or hidden) when the head is
 too narrow for it, never pushing the buttons. A check that finds a new release while the library is open SHALL show the
@@ -68,7 +68,7 @@ line at once. Forzac SHALL NOT download anything itself on Linux.
 
 #### Scenario: Downloading
 - **WHEN** the reader of the Linux archive clicks "download"
-- **THEN** the browser opens forzac.truenrth.app/desktop/ and the line stays
+- **THEN** the browser opens forzac.app/desktop/ and the line stays
 
 #### Scenario: Dismissing
 - **WHEN** the reader clicks the "×" of the 0.9.1 line

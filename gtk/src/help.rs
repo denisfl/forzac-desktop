@@ -11,7 +11,7 @@ use gtk::{gdk, gio, glib, prelude::*};
 use crate::icons::{self, Icon};
 
 const CLOSE: Duration = Duration::from_millis(150);
-const SITE: &str = "forzac.truenrth.app";
+const SITE: &str = "forzac.app";
 /// A column's width, its key area's and the meaning's (`design.md`).
 const COLUMN: i32 = 416;
 const KEYS: i32 = 168;

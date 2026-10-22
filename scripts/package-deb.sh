@@ -19,7 +19,7 @@ mkdir -p "$pkg/usr/share/doc/forzac"
 mv "$pkg/usr/share/licenses/forzac" "$pkg/usr/share/doc/forzac/licenses"
 rmdir "$pkg/usr/share/licenses"
 cat > "$pkg/usr/share/doc/forzac/copyright" <<EOF
-Forzac, https://forzac.truenrth.app
+Forzac, https://forzac.app
 
 The code: Mozilla Public License 2.0 (licenses/LICENSE).
 The bundled fonts in /usr/share/forzac/fonts: SIL Open Font License 1.1 (licenses/*-OFL.txt).
@@ -35,7 +35,7 @@ Installed-Size: $(du -sk "$pkg/usr" | cut -f1)
 Depends: libgtk-4-1 (>= 4.14), libfontconfig1, libfile-mimeinfo-perl
 Section: text
 Priority: optional
-Homepage: https://forzac.truenrth.app
+Homepage: https://forzac.app
 Description: Offline FB2 and EPUB reader with book-quality typesetting
  Reads FB2, FB3 and EPUB books with hyphenation, justification and no lone
  lines at page edges. Keyboard first, few settings.

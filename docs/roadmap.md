@@ -80,7 +80,7 @@ FB2 comes before typesetting: notes, images, links and tables have to be in the 
 | # | Change | What | Done when | Size |
 |---|---|---|---|---|
 | 11 | `macos-app` | The AppKit shell catches up with 5–8 and the panels; opening from Finder; trackpad | Feature parity with the Linux shell on an Apple Silicon Mac | 2–3 w |
-| 11a | `macos-release` | An ad-hoc signed `.app` in a DMG to download from forzac.truenrth.app, with first-open instructions (no Developer ID, App Store or Homebrew) | On a fresh Mac user account the DMG from the site opens by following the instructions | 1–2 d |
+| 11a | `macos-release` | An ad-hoc signed `.app` in a DMG to download from forzac.app, with first-open instructions (no Developer ID, App Store or Homebrew) | On a fresh Mac user account the DMG from the site opens by following the instructions | 1–2 d |
 
 ## Milestone 0.4 — the same reader as on Android, tested on the Pi 5 and the Mac
 

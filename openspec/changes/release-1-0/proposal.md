@@ -13,7 +13,7 @@ packages.
 - x86_64 Linux and Hyprland are not measured on hardware; the release notes say so and ask Omarchy users for reports.
 - The measurement scripts (`scripts/measure.sh`, `scripts/pi-headless.sh`) produce the evidence attached to the
   release.
-- Release notes, version 1.0.0, packages published (AUR, Raspberry Pi OS `.deb`, the macOS DMG on forzac.truenrth.app).
+- Release notes, version 1.0.0, packages published (AUR, Raspberry Pi OS `.deb`, the macOS DMG on forzac.app).
 - Before the DMG is published (left over from `macos-release`): the maintainer opens the downloaded DMG on a fresh Mac
   user account following `docs/macos-first-open.md`, including the Gatekeeper step on a quarantined copy; the steps
   are checked on a macOS 15 Mac; screenshots of the macOS 14 and 15 steps are added to the download page.

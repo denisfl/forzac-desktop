@@ -52,12 +52,12 @@ reader keys SHALL do nothing (on macOS the menus' `⌘` shortcuts still work).
 - **THEN** the help hides and the page does not turn
 
 ### Requirement: The support line
-The help SHALL end, below a rule, with the single line "Forzac is free. Support it: forzac.truenrth.app", the address
-in the theme's link colour; a click on the address SHALL open https://forzac.truenrth.app in the default browser. The
+The help SHALL end, below a rule, with the single line "Forzac is free. Support it: forzac.app", the address
+in the theme's link colour; a click on the address SHALL open https://forzac.app in the default browser. The
 support link SHALL appear nowhere else in the book window and never on its own.
 
 #### Scenario: Supporting
-- **WHEN** the reader clicks "forzac.truenrth.app" in the help
+- **WHEN** the reader clicks "forzac.app" in the help
 - **THEN** the site opens in the browser and the help stays open
 
 ### Requirement: The help's language

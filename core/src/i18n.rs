@@ -169,7 +169,7 @@ pub fn help_text(platform: Platform) -> String {
 }
 
 const MOUSE: &str = "Mouse";
-const SUPPORT: &str = "Forzac is free. Support it: forzac.truenrth.app";
+const SUPPORT: &str = "Forzac is free. Support it: forzac.app";
 
 /// A help row: Linux keys, macOS keys, meaning; empty keys: not on that platform (but see `MOUSE`).
 type HelpRow = (&'static str, &'static str, &'static str);
@@ -424,7 +424,7 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Picture or table", "Картинка или таблица"),
     ("zoom, fit", "масштаб, целиком"),
     ("move", "сдвиг"),
-    ("Forzac is free. Support it: forzac.truenrth.app", "Форзац бесплатный. Поддержать: forzac.truenrth.app"),
+    ("Forzac is free. Support it: forzac.app", "Форзац бесплатный. Поддержать: forzac.app"),
     ("Made by Denis Fedosov-Ledovskikh", "Сделал Денис Федосов-Ледовских"),
     // The app and its windows.
     ("Forzac", "Форзац"),
