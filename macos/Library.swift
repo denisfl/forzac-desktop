@@ -539,10 +539,19 @@ final class LibraryItem: NSView {
 
 // MARK: The window
 
-/// The library window, laid out as the web reader's `#library` in the reader's theme.
-final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
+private extension NSToolbarItem.Identifier {
+    static let sections = Self("sections")
+    static let add = Self("add")
+    static let search = Self("search")
+    static let share = Self("share")
+}
+
+/// The library window, laid out as the web reader's `#library` in the reader's theme, with its two sections
+/// (`library-sections`): "Books" and "Reading stats", switched in the toolbar as the Mac does it — a segmented control in
+/// the centre, "+" and the search field or Share at the trailing edge, nothing at the bottom.
+final class LibraryWindow: NSObject, NSSearchFieldDelegate, NSWindowDelegate, NSToolbarDelegate, NSSharingServicePickerToolbarItemDelegate {
     let window: NSWindow
-    let palette: Palette
+    private(set) var palette: Palette
     private let state: OpaquePointer
     private let open: (String) -> Void
     /// The Books folder, when it could be made.
@@ -557,6 +566,15 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     private var columns = 1
     private(set) var selected = 0
     private var searching = false
+    /// The section shown: 0 "Books", 1 "Reading stats".
+    private(set) var section = 0
+    private let switcher = NSSegmentedControl(labels: [tr("Books"), tr("Reading stats")], trackingMode: .selectOne, target: nil, action: nil)
+    private var searchItem: NSSearchToolbarItem?
+    /// "Reading stats", and whether it has shown since the window opened (the first time: the current month).
+    let stats: StatsView
+    private let statsScroll = NSScrollView()
+    private var statsShown = false
+    private let help = HelpView(library: true)
     private var asking: (view: NSView, book: Int)?
     private var keys: Any?
     /// Covers being loaded or made; `onSettled` runs when none is left.
@@ -579,24 +597,18 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     private let scroll = NSScrollView()
     private let content = FlippedView()
     private let container: DropView
-    private let brandIcon = NSImageView()
-    private let brandName: NSTextField
-    private let searchField = NSTextField()
-    private let searchButton = FlatButton(IconView(Icons.search, size: 20))
-    /// The head's "⋯": the Books folder and adding a folder (`books-folder-setting`).
-    private let headMenuButton = FlatButton(IconView(Icons.ellipsis, size: 20))
     /// Changes the Books folder (the app runs it): the chosen path and whether to move the books.
     var onChangeFolder: ((String, Bool) -> Void)?
     /// Sends a book to the Kindle (the app runs it): its path and title.
     var onSendToKindle: ((String, String) -> Void)?
-    private let closeButton = FlatButton(IconView(Icons.x, size: 20))
-    private let openButton: PillButton
-    /// "Version N is out — download ×" (`update-check`), in the head when it fits.
+    /// "Version N is out — download ×" (`update-check`), at the top of "Books".
     private let updateText = ClickLabel()
     private let updateClose = ClickLabel()
     private var hasUpdate = false
     private var body: [NSView] = []
     private var bodyLayout: ((CGFloat, CGFloat) -> CGFloat)?
+    /// Where the books start: under the tabs (or the update line).
+    private var bodyTop: CGFloat = 32
 
     /// The library of `books` (`forzac_library_books`) in the Books `folder`; it opens where and as large as it was
     /// left when it `remembersFrame` (not in measurement runs).
@@ -608,50 +620,42 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         self.books = books
         var settings = forzac_state_settings(state)
         palette = themes[Int(forzac_settings_theme(&settings, systemIsDark()))]
-        brandName = label(tr("Forzac"), bookFont("Literata", 22, bold: true), palette.ink)
-        openButton = PillButton(tr("Open a book"), big: false, palette: palette)
+        stats = StatsView(state: state, palette: palette)
         progressText = label("", interfaceFont(15), palette.muted)
         progressText.isHidden = true
         view = forzac_library_view(state)
         container = DropView(palette: palette)
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1040, height: 760), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init()
-        window.title = tr("Forzac")
+        // The paper under a transparent title bar, the section's name as the window's title (not drawn).
+        window.title = tr("Books")
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
+        window.minSize = NSSize(width: 520, height: 420)
         window.backgroundColor = nsColor(palette.paper)
         window.appearance = NSAppearance(named: palette.paper < 0x808080 ? .darkAqua : .aqua)
         window.delegate = self
         if let screen = NSScreen.main?.visibleFrame { window.setContentSize(CGSize(width: min(1040, screen.width * 0.85), height: min(760, screen.height * 0.85))) }
-
-        // The app's icon; a development build without a bundle takes it from the source tree.
-        let icns = Bundle.main.path(forResource: "Forzac", ofType: "icns")
-            ?? URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Forzac.icns").path
-        brandIcon.image = NSImage(contentsOfFile: icns) ?? NSApp.applicationIconImage
-        brandIcon.imageScaling = .scaleProportionallyUpOrDown
-        searchField.isBordered = false
-        searchField.drawsBackground = false
-        searchField.focusRingType = .none
-        searchField.font = bookFont("PT Serif", 26)
-        searchField.textColor = nsColor(palette.ink)
-        searchField.placeholderAttributedString = NSAttributedString(string: tr("Title, author or series"), attributes: [.font: bookFont("PT Serif", 26), .foregroundColor: nsColor(palette.muted)])
-        searchField.delegate = self
-        searchField.isHidden = true
-        for b in [searchButton, closeButton, headMenuButton] {
-            b.colour(palette)
-            b.layer!.cornerRadius = 22
-            b.layer!.borderWidth = 1
-            b.layer!.borderColor = color(palette.line)
-            b.translatesAutoresizingMaskIntoConstraints = true
+        // `--size WxH` in measurement runs: another window size.
+        if !remembersFrame, let i = CommandLine.arguments.firstIndex(of: "--size"),
+           let wh = CommandLine.arguments.dropFirst(i + 1).first?.split(separator: "x").compactMap({ Double($0) }), wh.count == 2 {
+            window.setContentSize(CGSize(width: wh[0], height: wh[1]))
         }
-        searchButton.toolTip = tr("Search")
-        closeButton.toolTip = tr("Close")
-        closeButton.isHidden = true
-        searchButton.onClick = { [weak self] in self?.setSearching(true) }
-        headMenuButton.toolTip = tr("More")
-        headMenuButton.onClick = { [weak self] in self?.headMenu() }
-        closeButton.onClick = { [weak self] in self?.setSearching(false) }
-        openButton.onClick = { [weak self] in self?.chooseFile() }
+        switcher.selectedSegment = 0
+        switcher.target = self
+        switcher.action = #selector(switched(_:))
+        switcher.setToolTip("⌘1", forSegment: 0)
+        switcher.setToolTip("⌘2", forSegment: 1)
+        let toolbar = NSToolbar(identifier: "library")
+        toolbar.delegate = self
+        toolbar.displayMode = .iconOnly
+        toolbar.allowsUserCustomization = false
+        toolbar.centeredItemIdentifiers = [.sections]
+        window.toolbar = toolbar
+        window.toolbarStyle = .unified
         // "install" (macos-auto-update) until it fails, then "download" from the site.
         updateText.onClick = {
             switch Installer.shared.phase {
@@ -678,7 +682,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             tab.onClick = { [weak self] in self?.setView(UInt32(i)) }
             tabs.append(tab)
         }
-        for v in [brandIcon, brandName, searchField, searchButton, closeButton, headMenuButton, openButton, progressText, updateText, updateClose, tabRule] + tabs as [NSView] {
+        for v in [progressText, updateText, updateClose, tabRule] + tabs as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = true
             content.addSubview(v)
         }
@@ -694,8 +698,18 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
                 if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true { self?.onAddFolder?(url.path) } else { self?.open(url.path) }
             }
         }
+        stats.onEscape = { [weak self] in self?.show(section: 0) }
+        stats.onLayout = { [weak self] in self?.fitStats() }
+        statsScroll.documentView = stats
+        statsScroll.drawsBackground = false
+        statsScroll.hasVerticalScroller = true
+        statsScroll.autohidesScrollers = true
+        statsScroll.autoresizingMask = [.width, .height]
+        statsScroll.isHidden = true
+        container.addSubview(statsScroll)
         window.contentView = container
         scroll.frame = container.bounds
+        statsScroll.frame = container.bounds
 
         loadCovers()
         rebuild()
@@ -703,7 +717,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(nil)
         keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
-            guard let self, e.window === self.window else { return e }
+            guard let self, e.window === self.window, !self.help.isOpen else { return e }
             return self.key(e) ? nil : e
         }
     }
@@ -828,14 +842,8 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         body = []
         items = []
         let empty = books.isEmpty
-        searchButton.isHidden = empty || searching || adding > 0
-        headMenuButton.isHidden = searching
+        searchItem?.isEnabled = !empty
         progressText.isHidden = adding == 0 || searching
-        closeButton.isHidden = !searching
-        openButton.isHidden = empty || searching
-        brandIcon.isHidden = searching
-        brandName.isHidden = searching
-        searchField.isHidden = !searching
         let showTabs = !empty && !searching
         tabs.forEach { $0.isHidden = !showTabs }
         tabRule.isHidden = !showTabs
@@ -843,7 +851,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         var card: Int?
         var arranged: [(heading: String?, books: [Int])]
         if searching {
-            let query = searchField.stringValue
+            let query = self.query
             arranged = [(nil, books.indices.compactMap { i -> (Int32, Int)? in
                 let r = forzac_library_rank(query, books[i].title, books[i].authors, books[i].series)
                 return r < 0 ? nil : (r, i)
@@ -891,7 +899,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         body.forEach { $0.translatesAutoresizingMaskIntoConstraints = true; content.addSubview($0) }
         bodyLayout = { [weak self] x, width in
             guard let self else { return 0 }
-            var y: CGFloat = 20 + 48 + 24 + (self.tabRule.isHidden ? 0 : self.tabRule.frame.maxY - 20 - 48)
+            var y = self.bodyTop
             var shelf = self.items[...]
             if self.hasCard, let card = self.items.first {
                 let h = card.layout(width: width)
@@ -1190,7 +1198,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             let parts: [CGFloat] = [height(heading, headingWidth), 24, height(lead, min(textWidth, 560)), 36, button.frame.height, 14, hint.frame.height + 4,
                                     show.isHidden ? 0 : 6 + show.frame.height, 42, 1 + 18, height(formats, min(textWidth, 480))]
             let textHeight = parts.reduce(0, +)
-            let top: CGFloat = 20 + 48 + 32
+            let top = self.bodyTop + 8
             let available = max(self.scroll.contentSize.height - top - 32 - 64, 0)
             var y = top + (wide ? max((available - max(textHeight, page.frame.height)) / 2, 0) + max((page.frame.height - textHeight) / 2, 0) : 0)
             heading.frame = CGRect(x: x, y: y, width: headingWidth, height: parts[0])
@@ -1220,47 +1228,40 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     /// Places everything for the window's width: the column at most 1120 wide with the web's side padding.
     private func relayout() {
         scroll.frame = container.bounds
+        statsScroll.frame = container.bounds
+        fitStats()
         let width = scroll.contentSize.width
         let pad = min(max(width * 0.04, 20), 48)
         let inner = min(width - 2 * pad, 1120)
         let x = (width - inner) / 2
-        // The head: the brand or the search field on the left, the buttons on the right.
-        let headY: CGFloat = 20
-        brandIcon.frame = CGRect(x: x, y: headY + 6, width: 36, height: 36)
-        brandName.sizeToFit()
-        brandName.frame.origin = CGPoint(x: x + 48, y: headY + (48 - brandName.frame.height) / 2)
-        var right = x + inner
-        if !openButton.isHidden {
-            openButton.frame.origin = CGPoint(x: right - openButton.frame.width, y: headY + (48 - openButton.frame.height) / 2)
-            right -= openButton.frame.width + 10
-        }
-        for b in [searchButton, closeButton, headMenuButton] where !b.isHidden {
-            b.frame = CGRect(x: right - 44, y: headY + 2, width: 44, height: 44)
-            right -= 54
-        }
+        // The head is the toolbar; on top of "Books": the progress of adding books and the update line, one line.
+        var headBottom: CGFloat = 12
+        var lineX = x
         if !progressText.isHidden {
             progressText.sizeToFit()
-            progressText.frame.origin = CGPoint(x: right - progressText.frame.width, y: headY + (48 - progressText.frame.height) / 2)
-            right -= progressText.frame.width + 16
+            progressText.frame.origin = CGPoint(x: lineX, y: headBottom)
+            lineX = progressText.frame.maxX + 16
         }
-        searchField.frame = CGRect(x: x, y: headY + 5, width: max(right - x, 100), height: 38)
-        // The update line next to the buttons, unless it would reach the brand.
-        let fits = hasUpdate && !searching && right - 4 - updateClose.frame.width - 6 - updateText.frame.width >= brandName.frame.maxX + 24
+        let fits = hasUpdate && !searching
         updateText.isHidden = !fits
         updateClose.isHidden = !fits || Installer.shared.phase == .installing
         if fits {
-            updateClose.frame.origin = CGPoint(x: right - 4 - updateClose.frame.width, y: headY + (48 - updateClose.frame.height) / 2)
-            updateText.frame.origin = CGPoint(x: updateClose.frame.minX - 6 - updateText.frame.width, y: headY + (48 - updateText.frame.height) / 2)
+            updateText.sizeToFit()
+            let room = x + inner - lineX - 6 - updateClose.frame.width
+            updateText.frame = CGRect(x: lineX, y: headBottom, width: min(updateText.frame.width, max(room, 40)), height: updateText.frame.height)
+            updateClose.frame.origin = CGPoint(x: updateText.frame.maxX + 6, y: headBottom + (updateText.frame.height - updateClose.frame.height) / 2)
         }
+        if !progressText.isHidden || fits { headBottom += max(progressText.isHidden ? 0 : progressText.frame.height, fits ? updateText.frame.height : 0) + 14 }
         // The views' tabs under the head, the chosen one in ink and underlined.
         var tx = x
         for (i, tab) in tabs.enumerated() {
             tab.textColor = nsColor(UInt32(i) == view ? palette.ink : palette.muted)
             tab.sizeToFit()
-            tab.frame.origin = CGPoint(x: tx, y: headY + 48 + 18)
+            tab.frame.origin = CGPoint(x: tx, y: headBottom + 6)
             tx += tab.frame.width + 24
         }
-        tabRule.frame = CGRect(x: x, y: headY + 48 + 18 + (tabs.first?.frame.height ?? 20) + 8, width: inner, height: 1)
+        tabRule.frame = CGRect(x: x, y: headBottom + 6 + (tabs.first?.frame.height ?? 20) + 8, width: inner, height: 1)
+        bodyTop = tabRule.isHidden ? headBottom + 24 : tabRule.frame.maxY + 24
         let height = bodyLayout?(x, inner) ?? 0
         content.frame = CGRect(x: 0, y: 0, width: width, height: max(height, scroll.contentSize.height))
         asking?.view.frame = container.bounds
@@ -1293,30 +1294,6 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     }
 
     private func chooseFile() { (NSApp.delegate as? AppDelegate)?.openDocument(nil) }
-
-    /// The head's menu: "Show the Books folder", "Change the Books folder…", "Add a Folder…", then "Reading stats" and
-    /// "Settings…".
-    private func headMenu() {
-        let menu = NSMenu()
-        for (title, action) in [(tr("Show the Books folder"), #selector(menuShowFolder(_:))), (tr("Change the Books folder…"), #selector(menuChangeFolder(_:))),
-                                (tr("Add a Folder…"), #selector(menuAddFolder(_:))), ("", nil), (tr("Reading stats"), #selector(menuStats(_:))),
-                                (tr("Settings…"), #selector(menuSettings(_:)))] {
-            guard let action else {
-                menu.addItem(.separator())
-                continue
-            }
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-            item.target = self
-            menu.addItem(item)
-        }
-        menu.popUp(positioning: nil, at: CGPoint(x: 0, y: headMenuButton.bounds.maxY + 4), in: headMenuButton)
-    }
-
-    @objc private func menuShowFolder(_ sender: Any?) { showFolder() }
-    @objc private func menuChangeFolder(_ sender: Any?) { chooseBooksFolder() }
-    @objc private func menuAddFolder(_ sender: Any?) { (NSApp.delegate as? AppDelegate)?.addFolder(nil) }
-    @objc private func menuSettings(_ sender: Any?) { (NSApp.delegate as? AppDelegate)?.openSettings() }
-    @objc private func menuStats(_ sender: Any?) { (NSApp.delegate as? AppDelegate)?.openStats() }
 
     /// "Change the Books folder…": the folder panel, then "Move the books…?" (Move, Leave them, Cancel).
     func chooseBooksFolder() {
@@ -1402,17 +1379,140 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         hasUpdate = true
     }
 
-    private func setSearching(_ on: Bool) {
-        guard searching != on else { return }
-        searching = on
-        searchField.stringValue = ""
-        selected = 0
-        rebuild()
-        if on { window.makeFirstResponder(searchField) } else { window.makeFirstResponder(nil) }
+    /// The toolbar's search field, focused by `/` and ⌘F (Edit › Find); typing filters the books as one shelf.
+    func beginSearch() {
+        guard !books.isEmpty else { return }
+        show(section: 0)
+        searchItem?.beginSearchInteraction()
     }
 
-    func controlTextDidChange(_ obj: Notification) {
+    private func endSearch() {
+        searchItem?.searchField.stringValue = ""
+        searchItem?.endSearchInteraction()
+        window.makeFirstResponder(nil)
+        searchChanged()
+    }
+
+    private var query: String { searchItem?.searchField.stringValue ?? "" }
+
+    private func searchChanged() {
+        let on = !query.isEmpty
+        guard on || searching else { return }
+        searching = on
         selected = 0
+        rebuild()
+    }
+
+    func controlTextDidChange(_ obj: Notification) { searchChanged() }
+
+    // MARK: Sections (`library-sections`)
+
+    /// Shows "Books" (0) or "Reading stats" (1); each keeps its state, the stats show the current month the first time.
+    func show(section: Int) {
+        let changed = section != self.section
+        self.section = section
+        switcher.selectedSegment = section
+        window.title = section == 0 ? tr("Books") : tr("Reading stats")
+        if section == 1 && !statsShown {
+            statsShown = true
+            stats.reset()
+        }
+        scroll.isHidden = section != 0
+        statsScroll.isHidden = section != 1
+        if changed, let toolbar = window.toolbar {
+            // The trailing items follow the section: "+" and search in "Books", Share in "Reading stats".
+            while toolbar.items.count > 3 { toolbar.removeItem(at: toolbar.items.count - 1) }
+            for id in trailing { toolbar.insertItem(withItemIdentifier: id, at: toolbar.items.count) }
+        }
+        fitStats()
+        window.makeFirstResponder(section == 1 ? stats : nil)
+    }
+
+    /// The stats as wide as the window and as tall as their content.
+    private func fitStats() {
+        let width = statsScroll.contentSize.width
+        stats.frame = CGRect(x: 0, y: 0, width: width, height: max(stats.contentHeight(width), statsScroll.contentSize.height))
+    }
+
+    @objc private func switched(_ sender: NSSegmentedControl) { show(section: sender.selectedSegment) }
+
+    /// The library's keys over the window.
+    func showHelp() {
+        if help.isOpen { help.hide() } else { help.show(in: container, palette: palette) }
+    }
+
+    // MARK: The toolbar
+
+    private var trailing: [NSToolbarItem.Identifier] { section == 0 ? [.add, .search] : [.share] }
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.flexibleSpace, .sections, .flexibleSpace] + trailing
+    }
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.flexibleSpace, .sections, .add, .search, .share] }
+
+    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        switch id {
+        case .sections:
+            let item = NSToolbarItem(itemIdentifier: id)
+            item.view = switcher
+            item.label = tr("Reading stats")
+            return item
+        case .add:
+            let item = NSMenuToolbarItem(itemIdentifier: id)
+            item.image = NSImage(systemSymbolName: "plus", accessibilityDescription: tr("Add a Book"))
+            item.label = tr("Add a Book")
+            item.toolTip = tr("Add a Book")
+            item.showsIndicator = false
+            let menu = NSMenu()
+            for (title, action) in [(tr("Open a Book…"), #selector(AppDelegate.openDocument(_:))), (tr("Add a Folder…"), #selector(AppDelegate.addFolder(_:)))] {
+                let entry = NSMenuItem(title: title, action: action, keyEquivalent: "")
+                entry.target = NSApp.delegate
+                menu.addItem(entry)
+            }
+            item.menu = menu
+            return item
+        case .search:
+            let item = searchItem ?? NSSearchToolbarItem(itemIdentifier: id)
+            item.searchField.placeholderString = tr("Title, author or series")
+            item.searchField.delegate = self
+            item.toolTip = "\(tr("Search")) (/)"
+            item.isEnabled = !books.isEmpty
+            searchItem = item
+            return item
+        case .share:
+            let item = NSSharingServicePickerToolbarItem(itemIdentifier: id)
+            item.delegate = self
+            item.label = tr("Share")
+            item.toolTip = "\(tr("Share")) (s)"
+            return item
+        default:
+            return nil
+        }
+    }
+
+    /// The shown period's picture for the toolbar's Share.
+    func items(for pickerToolbarItem: NSSharingServicePickerToolbarItem) -> [Any] {
+        guard let m = stats.model, let data = statsPicture(state, year: m.year, month: m.month, palette: palette) else { return [] }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("Forzac", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent(m.fileName)
+        return (try? data.write(to: url)) != nil ? [url] : []
+    }
+
+    // MARK: Theme
+
+    /// Repaints the window in `palette` (the theme chosen in the settings): a redraw, the books and their places kept.
+    func recolour(_ palette: Palette) {
+        self.palette = palette
+        window.backgroundColor = nsColor(palette.paper)
+        window.appearance = NSAppearance(named: palette.paper < 0x808080 ? .darkAqua : .aqua)
+        container.recolour(palette)
+        tabRule.layer!.backgroundColor = color(palette.line)
+        progressText.textColor = nsColor(palette.muted)
+        updateClose.attributedStringValue = NSAttributedString(string: "×", attributes: [.font: interfaceFont(18), .foregroundColor: nsColor(palette.muted)])
+        updateNotice()
+        stats.palette = palette
         rebuild()
     }
 
@@ -1461,7 +1561,13 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     /// question). True when handled.
     private func key(_ e: NSEvent) -> Bool {
         guard e.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return false }
-        let typing = window.firstResponder is NSTextView && searching
+        if e.characters == "?" && !(window.firstResponder is NSTextView) { showHelp(); return true }
+        // "Reading stats" takes its keys itself (Esc: back to the books); q closes the window from there too.
+        if section == 1 && about == nil && asking == nil {
+            if e.shortcutKey == 0x0C { window.close(); return true }
+            return false
+        }
+        let typing = window.firstResponder is NSTextView
         let code = e.keyCode == 0x4C ? 0x24 : e.keyCode
         if about != nil {
             switch code {
@@ -1488,7 +1594,7 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         case (0x77, false): select(max(items.count - 1, 0))
         case (0x24, _): if selected < items.count { openBook(items[selected].index) }
         case (0x33, false), (0x75, false): if selected < items.count { ask(items[selected].index) }
-        case (0x35, _): if searching { setSearching(false) } else { window.close() }
+        case (0x35, _): if typing || searching { endSearch() } else { window.close() }
         case (0x30, false): if !books.isEmpty { setView((view + (e.modifierFlags.contains(.shift) ? 4 : 1)) % 5) }
         default:
             guard !typing else { return false }
@@ -1499,8 +1605,8 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             case 0x28: step(dy: -1)
             case 0x02: if selected < items.count { ask(items[selected].index) }
             case 0x22: if selected < items.count { showAbout(items[selected].index) }
-            case 0x01: (NSApp.delegate as? AppDelegate)?.openStats()
-            case 0x2C: if !books.isEmpty && e.characters != "?" { setSearching(true) } else { return false }
+            case 0x01: show(section: 1)
+            case 0x2C: if !books.isEmpty { beginSearch() } else { return false }
             case 0x03 where e.modifierFlags.contains(.shift): showFolder()
             case 0x0C: window.close()
             default: return false
@@ -1511,15 +1617,19 @@ final class LibraryWindow: NSObject, NSTextFieldDelegate, NSWindowDelegate {
 
     /// A key press as the keyboard would send it (`--keys`): letters, \r Return, \e Esc.
     func send(_ key: Character) {
-        let codes: [Character: UInt16] = ["\r": 0x24, "\u{1b}": 0x35, "\u{7f}": 0x33]
+        let codes: [Character: UInt16] = ["\r": 0x24, "\u{1b}": 0x35, "\u{7f}": 0x33, "h": 0x04, "l": 0x25, "j": 0x26, "k": 0x28, "m": 0x2E, "y": 0x10, "s": 0x01]
         let text = String(key)
         guard let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil,
                                        characters: text, charactersIgnoringModifiers: text, isARepeat: false, keyCode: codes[key] ?? 0xFFFF) else { return }
         if !self.key(e) { window.sendEvent(e) }
     }
 
-    /// The window as drawn (`--png`).
+    /// The window as drawn, its toolbar included (`--png`); the content alone when the window cannot be captured.
     func savePNG(_ path: String) {
+        if let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), [.boundsIgnoreFraming, .bestResolution]) {
+            try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            return print("saved \(path)")
+        }
         guard let view = window.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
         view.cacheDisplay(in: view.bounds, to: rep)
         try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
@@ -1543,6 +1653,19 @@ final class DropView: NSView {
         super.init(frame: .zero)
         wantsLayer = true
         layer!.backgroundColor = color(palette.paper)
+        build(palette)
+    }
+
+    /// The paper and the drop frame in another theme.
+    func recolour(_ palette: Palette) {
+        layer!.backgroundColor = color(palette.paper)
+        frameView.subviews.forEach { $0.removeFromSuperview() }
+        frameView.layer!.sublayers?.forEach { $0.removeFromSuperlayer() }
+        build(palette)
+        resizeSubviews(withOldSize: bounds.size)
+    }
+
+    private func build(_ palette: Palette) {
         registerForDraggedTypes([.fileURL])
         frameView.translatesAutoresizingMaskIntoConstraints = true
         frameView.layer!.cornerRadius = 20

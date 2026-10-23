@@ -1,7 +1,8 @@
-// The reading stats window (`reading-stats`): a month or a year from the reading log of every device — "Month · Year",
-// the period with arrows, three figures, the reading calendar, the finished books — in the reader's theme, as the
-// Android app's screen; and its 1080 × 1920 picture for the share menu. The numbers, the calendar's geometry and the
-// texts come from the core (`forzac_stats`); this file only draws them. Esc and ⌘W close the window.
+// The reading stats (`reading-stats`), the library window's "Reading stats" section (`library-sections`): a month or a
+// year from the reading log of every device — "Month · Year", the period with arrows, three figures, the reading
+// calendar, the finished books — in the reader's theme, as the Android app's screen; and its 1080 × 1920 picture for the
+// share menu, which the library's toolbar opens. The numbers, the calendar's geometry and the texts come from the core
+// (`forzac_stats`); this file only draws them.
 
 import AppKit
 
@@ -165,77 +166,11 @@ final class EscWindow: NSWindow {
     override func cancelOperation(_ sender: Any?) { performClose(sender) }
 }
 
-/// The stats window: one at a time, brought forward on the current month when opened again.
-final class StatsWindow: NSObject, NSWindowDelegate {
-    let window: NSWindow = EscWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 760), styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                                     backing: .buffered, defer: false)
-    let page: StatsView
-    private let scroll = NSScrollView()
-    var onClose: (() -> Void)?
-
-    init(state: OpaquePointer) {
-        var settings = forzac_state_settings(state)
-        let palette = themes[Int(forzac_settings_theme(&settings, systemIsDark()))]
-        page = StatsView(state: state, palette: palette)
-        super.init()
-        window.title = tr("Reading stats")
-        window.isReleasedWhenClosed = false
-        window.tabbingMode = .disallowed
-        window.minSize = NSSize(width: 420, height: 560)
-        window.backgroundColor = nsColor(palette.paper)
-        window.appearance = NSAppearance(named: palette.paper < 0x808080 ? .darkAqua : .aqua)
-        window.delegate = self
-        scroll.documentView = page
-        scroll.drawsBackground = false
-        scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true
-        window.contentView = scroll
-        page.onLayout = { [weak self] in self?.fit() }
-        if let screen = NSScreen.main?.visibleFrame { window.setContentSize(CGSize(width: 520, height: min(860, screen.height * 0.9))) }
-        window.center()
-        fit()
-    }
-
-    /// The page as wide as the window and as tall as its content.
-    private func fit() {
-        let width = scroll.contentSize.width
-        page.frame = CGRect(x: 0, y: 0, width: width, height: max(page.contentHeight(width), scroll.contentSize.height))
-    }
-
-    func windowDidResize(_ notification: Notification) { fit() }
-
-    func show() {
-        page.reset()
-        fit()
-        window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(page)
-    }
-
-    /// A key press as the keyboard would send it (`--keys`).
-    func send(_ key: Character) {
-        let codes: [Character: UInt16] = ["h": 0x04, "l": 0x25, "j": 0x26, "k": 0x28, "m": 0x2E, "y": 0x10, "s": 0x01, "\u{1b}": 0x35]
-        let text = String(key)
-        guard let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil,
-                                       characters: text, charactersIgnoringModifiers: text, isARepeat: false, keyCode: codes[key] ?? 0xFFFF) else { return }
-        window.sendEvent(e)
-    }
-
-    /// The window as drawn (`--png`).
-    func savePNG(_ path: String) {
-        guard let view = window.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
-        view.cacheDisplay(in: view.bounds, to: rep)
-        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
-        print("saved \(path)")
-    }
-
-    func windowWillClose(_ notification: Notification) { onClose?() }
-}
-
-/// The window's content, drawn in one view: the title and share button, "Month · Year", the period with its arrows,
-/// the figures, the calendar, the clicked day's line and the finished books.
+/// The section's content, drawn in one view: "Month · Year", the period with its arrows, the figures, the calendar, the
+/// clicked day's line and the finished books. The title and the share button are the library window's toolbar.
 final class StatsView: NSView {
     private let state: OpaquePointer
-    let palette: Palette
+    var palette: Palette { didSet { needsDisplay = true } }
     private var year: Int32 = 0
     private var month: UInt32 = 0
     private(set) var model: StatsModel?
@@ -244,8 +179,11 @@ final class StatsView: NSView {
     /// What a click does where, and where the calendar is; laid out in `draw`.
     private var targets: [(CGRect, () -> Void)] = []
     private var calendarOrigin: CGPoint = .zero
-    private(set) var shareRect: CGRect = .zero
     var onLayout: (() -> Void)?
+    /// `Esc`: back to the books.
+    var onEscape: (() -> Void)?
+    /// Where the share menu opens for `s` (the toolbar's share button).
+    var shareAnchor: NSView?
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -282,7 +220,6 @@ final class StatsView: NSView {
 
     // MARK: Fonts and the layout's parts
 
-    private let titleFont = bookFont("Literata", 26, bold: true)
     private let periodFont = bookFont("Literata", 21)
     private let figureFont = bookFont("Literata", 22)
     private let headingFont = bookFont("Literata", 19, bold: true)
@@ -292,7 +229,7 @@ final class StatsView: NSView {
     func contentHeight(_ width: CGFloat) -> CGFloat {
         guard let m = model else { return 0 }
         let w = min(column, width - 2 * margin)
-        var y: CGFloat = 20 + 36 + 16 + 44 + 12 + 44 + 20 + figuresHeight(m, w) + 24 + m.height + 40 + 8
+        var y: CGFloat = 20 + 44 + 12 + 44 + 20 + figuresHeight(m, w) + 24 + m.height + 40 + 8
         y += attributed(tr("Finished"), headingFont, 0).size().height + 6
         if m.books.isEmpty {
             y += 16 + attributed(tr("What you finish will appear here"), interfaceFont(15), 0).size().height
@@ -327,15 +264,8 @@ final class StatsView: NSView {
         let w = width
         let x0 = (bounds.width - w) / 2
 
-        // The title and the share button.
-        var y: CGFloat = 20
-        drawText(attributed(tr("Reading stats"), titleFont, p.ink), at: CGPoint(x: x0, y: y), width: w - 48, lines: 1)
-        shareRect = CGRect(x: x0 + w - 36, y: y, width: 36, height: 36)
-        drawIcon(Icons.share, in: shareRect.insetBy(dx: 6, dy: 6), ink: p.ink, ctx: ctx)
-        targets.append((shareRect, { [weak self] in self?.share() }))
-        y += 36 + 16
-
         // "Month · Year".
+        var y: CGFloat = 20
         let segment = CGRect(x: x0, y: y, width: w, height: 44)
         let halves = [CGRect(x: x0, y: y, width: w / 2, height: 44), CGRect(x: x0 + w / 2, y: y, width: w / 2, height: 44)]
         ctx.saveGState()
@@ -452,14 +382,19 @@ final class StatsView: NSView {
         reload()
     }
 
-    /// The period's picture, shared from the share button.
+    /// The period's picture in the share menu, under the toolbar's share button (or the section's top right).
     func share() {
         guard let data = statsPicture(state, year: year, month: month, palette: palette), let m = model else { return }
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("Forzac", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent(m.fileName)
         guard (try? data.write(to: url)) != nil else { return }
-        NSSharingServicePicker(items: [url]).show(relativeTo: shareRect, of: self, preferredEdge: .minY)
+        let picker = NSSharingServicePicker(items: [url])
+        if let anchor = shareAnchor, anchor.window != nil {
+            picker.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+        } else {
+            picker.show(relativeTo: CGRect(x: bounds.maxX - 60, y: visibleRect.minY, width: 40, height: 1), of: self, preferredEdge: .minY)
+        }
     }
 
     override func mouseUp(with e: NSEvent) {
@@ -493,7 +428,7 @@ final class StatsView: NSView {
         case 0x74: scrollBy(-page)
         case 0x73: scrollBy(-bounds.height)
         case 0x77: scrollBy(bounds.height)
-        case 0x35: window?.performClose(nil)
+        case 0x35: onEscape?()
         default:
             switch e.shortcutKey {
             case 0x04: step(-1)

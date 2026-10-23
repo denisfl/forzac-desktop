@@ -9,12 +9,12 @@ private let column: CGFloat = 416, keysWidth: CGFloat = 168, gap: CGFloat = 12, 
 private let padding: CGFloat = 28, margin: CGFloat = 24, line: CGFloat = 40
 private let supportURL = URL(string: "https://forzac.app/#support")!
 
-/// The help from the core: the title, sections of (keys, meaning), the support line.
+/// The help from the core: the title, sections of (keys, meaning), the support line; a book's keys or the library's.
 private struct Text {
     var title = "", sections: [(title: String, rows: [(keys: [String], meaning: String)])] = [], support = ""
 
-    init() {
-        var lines = String(cString: forzac_help(1)).components(separatedBy: "\n")
+    init(library: Bool) {
+        var lines = String(cString: library ? forzac_library_help(1) : forzac_help(1)).components(separatedBy: "\n")
         title = lines.removeFirst()
         support = lines.removeLast()
         for l in lines {
@@ -79,7 +79,7 @@ private final class CloseButton: Flipped {
 }
 
 final class HelpView: NSView {
-    private let text = Text()
+    private let text: Text
     private let card = Flipped(), close = CloseButton(), rule = Flipped()
     private let title: NSTextField, support: Link
     private let scroll = NSScrollView(), document = Flipped()
@@ -92,7 +92,9 @@ final class HelpView: NSView {
     private weak var previous: NSResponder?
     private(set) var isOpen = false
 
-    init() {
+    /// The keys of a book window, or of the library window (`library`).
+    init(library: Bool = false) {
+        text = Text(library: library)
         title = label(text.title, interfaceFont(20, .semibold), 0)
         support = Link(wrappingLabelWithString: text.support)
         super.init(frame: .zero)

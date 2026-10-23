@@ -433,7 +433,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var readers: [Reader] = []
     var library: LibraryWindow?
     private var settings: SettingsWindow?
-    private var stats: StatsWindow?
     private var checkingUpdate = false
     private var appearance: NSKeyValueObservation?
 
@@ -753,21 +752,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let keys = Array(self?.value(after: "--keys").map(unescape) ?? "")
             for (i, key) in keys.enumerated() {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5 + 0.3 * Double(i)) {
-                    if let stats = self?.stats { stats.send(key) } else { library.send(key) }
+                    library.send(key)
                 }
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8 + 0.3 * Double(keys.count)) {
-                // The stats when a key opened them (`--picture PATH`: also their picture).
-                if let stats = self?.stats {
-                    stats.savePNG(png)
+                // When a key showed the stats (`--picture PATH`: also their picture).
+                let shown = self?.library ?? library
+                shown.savePNG(png)
+                if shown.section == 1, let path = self?.value(after: "--picture"), let state = self?.state {
                     let start = Date()
-                    if let path = self?.value(after: "--picture"), let state = self?.state,
-                       let data = statsPicture(state, year: stats.page.model?.year ?? 0, month: stats.page.model?.month ?? 0, palette: stats.page.palette) {
+                    if let data = statsPicture(state, year: shown.stats.model?.year ?? 0, month: shown.stats.model?.month ?? 0, palette: shown.palette) {
                         try? data.write(to: URL(fileURLWithPath: path))
                         print(String(format: "picture: %.1f ms", Date().timeIntervalSince(start) * 1000))
                     }
-                } else {
-                    (self?.library ?? library).savePNG(png)
                 }
                 NSApp.terminate(nil)
             }
@@ -858,6 +855,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let settings = SettingsWindow(state: state)
             settings.onChangeFolder = { [weak self] in self?.changeBooksFolder(nil) }
             settings.onSyncNow = { [weak self] in self?.sync() }
+            settings.onTheme = { [weak self] theme in self?.applyTheme(theme) }
+            settings.onShowFolder = { [weak self] in self?.showBooksFolder(nil) }
             settings.onClose = { [weak self] in self?.settings = nil }
             self.settings = settings
         }
@@ -865,15 +864,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         readSyncStatus()
     }
 
-    /// The reading stats (`reading-stats`): their window on the current month, brought forward when it is open.
+    /// The reading stats (`reading-stats`): the library window brought forward (or opened) on "Reading stats".
     func openStats() {
         guard let state else { return }
-        if stats == nil {
-            let window = StatsWindow(state: state)
-            window.onClose = { [weak self] in self?.stats = nil }
-            stats = window
+        showLibrary(state) { $0.show(section: 1) }
+        library?.show(section: 1)
+    }
+
+    /// The theme chosen in the settings (`settings`): saved as the reading theme, and every window repainted.
+    func applyTheme(_ theme: Int32) {
+        guard let state else { return }
+        var s = forzac_state_settings(state)
+        s.theme = theme
+        _ = withUnsafePointer(to: s) { forzac_state_save_settings(state, $0) }
+        for reader in readers {
+            var rs = reader.view.settings
+            rs.theme = theme
+            reader.view.apply(rs)
         }
-        stats?.show()
+        library?.recolour(themes[Int(forzac_settings_theme(&s, systemIsDark()))])
     }
 
     /// The settings window's sync status, read on the background queue (the other devices' files may be slow to read).
@@ -930,7 +939,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func showBookmarks(_ sender: Any?) { key?.run(.bookmarks) }
     @objc func showHighlights(_ sender: Any?) { key?.run(.highlights) }
     @objc func toggleBookmark(_ sender: Any?) { key?.view.toggleBookmark() }
-    @objc func find(_ sender: Any?) { key?.run(.search) }
+    /// Edit › Find: the book's search in a book window, the library's search field in the library.
+    @objc func find(_ sender: Any?) {
+        if let library, library.window.isKeyWindow { library.beginSearch() } else { key?.run(.search) }
+    }
     @objc func findNext(_ sender: Any?) { key?.view.nextMatch(1) }
     @objc func findPrevious(_ sender: Any?) { key?.view.nextMatch(-1) }
     @objc func toggleScroll(_ sender: Any?) { key?.view.step(6, 1) }
@@ -946,7 +958,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func nextChapter(_ sender: Any?) { key?.view.jumpChapter(1) }
     @objc func previousChapter(_ sender: Any?) { key?.view.jumpChapter(-1) }
     @objc func goBack(_ sender: Any?) { key?.view.goBack() }
-    @objc func showHelp(_ sender: Any?) { key?.run(.help) }
+    @objc func showHelp(_ sender: Any?) {
+        if let library, library.window.isKeyWindow { library.showHelp() } else { key?.run(.help) }
+    }
+    /// View › Books and View › Reading stats (`library-sections`).
+    @objc func showBooks(_ sender: Any?) {
+        if let library { library.show(section: 0); library.window.makeKeyAndOrderFront(nil) } else if let state { showLibrary(state) }
+    }
+    @objc func showStats(_ sender: Any?) { openStats() }
     @objc func openRecent(_ sender: NSMenuItem) { if let path = sender.representedObject as? String { openBook(path) } }
 
     /// Open Recent: the reading state's recent books.
@@ -1010,6 +1029,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item(tr("Pages or Scroll"), #selector(toggleScroll(_:))), item(tr("Next Theme"), #selector(nextTheme(_:))),
             .separator(),
             item(tr("Bigger Text"), #selector(biggerText(_:)), "+"), item(tr("Smaller Text"), #selector(smallerText(_:)), "-"), item(tr("Default Size"), #selector(defaultText(_:)), "0"),
+            .separator(),
+            item(tr("Books"), #selector(showBooks(_:)), "1"), item(tr("Reading stats"), #selector(showStats(_:)), "2"),
             .separator(), fullScreen,
         ])
         submenu(tr("Go"), [
@@ -1026,6 +1047,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.windowsMenu = windowMenu
         submenu(tr("Help"), [item(tr("Keys"), #selector(showHelp(_:)), "?")])
         NSApp.mainMenu = main
+    }
+}
+
+/// View › Books and Reading stats are ticked by the section the library shows.
+extension AppDelegate: NSMenuItemValidation {
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(showBooks(_:)) || item.action == #selector(showStats(_:)) {
+            let shown = library.map { $0.window.isKeyWindow ? $0.section : -1 } ?? -1
+            item.state = (item.action == #selector(showBooks(_:)) ? 0 : 1) == shown ? .on : .off
+        }
+        return true
     }
 }
 
