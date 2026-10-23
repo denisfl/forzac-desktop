@@ -6,7 +6,8 @@
 // are remembered in ~/Library/Application Support/Forzac/state (`--state PATH`: another file), cover thumbnails in
 // ~/Library/Caches/Forzac/covers.
 //
-// Spike flags: --measure (time to the first presented page), --png out.png (first page), --chapter N, --page N (the
+// Spike flags: --measure (time to the first presented page), --turns N (N animated page turns, then the frame intervals
+// inside the animations, as the GTK shell prints them), --png out.png (first page), --chapter N, --page N (the
 // page of the chapter --png saves), --panel settings|contents|bookmarks|highlights|help|note:ID|image:ID|table:CHAPTER.BLOCK and --theme N, --size WxH (with
 // --png: the whole window with that panel or view open, in that theme; --keys "ll+\t\r" then sends those keys to it
 // first, 0.3 s apart: letters, digits, + - =, \t Tab, \r Return, \e Esc, an upper-case letter with Shift; --mouse
@@ -79,13 +80,17 @@ final class Reader: NSObject, NSWindowDelegate {
         let size = CommandLine.arguments.firstIndex(of: "--size").flatMap { i in
             CommandLine.arguments.dropFirst(i + 1).first?.split(separator: "x").compactMap { Double($0) }
         }.flatMap { $0.count == 2 && state == nil ? NSSize(width: $0[0], height: $0[1]) : nil } ?? NSSize(width: 760, height: 980)
-        window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                          backing: .buffered, defer: false)
+        // The content under the title bar from the start (the reading bar's toolbar is over the page): added later, it
+        // resized the page and typeset its chapter once more, at a size thrown away.
+        let titled: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window = NSWindow(contentRect: NSWindow.frameRect(forContentRect: NSRect(origin: .zero, size: size), styleMask: titled),
+                          styleMask: titled.union(.fullSizeContentView), backing: .buffered, defer: false)
         super.init()
         window.title = title.isEmpty ? tr("Forzac") : title
         window.representedURL = URL(fileURLWithPath: path)
         window.tabbingMode = .disallowed
         window.isReleasedWhenClosed = false
+        place()
         container.wantsLayer = true
         window.contentView = container
         window.delegate = self
@@ -209,13 +214,20 @@ final class Reader: NSObject, NSWindowDelegate {
         if state != nil { window.saveFrame(usingName: Reader.frameName) }
     }
 
-    func show() {
-        if state == nil || !window.setFrameUsingName(Reader.frameName) {
+    /// The window's frame, final before the page is laid out in it: a size that changed later (the screen too small
+    /// for it, a remembered frame) typeset the chapter once more.
+    private func place() {
+        let remembered = state != nil && window.setFrameUsingName(Reader.frameName)
+        window.setFrame(window.constrainFrameRect(window.frame, to: window.screen ?? NSScreen.main), display: false)
+        if !remembered {
             window.center()
         } else if let other = NSApp.windows.first(where: { $0 !== window && $0.isVisible && $0.delegate is Reader && $0.frame.origin == window.frame.origin }) {
             // Another book is open there: the new window steps down and right from it.
             window.setFrameTopLeftPoint(window.cascadeTopLeft(from: CGPoint(x: other.frame.minX, y: other.frame.maxY)))
         }
+    }
+
+    func show() {
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(view)
     }
@@ -444,7 +456,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return args[i + 1]
     }
 
-    var measuring: Bool { ["--measure", "--png", "--chapter", "--page", "--panel", "--scroll", "--menus"].contains { args.contains($0) } }
+    var measuring: Bool { ["--measure", "--turns", "--png", "--chapter", "--page", "--panel", "--scroll", "--menus"].contains { args.contains($0) } }
 
     func applicationWillFinishLaunching(_ note: Notification) {
         if !measuring || args.contains("--library") || args.contains("--state") {
@@ -470,14 +482,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let png = value(after: "--png")
         // Values of the flags that take one are not books.
-        let values = Set(["--png", "--chapter", "--page", "--panel", "--theme", "--keys", "--mouse", "--state", "--size", "--picture", "-AppleLanguages"].compactMap { value(after: $0) })
+        let values = Set(["--png", "--turns", "--chapter", "--page", "--panel", "--theme", "--keys", "--mouse", "--state", "--size", "--picture", "-AppleLanguages"].compactMap { value(after: $0) })
         if let path = args.dropFirst().first(where: { !$0.hasPrefix("-") && !values.contains($0) && UInt32($0) == nil }) {
             if measuring {
+                let opening = Date()
                 guard let reader = open(path, chapter: value(after: "--chapter").flatMap { UInt32($0) }) else {
                     fputs("\(path): not a readable book\n", stderr)
                     exit(2)
                 }
-                if args.contains("--measure") || png != nil { measure(reader, png: png) }
+                if args.contains("--measure") || args.contains("--turns") || png != nil { measure(reader, png: png, opening: opening) }
             } else {
                 openBook(path)
             }
@@ -774,14 +787,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    func measure(_ reader: Reader, png: String?) {
+    /// `opening`: when the book was asked for; the budget (`performance`) counts from there, AppKit's launch aside.
+    func measure(_ reader: Reader, png: String?, opening: Date) {
         let parsed = Date().timeIntervalSince(processStart)
         reader.view.onFirstFrame = { v in
             if self.args.contains("--measure") {
-                print(String(format: "startup: parsed %.1f ms, first page presented %.1f ms, pages in chapter %d", parsed * 1000,
-                             Date().timeIntervalSince(processStart) * 1000, v.pageCount))
+                print(String(format: "startup: parsed %.1f ms, first page presented %.1f ms, pages in chapter %d; opening to the first page %.1f ms",
+                             parsed * 1000, Date().timeIntervalSince(processStart) * 1000, v.pageCount, Date().timeIntervalSince(opening) * 1000))
             }
             if let p = self.value(after: "--page").flatMap({ UInt32($0) }) { v.page = v.left(min(p, v.pageCount - 1)) }
+            if let n = self.value(after: "--turns").flatMap({ Int($0) }), n > 0 { return self.turnPages(v, n) }
             guard let png, let panel = self.value(after: "--panel") ?? (self.args.contains("--scroll") ? "" : nil) else {
                 if let png { v.savePNG(png) }
                 return NSApp.terminate(nil)
@@ -803,6 +818,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 reader.savePNG(png)
                 NSApp.terminate(nil)
             }
+        }
+    }
+
+    /// `--turns N`: N turns forward 0.4 s apart, then the display's frame intervals inside the turns' animations.
+    private func turnPages(_ v: PageView, _ n: Int) {
+        let meter = TurnMeter(v)
+        for i in 0..<n {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5 + 0.4 * Double(i)) {
+                v.turn(1)
+                meter.turned()
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8 + 0.4 * Double(n)) {
+            meter.report()
+            NSApp.terminate(nil)
         }
     }
 
@@ -1078,4 +1108,43 @@ app.run()
 final class AddingProgress {
     let report: (Int, Int) -> Void
     init(_ report: @escaping (Int, Int) -> Void) { self.report = report }
+}
+
+/// The display's frames while page turns animate (`--turns`): a display link's timestamps from the moment a turn is
+/// committed to the end of its 0.2 s animation (`PageView.show(animated:)`). A frame later than 1.5 refresh intervals
+/// after the previous one missed at least one vsync. The animation itself runs in the render server; a late callback
+/// here means the main thread was busy, which can only overcount.
+final class TurnMeter: NSObject {
+    private var link: CADisplayLink?
+    private var turns: [[CFTimeInterval]] = []
+    private var until: CFTimeInterval = 0
+    private var refresh: CFTimeInterval = 0
+
+    init(_ view: NSView) {
+        super.init()
+        let l = view.displayLink(target: self, selector: #selector(tick(_:)))
+        l.add(to: .main, forMode: .common)
+        link = l
+    }
+
+    func turned() {
+        turns.append([])
+        until = CACurrentMediaTime() + 0.2
+    }
+
+    @objc private func tick(_ l: CADisplayLink) {
+        refresh = l.targetTimestamp - l.timestamp
+        if !turns.isEmpty, l.timestamp <= until { turns[turns.count - 1].append(l.timestamp) }
+    }
+
+    func report() {
+        link?.invalidate()
+        let intervals = turns.flatMap { t in zip(t, t.dropFirst()).map { ($1 - $0) * 1000 } }.sorted()
+        guard !intervals.isEmpty, refresh > 0 else { return print("turns: no animation frames recorded") }
+        let budget = refresh * 1000
+        let missed = intervals.filter { $0 > budget * 1.5 }.count
+        let pct = { (p: Double) in intervals[Int(Double(intervals.count - 1) * p)] }
+        print(String(format: "turns: refresh %.2f ms (%.0f Hz), %d frames, missed %d, interval p50 %.2f ms, p95 %.2f ms, max %.2f ms",
+                     budget, 1000 / budget, intervals.count, missed, pct(0.5), pct(0.95), pct(1)))
+    }
 }

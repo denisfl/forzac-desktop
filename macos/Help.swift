@@ -119,6 +119,12 @@ final class HelpView: NSView {
         document.wantsLayer = true
         addSubview(card)
         [title, close, scroll, rule, support].forEach(card.addSubview)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// The rows, made when the card first shows: dozens of labels every book window would make for nothing.
+    private func makeRows() {
         for s in text.sections {
             let t = label(s.title.uppercased(), interfaceFont(12, .medium), 0)
             t.attributedStringValue = NSAttributedString(string: s.title.uppercased(), attributes: [.font: interfaceFont(12, .medium), .kern: 0.72])
@@ -148,8 +154,6 @@ final class HelpView: NSView {
         for v in document.subviews { v.translatesAutoresizingMaskIntoConstraints = true }
     }
 
-    required init?(coder: NSCoder) { fatalError() }
-
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
 
@@ -157,6 +161,7 @@ final class HelpView: NSView {
     func show(in container: NSView, palette: Palette) {
         guard !isOpen else { return }
         isOpen = true
+        if sections.isEmpty { makeRows() }
         self.palette = palette
         frame = container.bounds
         container.addSubview(self, positioned: .above, relativeTo: nil) // over the panels and the menu
