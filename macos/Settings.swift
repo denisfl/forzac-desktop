@@ -54,8 +54,11 @@ final class SettingsWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
             swatch.onChoose = { [weak self] in self?.choose(theme: i) }
             swatches.append(swatch)
         }
+        // Six equal swatches across the pane's width.
         let themeRow = NSStackView(views: swatches)
         themeRow.spacing = 8
+        themeRow.distribution = .fillEqually
+        themeRow.widthAnchor.constraint(equalToConstant: width).isActive = true
 
         let language = NSPopUpButton()
         // The languages in their own words, whatever the interface's.
@@ -105,6 +108,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         stack.alignment = .leading
         stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 20, left: 24, bottom: 24, right: 24)
+        // The same width for both panes, with the margins on both sides.
+        stack.widthAnchor.constraint(equalToConstant: width + 48).isActive = true
         return stack
     }
 

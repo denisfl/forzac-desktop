@@ -12,7 +12,7 @@
 
 - [x] 2.1 (2026-10-23: the section and `--keys s` screenshots; the end page line goes through `openStats`, not clicked by hand) Stats as a view: `macos/Stats.swift` from an `NSWindow` to an `NSView` in the library's content, period and scroll kept while hidden; the end page's month line shows the library window on "Reading stats" (opening it if closed) — check: the month line with the library closed and open
 - [x] 2.2 (2026-10-23: screenshots at 1040 × 760 and 520 × 420, the search field a button when narrow) The toolbar: transparent unified title bar over the paper, window title = section name (hidden in the toolbar), `NSSegmentedControl` "Books | Reading stats" centred, trailing "+" (`NSMenuToolbarItem`: Open a Book…, Add a Folder…) and `NSSearchToolbarItem` in Books, `NSSharingServicePickerToolbarItem` in Reading stats; the brand, "⋯" and the old search field removed; `minSize` 520 × 420 — check: screenshots at 1040 × 760 and 520 × 420 in Light and Dark, the search field collapsing to a button
-- [x] 2.3 (2026-10-23: `⌘2`, `Esc`, `/` + typing via `--keys` and by hand; `⌘,` from the menu; `⌘,` by key, `⌘F` and the Russian layout left to the maintainer's hand check in 7.1) Keys and menus: `s`, `Esc`, `⌘1`/`⌘2`, `⌘F` and `/`; File › Add a Folder… `⇧⌘O`, Show the Books Folder; View › Books / Reading stats with the check mark; Edit › Find — check: each menu item and key by hand in English and Russian layouts
+- [x] 2.3 (2026-10-23: `⌘2`, `Esc`, `/` + typing via `--keys` and by hand; `⌘,` from the menu; `⌘,`, `⌘F` and the Russian layout checked by hand by the maintainer on 2026-10-23) Keys and menus: `s`, `Esc`, `⌘1`/`⌘2`, `⌘F` and `/`; File › Add a Folder… `⇧⌘O`, Show the Books Folder; View › Books / Reading stats with the check mark; Edit › Find — check: each menu item and key by hand in English and Russian layouts
 - [ ] 2.4 The update line under the toolbar, above the tabs, elided when narrow — check: with a local appcast newer than the build (as `docs/publishing.md` describes), at 1040 and 520 wide
 - [x] 2.5 (2026-10-23: `--keys ?` screenshot) `?` shows the keys card with `forzac_library_help` over the library — check: screenshot, `?` and `Esc` close it
 
@@ -44,6 +44,6 @@
 
 ## 7. Check on hardware
 
-- [ ] 7.1 Mac (M1, macOS 14): the screens of 2.2–3.3 in English and Russian, Light and Dark; nothing drawn while idle (Activity Monitor CPU 0 % in the library for 30 s)
+- [ ] 7.1 (2026-10-23, by the maintainer: `⌘,`, `⌘F`, the Russian layout, the theme with a book open, the settings' margins fixed; Dark and English screens and idle CPU still to do) Mac (M1, macOS 14): the screens of 2.2–3.3 in English and Russian, Light and Dark; nothing drawn while idle (Activity Monitor CPU 0 % in the library for 30 s)
 - [ ] 7.2 Omarchy laptop (Hyprland, scale 2): the library tiled at two, three and four windows; screenshots; `F10`, `Ctrl+,`, `Ctrl+2`, `Esc` by hand
 - [ ] 7.3 Pi 5 (with the maintainer's consent): `scripts/pi-headless.sh` — switching to "Reading stats" with a year of log within 100 ms, a live resize across 550 px without missed frames, library first frame still ≤ 200 ms with 50 books (`forzac --measure`)
