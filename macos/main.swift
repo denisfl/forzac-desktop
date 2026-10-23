@@ -138,9 +138,12 @@ final class Reader: NSObject, NSWindowDelegate {
             guard let self else { return }
             if let state = self.state { _ = withUnsafePointer(to: self.view.settings) { forzac_state_save_settings(state, $0) } }
             self.window.appearance = NSAppearance(named: themes[self.view.theme].paper < 0x808080 ? .darkAqua : .aqua)
+            self.window.backgroundColor = nsColor(themes[self.view.theme].paper)
             self.viewer?.recolour()
         }
         window.appearance = NSAppearance(named: view.palette.paper < 0x808080 ? .darkAqua : .aqua)
+        // The first frame is the theme's paper, never a white window (`library-sections`).
+        window.backgroundColor = nsColor(view.palette.paper)
         savePosition() // an opened book is in the library, even if it is closed without turning a page
         if let state { _ = forzac_state_log(state, doc, false, true) } // its first opening (`reading-log`)
         NSDocumentController.shared.noteNewRecentDocumentURL(URL(fileURLWithPath: path))

@@ -1381,9 +1381,11 @@ final class LibraryWindow: NSObject, NSSearchFieldDelegate, NSWindowDelegate, NS
 
     /// The toolbar's search field, focused by `/` and ⌘F (Edit › Find); typing filters the books as one shelf.
     func beginSearch() {
-        guard !books.isEmpty else { return }
+        guard !books.isEmpty, let item = searchItem else { return }
         show(section: 0)
-        searchItem?.beginSearchInteraction()
+        item.beginSearchInteraction()
+        // The field may not take the keys by itself (a collapsed item, a toolbar not yet laid out).
+        if item.searchField.currentEditor() == nil { window.makeFirstResponder(item.searchField) }
     }
 
     private func endSearch() {
