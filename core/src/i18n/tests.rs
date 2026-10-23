@@ -127,3 +127,20 @@ fn the_help_text_for_the_mac() {
     assert!(lines.contains(&"\ta click on a picture or a table opens it"));
     assert_eq!(lines.last(), Some(&"There could be an ad here. There isn’t, and there won’t be, so Forzac runs on your thanks 😀"));
 }
+
+#[test]
+fn the_library_help_has_its_sections_and_each_shells_keys() {
+    let linux = library_help(Platform::Linux);
+    let mac = library_help(Platform::Mac);
+    let titles: Vec<&str> = linux.sections.iter().map(|s| s.title).collect();
+    assert_eq!(titles, ["Books", "Reading stats", "Window"]);
+    let keys = |h: &Help| h.sections.iter().flat_map(|s| s.rows.iter().map(|r| r.keys)).collect::<Vec<_>>();
+    // The main menu is Linux's only; the share and the save are each one shell's.
+    assert!(keys(&linux).contains(&"F10") && !keys(&mac).iter().any(|k| k.contains("F10")));
+    assert!(linux.sections[1].rows.iter().any(|r| r.keys == "s" && r.meaning == "save the picture"));
+    assert!(mac.sections[1].rows.iter().any(|r| r.keys == "s" && r.meaning == "share"));
+    assert!(keys(&mac).contains(&"⌘1 ⌘2") && keys(&linux).contains(&"Ctrl+1 Ctrl+2"));
+    assert_eq!(linux.support, help(Platform::Linux).support);
+    let text = library_help_text(Platform::Linux);
+    assert_eq!(text.lines().take(2).collect::<Vec<_>>(), ["Keys", "# Books"]);
+}

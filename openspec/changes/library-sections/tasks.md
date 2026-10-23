@@ -1,12 +1,12 @@
 ## 0. Before
 
-- [ ] 0.1 `reading-log` and `reading-stats` archived (their Pi 5 tasks done or waived by the maintainer), so that the requirements this change rewrites exist in `openspec/specs`; `openspec validate library-sections --strict` passes after the archive
+- [x] 0.1 `reading-log` and `reading-stats` archived (their Pi 5 tasks done or waived by the maintainer), so that the requirements this change rewrites exist in `openspec/specs`; `openspec validate library-sections --strict` passes after the archive
 
 ## 1. Core
 
-- [ ] 1.1 `i18n::library_help(platform)`: sections "Books", "Reading stats", "Window" with each shell's keys (`⌘1`/`⌘2`, `Ctrl+1`/`Ctrl+2`, `Ctrl+,`, `Ctrl+?`, `F10` on Linux only) and the support line; both languages; tests like `help`'s (every key the library handles is listed, nothing else; Russian strings present)
-- [ ] 1.2 Strings for the sections, the toolbar and header ("Books", "Reading stats", "Open a Book…", "Add a Folder…", "Save Image…", "Main Menu", "Keyboard Shortcuts", "About Forzac", "General", "Books" pane, "Theme", the six theme names, "Show"); catalogue test passes
-- [ ] 1.3 C ABI `forzac_library_help(platform)` as `forzac_help`; `macos/forzac.h`; `cargo test -p forzac-core`, clippy and fmt pass
+- [x] 1.1 `i18n::library_help(platform)`: sections "Books", "Reading stats", "Window" with each shell's keys (`⌘1`/`⌘2`, `Ctrl+1`/`Ctrl+2`, `Ctrl+,`, `Ctrl+?`, `F10` on Linux only) and the support line; both languages; tests like `help`'s (every key the library handles is listed, nothing else; Russian strings present)
+- [ ] 1.2 (added with each shell's code: the catalogue test rejects strings nobody asks for) Strings for the sections, the toolbar and header ("Books", "Reading stats", "Open a Book…", "Add a Folder…", "Save Image…", "Main Menu", "Keyboard Shortcuts", "About Forzac", "General", "Books" pane, "Theme", the six theme names, "Show"); catalogue test passes
+- [x] 1.3 C ABI `forzac_library_help(platform)` as `forzac_help`; `macos/forzac.h`; `cargo test -p forzac-core`, clippy and fmt pass
 
 ## 2. macOS: the window and its toolbar
 

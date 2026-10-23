@@ -135,9 +135,18 @@ pub struct Row {
 
 /// The keys and the support line in the interface language.
 pub fn help(platform: Platform) -> Help {
+    keys(HELP, platform)
+}
+
+/// The library window's keys (`help`, "The keys in the library"), as `help`.
+pub fn library_help(platform: Platform) -> Help {
+    keys(LIBRARY_HELP, platform)
+}
+
+fn keys(table: &[(&'static str, &[HelpRow])], platform: Platform) -> Help {
     Help {
         title: tr("Keys"),
-        sections: HELP
+        sections: table
             .iter()
             .map(|(title, rows)| Section {
                 title: tr(title),
@@ -158,7 +167,15 @@ pub fn help(platform: Platform) -> Help {
 /// The help as text for the C ABI: the title, a section as `# title`, a row as `keys\tmeaning`, the support line
 /// last; one per line.
 pub fn help_text(platform: Platform) -> String {
-    let help = help(platform);
+    text(&help(platform))
+}
+
+/// The library's keys as text for the C ABI, as `help_text`.
+pub fn library_help_text(platform: Platform) -> String {
+    text(&library_help(platform))
+}
+
+fn text(help: &Help) -> String {
     let mut lines = vec![help.title.to_owned()];
     for section in &help.sections {
         lines.push(format!("# {}", section.title));
@@ -246,10 +263,51 @@ const HELP: &[(&str, &[HelpRow])] = &[
     ),
 ];
 
+/// The library's sections of rows (`library`, `reading-stats`).
+const LIBRARY_HELP: &[(&str, &[HelpRow])] = &[
+    (
+        "Books",
+        &[
+            ("← → ↑ ↓ h j k l", "← → ↑ ↓ h j k l", "move the selection"),
+            ("Home End", "Home End", "first / last book"),
+            ("Tab Shift+Tab", "Tab Shift+Tab", "next / previous view"),
+            ("Enter", "Return", "open the book"),
+            ("i", "i", "about the book"),
+            ("d Delete", "d Delete", "remove the book"),
+            ("/ Ctrl+F", "/ ⌘F", "search"),
+            ("s", "s", "reading stats"),
+            ("F", "F", "show the Books folder"),
+            ("Ctrl+O", "⌘O", "open a book"),
+            ("Ctrl+Shift+O", "⇧⌘O", "add a folder"),
+        ],
+    ),
+    (
+        "Reading stats",
+        &[
+            ("← → h l", "← → h l", "previous / next period"),
+            ("m y", "m y", "month, year"),
+            ("s", "", "save the picture"),
+            ("", "s", "share"),
+            ("↑ ↓ j k Space PgUp PgDn", "↑ ↓ j k Space PgUp PgDn", "scroll"),
+        ],
+    ),
+    (
+        "Window",
+        &[
+            ("Ctrl+1 Ctrl+2", "⌘1 ⌘2", "books, reading stats"),
+            ("Esc", "Esc", "back to the books"),
+            ("Ctrl+,", "⌘,", "settings"),
+            ("F10", "", "main menu"),
+            ("? Ctrl+?", "?", "this help"),
+            ("q Ctrl+W", "q ⌘W", "close"),
+        ],
+    ),
+];
+
 /// The English the core asks for itself: the help's.
 #[cfg(test)]
 fn asked_by_help() -> Vec<&'static str> {
-    let rows = HELP.iter().flat_map(|(title, rows)| std::iter::once(*title).chain(rows.iter().map(|r| r.2)));
+    let rows = HELP.iter().chain(LIBRARY_HELP).flat_map(|(title, rows)| std::iter::once(*title).chain(rows.iter().map(|r| r.2)));
     ["Keys", SUPPORT, SUPPORT_LINK].into_iter().chain(rows).collect()
 }
 
@@ -417,6 +475,23 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("full screen", "во весь экран"),
     ("this help", "эта справка"),
     ("close", "закрыть"),
+    ("move the selection", "выбрать книгу"),
+    ("first / last book", "первая / последняя книга"),
+    ("next / previous view", "следующий / предыдущий вид"),
+    ("open the book", "открыть книгу"),
+    ("about the book", "о книге"),
+    ("remove the book", "удалить книгу"),
+    ("reading stats", "статистика"),
+    ("show the Books folder", "показать папку «Книги»"),
+    ("open a book", "открыть файл книги"),
+    ("add a folder", "добавить папку"),
+    ("previous / next period", "предыдущий / следующий период"),
+    ("month, year", "месяц, год"),
+    ("save the picture", "сохранить картинку"),
+    ("scroll", "прокрутка"),
+    ("books, reading stats", "книги, статистика"),
+    ("back to the books", "назад к книгам"),
+    ("main menu", "главное меню"),
     ("Mouse", "Мышь"),
     (
         "a click in the left or right third turns the page, in the middle opens the menu",

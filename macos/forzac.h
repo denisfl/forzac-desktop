@@ -263,6 +263,8 @@ void forzac_set_language(const char *locales);
 const char *forzac_tr(const char *english);
 const char *forzac_tr_count(uint32_t n, const char *one, const char *other);
 const char *forzac_help(uint32_t platform);
+// The library window's keys, in the same format; valid for good.
+const char *forzac_library_help(uint32_t platform);
 
 void forzac_set_assets(const char *dir);
 void forzac_set_fallback(ForzacFallback provider);

@@ -1455,9 +1455,22 @@ pub unsafe extern "C" fn forzac_tr_count(n: u32, one: *const c_char, other: *con
 /// valid for good.
 #[unsafe(no_mangle)]
 pub extern "C" fn forzac_help(platform: u32) -> *const c_char {
-    let platform = if platform == 1 { crate::i18n::Platform::Mac } else { crate::i18n::Platform::Linux };
+    keys_text(crate::i18n::help_text(help_platform(platform)))
+}
+
+/// The library window's keys, as `forzac_help` (`i18n::library_help_text`); valid for good.
+#[unsafe(no_mangle)]
+pub extern "C" fn forzac_library_help(platform: u32) -> *const c_char {
+    keys_text(crate::i18n::library_help_text(help_platform(platform)))
+}
+
+fn help_platform(platform: u32) -> crate::i18n::Platform {
+    if platform == 1 { crate::i18n::Platform::Mac } else { crate::i18n::Platform::Linux }
+}
+
+/// A help text kept for good: one copy per distinct text (the language may change between calls).
+fn keys_text(text: String) -> *const c_char {
     static TEXTS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, &'static str>>> = std::sync::OnceLock::new();
-    let text = crate::i18n::help_text(platform);
     let mut texts = TEXTS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
     let text: &'static str = texts.entry(text.clone()).or_insert_with(|| Box::leak(text.into_boxed_str()));
     c_static(text)
