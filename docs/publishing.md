@@ -82,8 +82,8 @@ The checklist; every item is done on hardware, not in containers (`CLAUDE.md`, `
       `FORZAC_CORPUS=~/Books cargo test -p forzac-core --test corpus`.
 - [ ] Measurements on the Pi 5 against the budgets (`release-1-0`): build with `PI=raspberry scripts/pi-dev.sh
       book.fb2.zip`, then on the Pi `scripts/pi-headless.sh ~/forzac-dev/bin/forzac book.fb2.zip`; first page,
-      missed frames in page turns, idle CPU ticks. On the Mac: start-up and idle as in `macos-app`. Results go into the
-      release notes.
+      missed frames in page turns, idle CPU ticks. On the Mac, with the screen unlocked: `scripts/measure.sh
+      book.fb2.zip`. The budgets are in `openspec/specs/performance`; results go into the release notes.
 - [ ] By hand on the Pi 5 (over `scripts/pi-vnc.sh` or Raspberry Pi Connect) and on the Mac: open an FB2, an
       `.fb2.zip`, an EPUB and an FB3; both page modes; contents, notes, search, settings, the image and table view,
       reopening at the same line; `?` shows the help with the support line.

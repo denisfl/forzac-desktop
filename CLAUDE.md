@@ -36,7 +36,7 @@ macos/build.sh                                             # macOS: macos/build/
 scripts/package-macos.sh X.Y.Z                             # macOS: the DMG and its .sha256, after macos/build.sh
 cargo run --release -p forzac-core --example bench -- book.fb2.zip
 cargo run --release -p forzac-core --example mobi -- book.fb2.zip out.mobi   # the Kindle's MOBI; --kindle sends it
-scripts/measure.sh book.fb2.zip                            # Linux desktop measurements
+scripts/measure.sh book.fb2.zip                            # Linux desktop or Mac measurements (performance budgets)
 scripts/pi-headless.sh target/release/forzac book.fb2.zip  # headless measurements on GPU (Raspberry Pi)
 scripts/package-linux.sh forzac-X.Y.Z-linux-ARCH           # release archive layout
 scripts/package-deb.sh X.Y.Z                               # Raspberry Pi OS .deb (in ci/debian.Dockerfile)

@@ -18,7 +18,8 @@ git -C /src ls-files -co --exclude-standard -z | (cd /src && xargs -0 ls -d 2>/d
 
 # The source package, as an AUR user installs it: makepkg -si (dependencies from the repositories, then pacman -U).
 cp /src/packaging/aur/forzac/{PKGBUILD,forzac.install} forzac/
-sed -i "s|^source=.*|source=(\"forzac-$ver.tar.gz\")|" forzac/PKGBUILD
+# The working tree's archive, not the release's: its checksum is not the one in the PKGBUILD.
+sed -i -e "s|^source=.*|source=(\"forzac-$ver.tar.gz\")|" -e "s|^sha256sums=.*|sha256sums=('SKIP')|" forzac/PKGBUILD
 (cd forzac && time makepkg -si --noconfirm >makepkg.log 2>&1) || { tail -30 forzac/makepkg.log; exit 1; }
 grep -A3 'post_install\|To open' forzac/makepkg.log || true
 pacman -Qi forzac | grep -E '^(Name|Version|Installed Size|Depends On)'
@@ -38,7 +39,8 @@ check_desktop
 # The binary package from a release archive laid out like CI's (scripts/package-linux.sh), replacing the source one.
 (cd forzac-bin && CARGO_TARGET_DIR=~/forzac/src/forzac-desktop-$ver/target /src/scripts/package-linux.sh "forzac-$ver-linux-x86_64" >/dev/null)
 cp /src/packaging/aur/forzac-bin/{PKGBUILD,forzac.install} forzac-bin/
-sed -i "s|^source_x86_64=.*|source_x86_64=(\"forzac-$ver-linux-x86_64.tar.gz\")|" forzac-bin/PKGBUILD
+sed -i -e "s|^source_x86_64=.*|source_x86_64=(\"forzac-$ver-linux-x86_64.tar.gz\")|" -e "s|^sha256sums_x86_64=.*|sha256sums_x86_64=('SKIP')|" \
+  forzac-bin/PKGBUILD
 sudo pacman -R --noconfirm forzac forzac-debug >/dev/null
 (cd forzac-bin && makepkg -si --noconfirm >makepkg.log 2>&1) || { tail -30 forzac-bin/makepkg.log; exit 1; }
 pacman -Qi forzac-bin | grep -E '^(Name|Version|Provides|Conflicts With)'
