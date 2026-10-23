@@ -16,9 +16,9 @@
 
 ## 4. The Pi 5's budgets (with the maintainer's consent, on the USB-stick system)
 
-- [ ] 4.1 `PI=… scripts/pi-dev.sh` builds; `scripts/pi-headless.sh forzac book.fb2.zip` at 120 Hz: first page ≤ 200 ms warm, 20 turns "missed 0", idle 0 ticks — check: the script's output, saved with the release notes
-- [ ] 4.2 The core's `bench` example on the Pi 5 for the test books: the slowest chapter under 50 ms — check: its output
-- [ ] 4.3 By hand over VNC: open, turn, resize across a spread; no stutter seen — check: the maintainer's word
+- [ ] 4.1 (2026-10-23: waived for now by the maintainer, no Pi tests until further notice) `PI=… scripts/pi-dev.sh` builds; `scripts/pi-headless.sh forzac book.fb2.zip` at 120 Hz: first page ≤ 200 ms warm, 20 turns "missed 0", idle 0 ticks — check: the script's output, saved with the release notes
+- [ ] 4.2 (2026-10-23: waived for now by the maintainer, no Pi tests until further notice) The core's `bench` example on the Pi 5 for the test books: the slowest chapter under 50 ms — check: its output
+- [ ] 4.3 (2026-10-23: waived for now by the maintainer, no Pi tests until further notice) By hand over VNC: open, turn, resize across a spread; no stutter seen — check: the maintainer's word
 
 ## 5. x86_64 in containers
 
