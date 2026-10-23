@@ -2053,8 +2053,7 @@ impl Library {
         let devices = gtk::Box::new(gtk::Orientation::Vertical, 2);
         sheet.append(&devices);
 
-        // One above the other in a narrow window: "Sync Now" is long in Russian.
-        let buttons = gtk::Box::new(if self.narrow.get() { gtk::Orientation::Vertical } else { gtk::Orientation::Horizontal }, 12);
+        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         buttons.set_homogeneous(true);
         buttons.set_margin_top(12);
         let close = gtk::Button::builder().label(tr("Close")).focusable(false).hexpand(true).build();
