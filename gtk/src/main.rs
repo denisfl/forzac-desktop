@@ -103,6 +103,8 @@ const KEEP_AWAKE: Duration = Duration::from_secs(10 * 60);
 thread_local! {
     /// The open book windows by the canonical path of their file: opening a book again brings its window forward.
     static WINDOWS: RefCell<Vec<(PathBuf, glib::WeakRef<gtk::ApplicationWindow>)>> = const { RefCell::new(Vec::new()) };
+    /// The open books' views, for a theme chosen in the library's settings.
+    static VIEWS: RefCell<Vec<glib::WeakRef<PageView>>> = const { RefCell::new(Vec::new()) };
     /// Files being copied into the Books folder: opening one again meanwhile does nothing.
     static IMPORTING: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
     /// The library is being read for its window.
@@ -257,10 +259,16 @@ fn main() -> glib::ExitCode {
                         opts.start.elapsed()
                     );
                 }
-                if let Some(png) = &opts.png {
-                    library.save_png(png);
-                }
-                library.window.close();
+                // Screenshots of the other section and the sheets (`library-sections`): FORZAC_SECTION=1,
+                // FORZAC_SHEET=settings|help|about; drawn a moment later.
+                let shown = library::screenshot_state(&library);
+                let png = opts.png.clone();
+                glib::timeout_add_local_once(Duration::from_millis(if shown { 600 } else { 0 }), move || {
+                    if let Some(png) = &png {
+                        library.save_png(png);
+                    }
+                    library.window.close();
+                });
             });
         });
     });
@@ -382,7 +390,7 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
     let view = PageView::new(book, at, settings, appearance::dark());
     view.set_mode(if settings.turning == Turning::Scroll { Mode::Scroll } else { Mode::Slide });
 
-    let help = help::Help::new();
+    let help = help::Help::new(false);
     let overlay = gtk::Overlay::new();
     overlay.set_child(Some(&view));
     // The help over everything, the panels (added to `overlay` later) and the menu included.
@@ -589,7 +597,7 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
         &window,
         save_style,
     ));
-    let stats_store = store.clone();
+    let (stats_store, stats_options, stats_app) = (store.clone(), options.clone(), app.clone());
     view.connect_open(glib::clone!(
         #[weak]
         overlay,
@@ -603,7 +611,7 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             Open::External(url) => gtk::UriLauncher::new(&url).launch(Some(&window), gio::Cancellable::NONE, |_| {}),
             Open::Image(id) => *viewer.borrow_mut() = viewer::open(&overlay, &view, viewer::Subject::Image(id)).map(|v| v.downgrade()),
             Open::Table(at) => *viewer.borrow_mut() = viewer::open(&overlay, &view, viewer::Subject::Table(at)).map(|v| v.downgrade()),
-            Open::Stats => stats::open(&window, &stats_store),
+            Open::Stats => show_stats(&stats_app, &stats_options, &stats_store),
         }
     ));
     // For screenshots: `wtype` cannot type `?`.
@@ -676,6 +684,7 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
         library::cache_cover(&view.book());
         keep_awake(app, &window);
         WINDOWS.with(|w| w.borrow_mut().push((canonical, window.downgrade())));
+        VIEWS.with(|v| v.borrow_mut().push(view.downgrade()));
     }
 
     if let Some(events) = options.mouse.clone() {
@@ -1045,6 +1054,26 @@ fn utc_offset() -> i64 {
 /// The library in the reader's theme, or the open one brought forward (then `shown` is not called); opening a book
 /// from it closes it. The Books folder is read first, off the main thread; the first time, it is made and the
 /// remembered books are copied in. Measurement runs read the folder only if it was made.
+/// A theme chosen in the library's settings (`settings`): every open book turns to it, keeping its place.
+pub fn theme_changed(theme: usize) {
+    VIEWS.with(|views| {
+        views.borrow_mut().retain(|v| v.upgrade().is_some());
+        for view in views.borrow().iter().filter_map(|v| v.upgrade()) {
+            view.set_settings(Settings { theme: Some(theme), ..view.settings() });
+        }
+    });
+}
+
+/// The end page's month line (`reader-navigation`): the library window on "Reading stats".
+fn show_stats(app: &gtk::Application, options: &Options, store: &SharedStore) {
+    if let Some(library) = library::open_library() {
+        library.show_section(1);
+        library.window.present();
+        return;
+    }
+    library_window(app, options, store, |library| library.show_section(1));
+}
+
 fn library_window(app: &gtk::Application, options: &Options, store: &SharedStore, shown: impl FnOnce(Rc<library::Library>) + 'static) {
     if SHOWING.get() {
         return;
@@ -1093,7 +1122,11 @@ fn library_window(app: &gtk::Application, options: &Options, store: &SharedStore
                 });
             })
         };
-        let size = if stateless { fitted(1040, 760) } else { remembered_size(&store.borrow(), "window-library", (1040, 760)) };
+        let size = match (options.size, stateless) {
+            (Some(size), _) => size,
+            (None, true) => fitted(1040, 760),
+            (None, false) => remembered_size(&store.borrow(), "window-library", (1040, 760)),
+        };
         if let Some(library) = library::Library::show(&app, &store, theme, size, open, books, folder) {
             *window.borrow_mut() = Some(library.window.downgrade());
             if !stateless {

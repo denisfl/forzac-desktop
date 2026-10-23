@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use forzac_core::i18n::{self, fill, tr};
 use forzac_core::library::{self, CoverStyle, View};
 use forzac_core::model::Series;
+use forzac_core::settings::Settings;
 use forzac_core::state::{Entry, Store};
 use forzac_core::update;
 use gtk::subclass::prelude::*;
@@ -683,6 +684,8 @@ thread_local! {
     };
     /// The library window, while it is open: there is one at a time.
     static OPEN: RefCell<Option<glib::WeakRef<gtk::ApplicationWindow>>> = const { RefCell::new(None) };
+    /// Its `Library`, for the end page's month line (`open_library`).
+    static LIBRARY: RefCell<Option<std::rc::Weak<Library>>> = const { RefCell::new(None) };
 }
 
 /// The library's colours in the reader's theme; its layout (the web's `reader.css`).
@@ -715,13 +718,26 @@ fn set_theme(p: Palette) {
              .forzac-library .tabs {{ border-bottom: 1px solid {line}; }}
              .forzac-library .about {{ background-color: {sheet}; }}
              .forzac-library .about-details, .forzac-library .about-series {{ color: {muted}; }}
+             .forzac-library headerbar {{ background: {paper}; color: {ink}; box-shadow: none; border-bottom: 1px solid {line}; }}
+             .forzac-library headerbar button, .forzac-library headerbar menubutton > button {{ color: {ink}; background: none;
+                 border: none; box-shadow: none; }}
+             .forzac-library headerbar button:hover, .forzac-library headerbar button:checked,
+                 .forzac-library headerbar menubutton > button:hover {{ background-color: alpha({ink}, 0.08); }}
+             .forzac-library .section-switcher {{ border: 1px solid {line}; }}
+             .forzac-library .section-switcher button {{ color: {muted}; }}
+             .forzac-library .section-switcher button:checked {{ background-color: {line}; color: {ink}; }}
+             .forzac-library .section-pill {{ background-color: {sheet}; }}
+             .forzac-library searchbar > revealer > box {{ background: {paper}; border-bottom: 1px solid {line}; }}
+             .forzac-library entry.search-field {{ background-color: {sheet}; border: 1px solid {line}; }}
+             .forzac-library popover > contents {{ background-color: {sheet}; color: {ink}; }}
+             .forzac-library button.swatch.chosen {{ box-shadow: inset 0 0 0 2px {link}; }}
+             .forzac-library .about label link, .forzac-library .question-body link {{ color: {link}; }}
              {STATIC_CSS}"
         ));
     });
 }
 
 const STATIC_CSS: &str = "
-    .forzac-library .brand-name { font-family: 'Literata'; font-weight: 700; font-size: 22px; }
     .forzac-library button.pill { border-radius: 999px; padding: 11px 20px; font-weight: 500; font-size: 15px; }
     .forzac-library button.pill:hover { opacity: 0.88; }
     .forzac-library button.pill.big { padding: 16px 30px; font-size: 17px; }
@@ -738,8 +754,19 @@ const STATIC_CSS: &str = "
     .forzac-library progressbar trough, .forzac-library progressbar progress { min-height: 2px; min-width: 0; margin: 0;
         border-radius: 1px; border: none; box-shadow: none; }
     .forzac-library .rule { min-height: 1px; }
-    .forzac-library entry.search-field { font-family: 'PT Serif'; font-size: 26px; background: none; border: none; box-shadow: none;
-        outline: none; padding: 0; min-height: 44px; }
+    .forzac-library entry.search-field { font-size: 15px; border-radius: 10px; box-shadow: none; outline: none; padding: 0 12px;
+        min-height: 34px; }
+    .forzac-library searchbar > revealer > box { box-shadow: none; padding: 8px 12px; }
+    .forzac-library headerbar { min-height: 48px; }
+    .forzac-library .section-switcher { border-radius: 9px; padding: 2px; }
+    .forzac-library .section-switcher button { background: none; border: none; box-shadow: none; border-radius: 7px;
+        padding: 3px 14px; min-height: 0; font-weight: 400; }
+    .forzac-library .section-switcher button:checked { font-weight: 500; }
+    .forzac-library .section-pill { border-radius: 999px; padding: 4px; box-shadow: 0 4px 18px alpha(black, 0.16); }
+    .forzac-library .section-pill button { border-radius: 999px; padding: 8px 20px; font-size: 15px; }
+    .forzac-library .section-title { font-weight: 600; font-size: 15px; }
+    .forzac-library .bottom-sheet { border-radius: 22px 22px 0 0; }
+    .forzac-library button.swatch { background: none; border: none; box-shadow: none; padding: 4px; border-radius: 12px; }
     .forzac-library .empty-heading { font-family: 'Literata'; font-weight: 700; font-size: 44px; letter-spacing: -0.4px;
         line-height: 1.08; }
     .forzac-library .empty-lead { font-family: 'Literata'; font-size: 19px; line-height: 1.55; }
@@ -773,10 +800,33 @@ type EditForm = (gtk::Widget, usize, [gtk::Entry; 5], forzac_core::Book);
 /// The settings sheet (`settings`) and what a sync or a change of the Books folder updates in it.
 struct SettingsSheet {
     sheet: gtk::Widget,
+    /// The six themes' swatches, the chosen one marked.
+    swatches: Vec<gtk::Button>,
     folder: gtk::Label,
     status: gtk::Label,
     devices: gtk::Box,
     sync: gtk::Button,
+}
+
+/// For screenshots (`--png`): the section in `FORZAC_SECTION` and the sheet in `FORZAC_SHEET` shown; whether any was.
+pub fn screenshot_state(library: &Rc<Library>) -> bool {
+    let mut shown = false;
+    if std::env::var("FORZAC_SECTION").as_deref() == Ok("1") {
+        library.show_section(1);
+        shown = true;
+    }
+    match std::env::var("FORZAC_SHEET").as_deref() {
+        Ok("settings") => library.show_settings(),
+        Ok("help") => library.toggle_help(),
+        Ok("about") => library.show_about_app(),
+        _ => return shown,
+    }
+    true
+}
+
+/// The open library window's `Library`, while there is one.
+pub fn open_library() -> Option<Rc<Library>> {
+    LIBRARY.with(|l| l.borrow().as_ref().and_then(|w| w.upgrade()))
 }
 
 /// The library window and what it shows.
@@ -787,7 +837,7 @@ pub struct Library {
     open: Rc<dyn Fn(&Path)>,
     /// The Books folder, when it could be made.
     folder: RefCell<Option<PathBuf>>,
-    palette: Palette,
+    palette: Cell<Palette>,
     books: RefCell<Vec<Book>>,
     thumbs: RefCell<HashMap<String, Thumb>>,
     marbles: RefCell<HashMap<i32, gdk::Texture>>,
@@ -805,15 +855,33 @@ pub struct Library {
     searching: Cell<bool>,
     scrolled: gtk::ScrolledWindow,
     overlay: gtk::Overlay,
+    /// The books' page in the scrolled column: the update line, the tabs, the body.
+    page: gtk::Box,
     body: gtk::Box,
-    brand: gtk::Box,
-    /// "Version N is out — download ×" (`update-check`), in the head.
+    /// "Version N is out — download ×" (`update-check`), on top of "Books".
     update: (gtk::Box, gtk::Label),
+    /// The search bar under the header (`library-sections`) and its field.
+    search_bar: gtk::SearchBar,
     entry: gtk::Entry,
-    buttons: (gtk::Button, gtk::Button, gtk::Button),
-    /// The head's "⋯": the Books folder and adding a folder (`books-folder-setting`).
-    head_menu: gtk::Button,
-    /// "Adding books… N of M" while a folder is added (`folder-import`), in place of the search button.
+    /// The header's actions: "+" and the search toggle in "Books", "Save Image…" in "Reading stats".
+    add_button: gtk::MenuButton,
+    search_toggle: gtk::ToggleButton,
+    save_button: gtk::Button,
+    /// The section shown (0 "Books", 1 "Reading stats"), the two sections, and the switchers: the header's and the
+    /// bottom pill's (narrow windows), with the header's title that stands in for the switcher there.
+    section: Cell<usize>,
+    sections: gtk::Stack,
+    stats: crate::stats::Section,
+    stats_shown: Cell<bool>,
+    switchers: [(gtk::ToggleButton, gtk::ToggleButton); 2],
+    title: (gtk::Stack, gtk::Label),
+    pill: gtk::Box,
+    narrow: Cell<bool>,
+    /// The library's keys card (`help`).
+    help: Rc<crate::help::Help>,
+    /// "About Forzac" while it shows.
+    about_app: RefCell<Option<gtk::Widget>>,
+    /// "Adding books… N of M" while a folder is added (`folder-import`), on top of "Books".
     progress: gtk::Label,
     adding: Cell<bool>,
     /// Folders dropped while one is being added.
@@ -859,27 +927,84 @@ impl Library {
         window.add_css_class("forzac-library");
         OPEN.with(|o| *o.borrow_mut() = Some(window.downgrade()));
 
-        let entry = gtk::Entry::builder().placeholder_text(tr("Title, author or series")).hexpand(true).visible(false).build();
+        let entry = gtk::Entry::builder().placeholder_text(tr("Title, author or series")).width_request(360).build();
         entry.add_css_class("search-field");
-        let circle = |paths: icons::Paths, tip: &str| {
+        let search_bar = gtk::SearchBar::builder().child(&entry).show_close_button(false).build();
+        search_bar.connect_entry(&entry);
+        let header_button = |paths: icons::Paths, tip: &str| {
             let b = gtk::Button::builder().child(&Icon::new(paths, 20)).tooltip_text(tip).focusable(false).build();
-            b.add_css_class("circle");
             b.set_valign(gtk::Align::Center);
             b
         };
-        let search = circle(icons::SEARCH, tr("Search"));
-        let head_menu = circle(icons::ELLIPSIS, tr("More"));
-        let close = circle(icons::X, tr("Close"));
-        close.set_visible(false);
-        let open_button = pill(tr("Open a book"), false);
+        // "+": opening a book and adding a folder, as File's items on the Mac.
+        let add_menu = gio::Menu::new();
+        let open_item = gio::MenuItem::new(Some(tr("Open a Book…")), Some("lib.openbook"));
+        open_item.set_attribute_value("accel", Some(&"<Control>o".to_variant()));
+        add_menu.append_item(&open_item);
+        let folder_item = gio::MenuItem::new(Some(tr("Add a Folder…")), Some("lib.addfolder"));
+        folder_item.set_attribute_value("accel", Some(&"<Control><Shift>o".to_variant()));
+        add_menu.append_item(&folder_item);
+        let add_button =
+            gtk::MenuButton::builder().child(&Icon::new(icons::PLUS, 20)).tooltip_text(tr("Add a Book")).menu_model(&add_menu).build();
+        add_button.set_focusable(false);
+        let search_toggle =
+            gtk::ToggleButton::builder().child(&Icon::new(icons::SEARCH, 20)).tooltip_text(tr("Search")).focusable(false).build();
+        search_toggle.set_valign(gtk::Align::Center);
+        search_toggle.bind_property("active", &search_bar, "search-mode-enabled").bidirectional().build();
+        let save_button = header_button(icons::DOWNLOAD, tr("Save Image…"));
+        save_button.set_visible(false);
+        // The main menu (GNOME's "Main Menu"): Settings, Keyboard Shortcuts, About; `F10` opens it.
+        let main_menu = gio::Menu::new();
+        let item = |label: &str, action: &str, accel: &str| {
+            let i = gio::MenuItem::new(Some(label), Some(action));
+            i.set_attribute_value("accel", Some(&accel.to_variant()));
+            i
+        };
+        main_menu.append_item(&item(tr("Settings"), "lib.settings", "<Control>comma"));
+        main_menu.append_item(&item(tr("Keyboard Shortcuts"), "lib.help", "<Control>question"));
+        main_menu.append_item(&item(tr("About Forzac"), "lib.aboutapp", ""));
+        let menu_button = gtk::MenuButton::builder()
+            .child(&Icon::new(icons::MENU, 20))
+            .tooltip_text(tr("Main Menu"))
+            .menu_model(&main_menu)
+            .primary(true)
+            .build();
+        menu_button.set_focusable(false);
+        // The two switchers: the header's, and the bottom pill's for narrow windows.
+        let switcher = |class: &str| {
+            let b = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            b.add_css_class(class);
+            b.set_valign(gtk::Align::Center);
+            let books = gtk::ToggleButton::builder().label(tr("Books")).focusable(false).active(true).build();
+            let stats = gtk::ToggleButton::builder().label(tr("Reading stats")).focusable(false).group(&books).build();
+            b.append(&books);
+            b.append(&stats);
+            (b, books, stats)
+        };
+        let (header_switcher, hb, hs) = switcher("section-switcher");
+        let (pill, pb, ps) = switcher("section-switcher");
+        pill.add_css_class("section-pill");
+        pill.set_halign(gtk::Align::Center);
+        pill.set_valign(gtk::Align::End);
+        pill.set_margin_bottom(16);
+        pill.set_visible(false);
+        let title_label = gtk::Label::new(Some(tr("Books")));
+        title_label.add_css_class("section-title");
+        let title = gtk::Stack::new();
+        title.add_named(&header_switcher, Some("switcher"));
+        title.add_named(&title_label, Some("title"));
+        title.set_visible_child_name("switcher");
+        let header = gtk::HeaderBar::new();
+        header.add_css_class("library-header");
+        header.pack_start(&add_button);
+        header.pack_start(&search_toggle);
+        header.pack_start(&save_button);
+        header.set_title_widget(Some(&title));
+        header.pack_end(&menu_button);
+
         let progress = gtk::Label::new(None);
         progress.add_css_class("hint");
         progress.set_visible(false);
-        let brand = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        brand.append(&brand_icon());
-        let name = gtk::Label::new(Some(tr("Forzac")));
-        name.add_css_class("brand-name");
-        brand.append(&name);
         let update_label = gtk::Label::new(None);
         update_label.add_css_class("update");
         update_label.set_ellipsize(pango::EllipsizeMode::End);
@@ -897,38 +1022,50 @@ impl Library {
         update_line.set_valign(gtk::Align::Center);
         dismiss.set_valign(gtk::Align::Center);
         update_line.set_visible(false);
-        let head = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-        head.set_size_request(-1, 48);
-        let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        spacer.set_hexpand(true);
-        for w in [
-            brand.upcast_ref::<gtk::Widget>(),
-            entry.upcast_ref(),
-            spacer.upcast_ref(),
-            update_line.upcast_ref(),
-            progress.upcast_ref(),
-            head_menu.upcast_ref(),
-            search.upcast_ref(),
-            close.upcast_ref(),
-            open_button.upcast_ref(),
-        ] {
-            head.append(w);
-        }
+        // On top of "Books", one line: the progress of adding books and the update line.
+        let notes = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+        notes.set_margin_top(12);
+        notes.append(&progress);
+        notes.append(&update_line);
         let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
         body.set_vexpand(true);
         let tabs = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         tabs.add_css_class("tabs");
-        tabs.set_margin_top(12);
+        tabs.set_margin_top(4);
         let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        page.append(&head);
+        page.append(&notes);
         page.append(&tabs);
         page.append(&body);
         let view = View::from_key(store.borrow().setting(library::VIEW));
         let column = Layout::new(Kind::Column);
         column.add(&page);
         let scrolled = gtk::ScrolledWindow::builder().child(&column).hscrollbar_policy(gtk::PolicyType::Never).build();
+        let stats = crate::stats::Section::new(window.upcast_ref(), store, palette, {
+            let window = window.downgrade();
+            move || {
+                if let Some(w) = window.upgrade() {
+                    let _ = WidgetExt::activate_action(&w, "lib.books", None);
+                }
+            }
+        });
+        let sections = gtk::Stack::builder().vexpand(true).build();
+        sections.add_named(&scrolled, Some("books"));
+        sections.add_named(&stats.widget, Some("stats"));
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        // On Hyprland, which draws no title bars, the header is the window's top row; elsewhere, its title bar.
+        if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
+            header.set_show_title_buttons(false);
+            root.append(&header);
+        } else {
+            window.set_titlebar(Some(&header));
+        }
+        root.append(&search_bar);
+        root.append(&sections);
         let overlay = gtk::Overlay::new();
-        overlay.set_child(Some(&scrolled));
+        overlay.set_child(Some(&root));
+        overlay.add_overlay(&pill);
+        let help = crate::help::Help::new(true);
+        overlay.add_overlay(&help.root);
         window.set_child(Some(&overlay));
 
         let library = Rc::new(Library {
@@ -936,7 +1073,7 @@ impl Library {
             store: store.clone(),
             open,
             folder: RefCell::new(folder),
-            palette,
+            palette: Cell::new(palette),
             books: RefCell::new(books),
             thumbs: RefCell::default(),
             marbles: RefCell::default(),
@@ -950,12 +1087,24 @@ impl Library {
             searching: Cell::new(false),
             scrolled,
             overlay,
+            page,
             body,
-            brand,
             update: (update_line, update_label),
+            search_bar,
             entry,
-            buttons: (search, close, open_button),
-            head_menu,
+            add_button,
+            search_toggle,
+            save_button,
+            section: Cell::new(0),
+            sections,
+            stats,
+            stats_shown: Cell::new(false),
+            switchers: [(hb, hs), (pb, ps)],
+            title: (title, title_label),
+            pill,
+            narrow: Cell::new(false),
+            help,
+            about_app: RefCell::default(),
             progress,
             adding: Cell::new(false),
             waiting: RefCell::default(),
@@ -974,6 +1123,7 @@ impl Library {
                 l.show_update();
             }
         });
+        LIBRARY.with(|l| *l.borrow_mut() = Some(Rc::downgrade(&library)));
         library.load_covers();
         library.rebuild();
         library.connect();
@@ -1171,7 +1321,7 @@ impl Library {
         let b = &self.books.borrow()[book];
         let thumb = self.thumbs.borrow().get(&b.id).cloned().unwrap_or_default();
         let generated = matches!(thumb, Thumb::Generated);
-        let cover = Cover::new(b, thumb, self.palette, size);
+        let cover = Cover::new(b, thumb, self.palette.get(), size);
         if generated {
             self.marble_for(&cover);
         }
@@ -1191,12 +1341,7 @@ impl Library {
         self.shelves.borrow_mut().clear();
         let searching = self.searching.get();
         let empty = self.books.borrow().is_empty();
-        let (search, close, open) = &self.buttons;
-        search.set_visible(!empty && !searching && !self.adding.get());
-        self.head_menu.set_visible(!searching);
-        close.set_visible(searching);
-        open.set_visible(!empty && !searching);
-        self.brand.set_visible(!searching);
+        self.search_toggle.set_sensitive(!empty);
         self.show_update();
         self.show_tabs(!empty && !searching);
         if empty {
@@ -1378,29 +1523,6 @@ impl Library {
         self.window.insert_action_group("shelf", Some(&actions));
         let popover = gtk::PopoverMenu::from_model(Some(&model));
         popover.set_parent(anchor);
-        popover.set_has_arrow(false);
-        popover.connect_closed(|p| {
-            let p = p.clone();
-            glib::idle_add_local_once(move || p.unparent());
-        });
-        popover.popup();
-    }
-
-    /// The head's menu: "Show the Books folder", "Change the Books folder…", "Add a Folder…", then "Reading stats" and
-    /// "Settings…".
-    fn head_menu(self: &Rc<Self>) {
-        let model = gio::Menu::new();
-        let folders = gio::Menu::new();
-        folders.append(Some(tr("Show the Books folder")), Some("lib.showfolder"));
-        folders.append(Some(tr("Change the Books folder…")), Some("lib.changefolder"));
-        folders.append(Some(tr("Add a Folder…")), Some("lib.addfolder"));
-        model.append_section(None, &folders);
-        let settings = gio::Menu::new();
-        settings.append(Some(tr("Reading stats")), Some("lib.stats"));
-        settings.append(Some(tr("Settings…")), Some("lib.settings"));
-        model.append_section(None, &settings);
-        let popover = gtk::PopoverMenu::from_model(Some(&model));
-        popover.set_parent(&self.head_menu);
         popover.set_has_arrow(false);
         popover.connect_closed(|p| {
             let p = p.clone();
@@ -1793,11 +1915,79 @@ impl Library {
         backdrop.add_css_class("backdrop");
         let sheet = gtk::Box::new(gtk::Orientation::Vertical, 8);
         sheet.add_css_class("about");
-        sheet.set_valign(gtk::Align::Center);
-        sheet.set_halign(gtk::Align::Center);
-        sheet.set_vexpand(true);
-        sheet.set_size_request((self.window.width() - 48).clamp(280, 520), -1);
+        // The sheet scrolls when the window is shorter than it.
+        let frame = gtk::ScrolledWindow::builder()
+            .child(&sheet)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .max_content_height((self.window.height() - 48).max(200))
+            .vexpand(true)
+            .build();
+        if self.narrow.get() {
+            // A narrow window: from the bottom edge across the whole width.
+            sheet.add_css_class("bottom-sheet");
+            frame.set_valign(gtk::Align::End);
+            frame.set_halign(gtk::Align::Fill);
+        } else {
+            frame.set_valign(gtk::Align::Center);
+            frame.set_halign(gtk::Align::Center);
+            frame.set_size_request((self.window.width() - 48).clamp(280, 520), -1);
+        }
         sheet.append(&label(tr("Settings"), "about-title"));
+
+        // The six reading themes as "Aa" shows them; choosing one is the reading theme itself.
+        sheet.append(&label(tr("Theme"), "settings-heading"));
+        let current = Settings::load(&self.store.borrow()).theme_index(crate::appearance::dark());
+        let row =
+            gtk::FlowBox::builder().selection_mode(gtk::SelectionMode::None).max_children_per_line(6).min_children_per_line(3).build();
+        row.set_column_spacing(8);
+        row.set_row_spacing(8);
+        let names = [tr("Light"), tr("Sepia"), tr("Dark"), tr("Dawn"), tr("Wave"), tr("Forest")];
+        let mut swatches = Vec::new();
+        for (i, palette) in THEMES.iter().enumerate() {
+            let swatch = gtk::DrawingArea::builder().content_width(56).content_height(44).build();
+            let p = *palette;
+            swatch.set_draw_func(move |_, cr, w, h| {
+                let (w, h) = (w as f64, h as f64);
+                let c = |rgb: u32, shift: u32| ((rgb >> shift) & 0xFF) as f64 / 255.0;
+                cr.new_sub_path();
+                let r = 10.0;
+                cr.arc(w - r - 1.0, r + 1.0, r, -std::f64::consts::FRAC_PI_2, 0.0);
+                cr.arc(w - r - 1.0, h - r - 1.0, r, 0.0, std::f64::consts::FRAC_PI_2);
+                cr.arc(r + 1.0, h - r - 1.0, r, std::f64::consts::FRAC_PI_2, std::f64::consts::PI);
+                cr.arc(r + 1.0, r + 1.0, r, std::f64::consts::PI, 3.0 * std::f64::consts::FRAC_PI_2);
+                cr.close_path();
+                cr.set_source_rgb(c(p.paper, 16), c(p.paper, 8), c(p.paper, 0));
+                let _ = cr.fill_preserve();
+                cr.set_source_rgb(c(p.line, 16), c(p.line, 8), c(p.line, 0));
+                cr.set_line_width(1.0);
+                let _ = cr.stroke();
+                let layout = pangocairo::functions::create_layout(cr);
+                layout.set_font_description(Some(&font("Literata", 17.0)));
+                layout.set_text("Aa");
+                let (tw, th) = layout.pixel_size();
+                cr.set_source_rgb(c(p.ink, 16), c(p.ink, 8), c(p.ink, 0));
+                cr.move_to((w - tw as f64) / 2.0, (h - th as f64) / 2.0);
+                pangocairo::functions::show_layout(cr, &layout);
+            });
+            let column = gtk::Box::new(gtk::Orientation::Vertical, 4);
+            column.append(&swatch);
+            column.append(&gtk::Label::new(Some(names[i])));
+            let button = gtk::Button::builder().child(&column).build();
+            button.add_css_class("swatch");
+            if i == current {
+                button.add_css_class("chosen");
+            }
+            let weak = Rc::downgrade(self);
+            button.connect_clicked(move |_| {
+                if let Some(l) = weak.upgrade() {
+                    l.choose_theme(i);
+                }
+            });
+            row.append(&button);
+            swatches.push(button);
+        }
+        sheet.append(&row);
 
         sheet.append(&label(tr("Language"), "settings-heading"));
         // The languages in their own words, whatever the interface's.
@@ -1824,19 +2014,34 @@ impl Library {
         sheet.append(&label(tr("Forzac will speak the chosen language after a restart."), "question-body"));
 
         sheet.append(&label(tr("Sync"), "settings-heading"));
-        sheet.append(&label(
-            tr("Your place, bookmarks, highlights, shelves, book details and reading stats are the same in Forzac on every computer and phone that shares the Books folder. Keep the folder in sync with Dropbox, iCloud Drive or Syncthing; on Android only Syncthing keeps a folder on the phone."),
+        let explanation = label(
+            tr(
+                "Your place, bookmarks, highlights, shelves, book details and reading stats are the same in Forzac on every computer and phone that shares the Books folder. Keep the folder in sync with Dropbox, iCloud Drive or Syncthing; on Android only Syncthing keeps a folder on the phone.",
+            ),
             "question-body",
-        ));
+        );
+        // A wrapped label would ask for its whole text's width and widen the sheet past its size.
+        explanation.set_max_width_chars(40);
+        sheet.append(&explanation);
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         row.set_margin_top(4);
         let column = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let weak = Rc::downgrade(self);
+        let show_folder = move || {
+            if let Some(l) = weak.upgrade() {
+                l.show_folder();
+            }
+        };
         column.set_hexpand(true);
         column.set_valign(gtk::Align::Center);
         column.append(&label(tr("Books folder"), "question-body"));
         let folder = gtk::Label::builder().xalign(0.0).ellipsize(pango::EllipsizeMode::Middle).build();
         column.append(&folder);
         row.append(&column);
+        let show = gtk::Button::builder().label(tr("Show")).focusable(false).valign(gtk::Align::Center).build();
+        show.add_css_class("sheet-button");
+        show.add_css_class("small");
+        row.append(&show);
         let change = gtk::Button::builder().label(tr("Change…")).focusable(false).valign(gtk::Align::Center).build();
         change.add_css_class("sheet-button");
         change.add_css_class("small");
@@ -1848,7 +2053,8 @@ impl Library {
         let devices = gtk::Box::new(gtk::Orientation::Vertical, 2);
         sheet.append(&devices);
 
-        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        // One above the other in a narrow window: "Sync Now" is long in Russian.
+        let buttons = gtk::Box::new(if self.narrow.get() { gtk::Orientation::Vertical } else { gtk::Orientation::Horizontal }, 12);
         buttons.set_homogeneous(true);
         buttons.set_margin_top(12);
         let close = gtk::Button::builder().label(tr("Close")).focusable(false).hexpand(true).build();
@@ -1859,8 +2065,9 @@ impl Library {
         buttons.append(&close);
         buttons.append(&sync);
         sheet.append(&buttons);
-        backdrop.append(&sheet);
+        backdrop.append(&frame);
 
+        show.connect_clicked(move |_| show_folder());
         let weak = Rc::downgrade(self);
         change.connect_clicked(move |_| {
             if let Some(l) = weak.upgrade() {
@@ -1880,7 +2087,7 @@ impl Library {
             }
         });
         let click = gtk::GestureClick::new();
-        let (weak, s) = (Rc::downgrade(self), sheet.clone());
+        let (weak, s) = (Rc::downgrade(self), frame.clone());
         click.connect_released(move |_, _, x, y| {
             let inside =
                 s.compute_bounds(&s.parent().unwrap()).is_some_and(|b| b.contains_point(&graphene::Point::new(x as f32, y as f32)));
@@ -1890,8 +2097,38 @@ impl Library {
         });
         backdrop.add_controller(click);
         self.overlay.add_overlay(&backdrop);
-        *self.settings.borrow_mut() = Some(SettingsSheet { sheet: backdrop.upcast(), folder, status, devices, sync });
+        *self.settings.borrow_mut() = Some(SettingsSheet { sheet: backdrop.upcast(), swatches, folder, status, devices, sync });
         self.read_sync_status();
+    }
+
+    /// A theme swatch chosen: the chosen mark moves, the theme applies at once.
+    fn choose_theme(self: &Rc<Self>, theme: usize) {
+        if let Some(s) = self.settings.borrow().as_ref() {
+            for (i, b) in s.swatches.iter().enumerate() {
+                if i == theme { b.add_css_class("chosen") } else { b.remove_css_class("chosen") }
+            }
+        }
+        self.apply_theme(theme);
+    }
+
+    /// The keys in the settings: the focus moves along the swatches (from the chosen one), `Return` / `Space` choose.
+    fn move_swatch(&self, delta: i32) {
+        let settings = self.settings.borrow();
+        let Some(s) = settings.as_ref() else { return };
+        let at = s.swatches.iter().position(|b| b.has_focus()).or_else(|| s.swatches.iter().position(|b| b.has_css_class("chosen")));
+        let next = at.map_or(0, |i| (i as i32 + delta).clamp(0, s.swatches.len() as i32 - 1) as usize);
+        s.swatches[next].grab_focus();
+    }
+
+    fn choose_swatch(self: &Rc<Self>) {
+        let focused = self.settings.borrow().as_ref().and_then(|s| s.swatches.iter().position(|b| b.has_focus()));
+        if let Some(i) = focused {
+            self.choose_theme(i);
+        }
+    }
+
+    fn toggle_help(&self) {
+        if self.help.is_open() { self.help.close() } else { self.help.show() }
     }
 
     fn close_settings(self: &Rc<Self>) {
@@ -2039,7 +2276,7 @@ impl Library {
         text.append(&formats);
         let split = Layout::new(Kind::Split);
         split.add(&text);
-        split.add(&Sample::new(self.palette));
+        split.add(&Sample::new(self.palette.get()));
         split.set_vexpand(true);
         split.set_valign(gtk::Align::Center);
         split.set_margin_top(32);
@@ -2131,7 +2368,7 @@ impl Library {
         });
     }
 
-    /// Adds the folder `dir` in the background (`library::import_folder`), the head counting the files; then shows the
+    /// Adds the folder `dir` in the background (`library::import_folder`), the line on top counting the files; then shows the
     /// books again and, when something was not added, says so. A folder added meanwhile waits for this one.
     fn add_folder(self: &Rc<Self>, dir: PathBuf) {
         let Some(folder) = self.folder.borrow().clone() else { return };
@@ -2141,7 +2378,6 @@ impl Library {
         }
         self.progress.set_text("");
         self.progress.set_visible(true);
-        self.buttons.0.set_visible(false);
         let counts = Arc::new((AtomicUsize::new(0), AtomicUsize::new(0)));
         let (weak, c) = (Rc::downgrade(self), counts.clone());
         let tick = glib::timeout_add_local(Duration::from_millis(100), move || {
@@ -2285,12 +2521,16 @@ impl Library {
         self.rebuild();
     }
 
+    /// The search bar under the header (`/`, `Ctrl+F`, the search button) and the books found.
     fn set_searching(self: &Rc<Self>, on: bool) {
+        if on {
+            self.show_section(0);
+        }
+        self.search_bar.set_search_mode(on);
         if self.searching.replace(on) == on {
             return;
         }
         self.entry.set_text("");
-        self.entry.set_visible(on);
         self.selected.set(0);
         self.rebuild();
         if on {
@@ -2300,34 +2540,177 @@ impl Library {
         }
     }
 
+    // region sections (`library-sections`)
+
+    /// Shows "Books" (0) or "Reading stats" (1); each keeps its state, the stats show the current month the first time.
+    pub fn show_section(self: &Rc<Self>, section: usize) {
+        if section == 1 && self.searching.get() {
+            self.set_searching(false);
+        }
+        self.section.set(section);
+        if section == 1 && !self.stats_shown.replace(true) {
+            self.stats.reset();
+        }
+        for (books, stats) in &self.switchers {
+            if books.is_active() != (section == 0) {
+                books.set_active(section == 0);
+            }
+            if stats.is_active() != (section == 1) {
+                stats.set_active(section == 1);
+            }
+        }
+        let name = if section == 0 { tr("Books") } else { tr("Reading stats") };
+        self.title.1.set_text(name);
+        self.window.set_title(Some(name));
+        self.sections.set_visible_child_name(if section == 0 { "books" } else { "stats" });
+        self.add_button.set_visible(section == 0);
+        self.search_toggle.set_visible(section == 0);
+        self.save_button.set_visible(section == 1);
+        if section == 1 {
+            self.stats.focus();
+        } else {
+            GtkWindowExt::set_focus(&self.window, None::<&gtk::Widget>);
+        }
+    }
+
+    /// Under 550 logical pixels the switcher leaves the header for the bottom pill, and the header shows the section.
+    fn set_narrow(self: &Rc<Self>, narrow: bool) {
+        if self.narrow.replace(narrow) == narrow {
+            return;
+        }
+        self.title.0.set_visible_child_name(if narrow { "title" } else { "switcher" });
+        self.pill.set_visible(narrow);
+        // The last row can rise above the pill.
+        let room = if narrow { 72 } else { 0 };
+        self.page.set_margin_bottom(room);
+        self.stats.set_bottom(room);
+    }
+
+    /// The theme chosen in the settings: saved as the reading theme; the library, the stats and every book window
+    /// repainted (a redraw, places kept).
+    fn apply_theme(self: &Rc<Self>, theme: usize) {
+        let mut settings = Settings::load(&self.store.borrow());
+        settings.theme = Some(theme);
+        if let Err(e) = settings.save(&mut self.store.borrow_mut()) {
+            eprintln!("cannot save the reading state: {e}");
+        }
+        let palette = THEMES[theme];
+        self.palette.set(palette);
+        set_theme(palette);
+        crate::panels::set_theme(theme);
+        self.stats.set_palette(palette);
+        crate::theme_changed(theme);
+        self.rebuild();
+    }
+
+    /// "About Forzac": the icon, the version, the licence, the source and the support line, as a sheet.
+    fn show_about_app(self: &Rc<Self>) {
+        if self.about_app.borrow().is_some() {
+            return;
+        }
+        let backdrop = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        backdrop.add_css_class("backdrop");
+        let sheet = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        sheet.add_css_class("about");
+        sheet.set_valign(gtk::Align::Center);
+        sheet.set_halign(gtk::Align::Center);
+        sheet.set_vexpand(true);
+        sheet.set_size_request((self.window.width() - 48).clamp(280, 420), -1);
+        let icon = brand_icon();
+        icon.set_pixel_size(64);
+        icon.set_halign(gtk::Align::Start);
+        sheet.append(&icon);
+        sheet.append(&label(tr("Forzac"), "about-title"));
+        sheet.append(&label(&fill(tr("Version {version}"), &[("version", env!("CARGO_PKG_VERSION"))]), "about-authors"));
+        sheet.append(&label(tr("Made by Denis Fedosov-Ledovskikh"), "question-body"));
+        let source = gtk::Label::new(None);
+        source.set_xalign(0.0);
+        source.set_markup(&format!(
+            "MPL-2.0 · <a href=\"https://github.com/denisfl/forzac-desktop\">{}</a>",
+            glib::markup_escape_text(tr("Source code"))
+        ));
+        source.add_css_class("question-body");
+        sheet.append(&source);
+        let help = i18n::help(i18n::Platform::Linux);
+        let thanks = i18n::tr(i18n::SUPPORT_LINK);
+        let support = gtk::Label::new(None);
+        support.set_xalign(0.0);
+        support.set_wrap(true);
+        support.set_markup(
+            &glib::markup_escape_text(help.support).replace(thanks, &format!("<a href=\"{}\">{thanks}</a>", i18n::SUPPORT_URL)),
+        );
+        support.add_css_class("question-body");
+        support.set_max_width_chars(40);
+        sheet.append(&support);
+        for l in [&source, &support] {
+            l.connect_activate_link(|label, uri| {
+                let window = label.root().and_downcast::<gtk::Window>();
+                gtk::UriLauncher::new(uri).launch(window.as_ref(), gio::Cancellable::NONE, |_| {});
+                glib::Propagation::Stop
+            });
+        }
+        let close = gtk::Button::builder().label(tr("Close")).focusable(false).build();
+        close.add_css_class("sheet-button");
+        close.set_margin_top(12);
+        sheet.append(&close);
+        backdrop.append(&sheet);
+        let weak = Rc::downgrade(self);
+        close.connect_clicked(move |_| {
+            if let Some(l) = weak.upgrade() {
+                l.close_about_app();
+            }
+        });
+        self.overlay.add_overlay(&backdrop);
+        *self.about_app.borrow_mut() = Some(backdrop.upcast());
+    }
+
+    fn close_about_app(&self) {
+        if let Some(sheet) = self.about_app.borrow_mut().take() {
+            self.overlay.remove_overlay(&sheet);
+        }
+    }
+
+    // endregion
+
     // endregion
 
     /// Keys, the head's buttons, the search field and dropping files.
     fn connect(self: &Rc<Self>) {
-        let (search, close, open) = &self.buttons;
         let weak = Rc::downgrade(self);
-        search.connect_clicked(move |_| {
+        self.search_bar.connect_search_mode_enabled_notify(move |bar| {
             if let Some(l) = weak.upgrade() {
-                l.set_searching(true);
+                l.set_searching(bar.is_search_mode());
             }
         });
         let weak = Rc::downgrade(self);
-        close.connect_clicked(move |_| {
+        self.save_button.connect_clicked(move |_| {
             if let Some(l) = weak.upgrade() {
-                l.set_searching(false);
+                l.stats.save();
             }
         });
-        let weak = Rc::downgrade(self);
-        self.head_menu.connect_clicked(move |_| {
-            if let Some(l) = weak.upgrade() {
-                l.head_menu();
+        for (books, stats) in &self.switchers {
+            for (button, section) in [(books, 0), (stats, 1)] {
+                let weak = Rc::downgrade(self);
+                button.connect_toggled(move |b| {
+                    if let Some(l) = weak.upgrade()
+                        && b.is_active()
+                        && l.section.get() != section
+                    {
+                        l.show_section(section);
+                    }
+                });
             }
-        });
+        }
+        // The window's width decides where the switcher is (`set_narrow`), on every layout of its surface.
         let weak = Rc::downgrade(self);
-        open.connect_clicked(move |_| {
-            if let Some(l) = weak.upgrade() {
-                l.choose_file();
-            }
+        self.window.connect_realize(move |w| {
+            let Some(surface) = w.surface() else { return };
+            let weak = weak.clone();
+            surface.connect_layout(move |_, width, _| {
+                if let Some(l) = weak.upgrade() {
+                    l.set_narrow(width < 550);
+                }
+            });
         });
         let weak = Rc::downgrade(self);
         self.entry.connect_changed(move |_| {
@@ -2376,17 +2759,19 @@ impl Library {
                 l.ask_shelf(book as usize);
             }
         });
-        for (name, act) in [("showfolder", 0), ("changefolder", 1), ("addfolder", 2), ("settings", 3), ("stats", 4)] {
+        for (name, act) in [("openbook", 0), ("addfolder", 1), ("settings", 2), ("help", 3), ("aboutapp", 4), ("books", 5), ("stats", 6)] {
             let action = gio::SimpleAction::new(name, None);
             let weak = Rc::downgrade(self);
             action.connect_activate(move |_, _| {
                 let Some(l) = weak.upgrade() else { return };
                 match act {
-                    0 => l.show_folder(),
-                    1 => l.choose_books_folder(),
-                    2 => l.choose_folder(),
-                    3 => l.show_settings(),
-                    _ => crate::stats::open(&l.window, &l.store),
+                    0 => l.choose_file(),
+                    1 => l.choose_folder(),
+                    2 => l.show_settings(),
+                    3 => l.toggle_help(),
+                    4 => l.show_about_app(),
+                    5 => l.show_section(0),
+                    _ => l.show_section(1),
                 }
             });
             actions.add_action(&action);
@@ -2398,9 +2783,19 @@ impl Library {
 
         // Keys by keyval; GTK also matches them in the first (Latin) layout group, so a Russian layout works. In the
         // capture phase, before the search field: a key the field needs (a letter, `Delete`, `Home`) goes on to it.
+        // The keys card has the keys while it is open.
+        let help_keys = gtk::EventControllerKey::new();
+        help_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(self);
+        help_keys.connect_key_pressed(move |_, key, code, state| {
+            let handled = weak.upgrade().is_some_and(|l| l.help.key(key, crate::page_view::latin(key, code), state));
+            if handled { glib::Propagation::Stop } else { glib::Propagation::Proceed }
+        });
+        self.window.add_controller(help_keys);
         let controller = gtk::ShortcutController::new();
         controller.set_propagation_phase(gtk::PropagationPhase::Capture);
-        let add = |trigger: &str, typing: bool, f: KeyAction| {
+        // `section_key`: a key of "Books" that "Reading stats" uses itself (its own `h` `l` `j` `k` `s`…) or ignores.
+        let add_key = |trigger: &str, typing: bool, section_key: bool, f: KeyAction| {
             let weak = Rc::downgrade(self);
             let action = gtk::CallbackAction::new(move |_, _| {
                 let Some(l) = weak.upgrade() else { return glib::Propagation::Proceed };
@@ -2408,23 +2803,38 @@ impl Library {
                 if typing && (l.searching.get() || l.naming.borrow().is_some() || l.editing.borrow().is_some()) {
                     return glib::Propagation::Proceed;
                 }
+                if section_key && l.section.get() == 1 && l.settings.borrow().is_none() && l.about_app.borrow().is_none() {
+                    return glib::Propagation::Proceed;
+                }
                 f(&l);
                 glib::Propagation::Stop
             });
             controller.add_shortcut(gtk::Shortcut::new(gtk::ShortcutTrigger::parse_string(trigger), Some(action)));
         };
+        let add = |trigger: &str, typing: bool, f: KeyAction| add_key(trigger, typing, true, f);
+        let add_global = |trigger: &str, typing: bool, f: KeyAction| add_key(trigger, typing, false, f);
         let asking = |l: &Rc<Library>| {
             l.question.borrow().is_some()
                 || l.about.borrow().is_some()
                 || l.naming.borrow().is_some()
                 || l.editing.borrow().is_some()
                 || l.settings.borrow().is_some()
+                || l.about_app.borrow().is_some()
+        };
+        // In the settings, the arrows and `h` `l` move between the theme swatches and `Return` / `Space` chooses one.
+        let in_settings = |l: &Rc<Library>, delta: i32| -> bool {
+            if l.settings.borrow().is_none() {
+                return false;
+            }
+            l.move_swatch(delta);
+            true
         };
         add(
             "h|KP_Left",
             true,
             Box::new(move |l| {
-                if !asking(l) {
+                if in_settings(l, -1) {
+                } else if !asking(l) {
                     l.step(-1, 0)
                 }
             }),
@@ -2433,7 +2843,8 @@ impl Library {
             "l|KP_Right",
             true,
             Box::new(move |l| {
-                if !asking(l) {
+                if in_settings(l, 1) {
+                } else if !asking(l) {
                     l.step(1, 0)
                 }
             }),
@@ -2442,7 +2853,8 @@ impl Library {
             "Left",
             true,
             Box::new(move |l| {
-                if !asking(l) {
+                if in_settings(l, -1) {
+                } else if !asking(l) {
                     l.step(-1, 0)
                 }
             }),
@@ -2451,7 +2863,8 @@ impl Library {
             "Right",
             true,
             Box::new(move |l| {
-                if !asking(l) {
+                if in_settings(l, 1) {
+                } else if !asking(l) {
                     l.step(1, 0)
                 }
             }),
@@ -2514,7 +2927,9 @@ impl Library {
             "Return|KP_Enter",
             false,
             Box::new(move |l| {
-                if l.editing.borrow().is_some() {
+                if l.settings.borrow().is_some() {
+                    l.choose_swatch();
+                } else if l.editing.borrow().is_some() {
                     l.close_edit(Some(true))
                 } else if l.naming.borrow().is_some() {
                     l.name_shelf(true)
@@ -2572,12 +2987,34 @@ impl Library {
             true,
             Box::new(move |l| {
                 if !asking(l) {
-                    crate::stats::open(&l.window, &l.store)
+                    l.show_section(1)
                 }
             }),
         );
-        add("<Control>o", false, Box::new(move |l| l.choose_file()));
-        add("<Control><Shift>o|<Control><Shift>O", false, Box::new(move |l| l.choose_folder()));
+        add_global("<Control>o", false, Box::new(move |l| l.choose_file()));
+        add_global("<Control><Shift>o|<Control><Shift>O", false, Box::new(move |l| l.choose_folder()));
+        add_global("<Control>1", false, Box::new(move |l| l.show_section(0)));
+        add_global("<Control>2", false, Box::new(move |l| l.show_section(1)));
+        add_global(
+            "<Control>f",
+            false,
+            Box::new(move |l| {
+                if !asking(l) && !l.books.borrow().is_empty() {
+                    l.set_searching(true)
+                }
+            }),
+        );
+        add_global("<Control>comma", false, Box::new(move |l| l.show_settings()));
+        add(
+            "space",
+            true,
+            Box::new(move |l| {
+                if l.settings.borrow().is_some() {
+                    l.choose_swatch();
+                }
+            }),
+        );
+        add_global("<Control>question|question", true, Box::new(move |l| l.toggle_help()));
         add(
             "<Shift>f",
             true,
@@ -2587,11 +3024,13 @@ impl Library {
                 }
             }),
         );
-        add(
+        add_global(
             "Escape",
             false,
             Box::new(move |l| {
-                if l.settings.borrow().is_some() {
+                if l.about_app.borrow().is_some() {
+                    l.close_about_app();
+                } else if l.settings.borrow().is_some() {
                     l.close_settings();
                 } else if l.editing.borrow().is_some() {
                     l.close_edit(None);
@@ -2603,12 +3042,14 @@ impl Library {
                     l.answer(false);
                 } else if l.searching.get() {
                     l.set_searching(false);
+                } else if l.section.get() == 1 {
+                    l.show_section(0);
                 } else {
                     l.window.close();
                 }
             }),
         );
-        add(
+        add_global(
             "q",
             true,
             Box::new(move |l| {
@@ -2617,7 +3058,7 @@ impl Library {
                 }
             }),
         );
-        add("<Control>w", false, Box::new(move |l| l.window.close()));
+        add_global("<Control>w", false, Box::new(move |l| l.window.close()));
         self.window.add_controller(controller);
 
         // Dropping files: each opens in its window; the web's dashed frame while a file is over the window.
@@ -2665,7 +3106,7 @@ impl Library {
         let Some(child) = self.window.child() else { return };
         let (w, h) = (child.width(), child.height());
         let snapshot = gtk::Snapshot::new();
-        snapshot.append_color(&rgba(self.palette.paper), &graphene::Rect::new(0.0, 0.0, w as f32, h as f32));
+        snapshot.append_color(&rgba(self.palette.get().paper), &graphene::Rect::new(0.0, 0.0, w as f32, h as f32));
         self.window.snapshot_child(&child, &snapshot);
         let (Some(node), Some(renderer)) = (snapshot.to_node(), self.window.renderer()) else { return };
         let scale = self.window.scale_factor() as f32;

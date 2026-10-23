@@ -1,8 +1,8 @@
-//! The reading stats window (`reading-stats`): a month or a year from the reading log of every device — "Month · Year",
-//! the period with arrows, three figures, the reading calendar, the finished books — in the reader's theme, as the
-//! Android app's screen; and its 1080 × 1920 picture, saved where the file dialog says (Linux has no share menu). The
-//! numbers, the calendar's geometry and the texts come from the core (`stats::view`); this file only draws them, with
-//! cairo and Pango. `Esc` closes the window.
+//! The reading stats (`reading-stats`), the library window's "Reading stats" section (`library-sections`): a month or a
+//! year from the reading log of every device — "Month · Year", the period with arrows, three figures, the reading
+//! calendar, the finished books — in the reader's theme, as the Android app's screen; and its 1080 × 1920 picture, saved
+//! where the file dialog says (Linux has no share menu) from the library's header. The numbers, the calendar's geometry
+//! and the texts come from the core (`stats::view`); this file only draws them, with cairo and Pango.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -20,14 +20,11 @@ use crate::page_view::{Palette, THEMES};
 
 /// The shades of the link colour for the levels 1–4 of a day (level 0 is the line colour).
 const LEVEL_ALPHA: [f64; 5] = [0.0, 0.3, 0.5, 0.75, 1.0];
-/// The content's widest column and its margin in the window.
-const COLUMN: f64 = 560.0;
+/// The content's widest column and its margin in the window: a desktop window's column, narrower than the phone's.
+const COLUMN: f64 = 420.0;
 const MARGIN: f64 = 24.0;
-
-thread_local! {
-    /// The open stats window: one at a time.
-    static OPEN: RefCell<Option<glib::WeakRef<gtk::Window>>> = const { RefCell::new(None) };
-}
+/// "Month · Year": a small segmented control, centred.
+const SEGMENT: (f64, f64) = (220.0, 30.0);
 
 fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
@@ -198,15 +195,16 @@ fn picture(log: &Log, period: Period, p: Palette) -> Option<gdk::MemoryTexture> 
 /// What the window shows and where its parts are, for clicks.
 struct Page {
     store: SharedStore,
-    palette: Palette,
+    palette: Cell<Palette>,
     period: Cell<Period>,
     view: RefCell<Option<View>>,
     /// The clicked day and its minutes.
     day: Cell<Option<(i64, u64)>>,
-    /// Click targets by kind, laid out in `draw`: 0 share, 1 month, 2 year, 3 back, 4 forward; and the calendar's origin.
+    /// Click targets by kind, laid out in `draw`: 1 month, 2 year, 3 back, 4 forward; and the calendar's origin.
     targets: RefCell<Vec<(Bounds, u8)>>,
     calendar: Cell<(f64, f64)>,
     area: gtk::DrawingArea,
+    /// The library window, the file dialog's parent.
     window: gtk::Window,
 }
 
@@ -262,7 +260,7 @@ impl Page {
         let page = self.clone();
         dialog.save(Some(&self.window), gio::Cancellable::NONE, move |file| {
             let Some(path) = file.ok().and_then(|f| f.path()) else { return };
-            match picture(&page.log(), period, page.palette).map(|t| t.save_to_png(&path)) {
+            match picture(&page.log(), period, page.palette.get()).map(|t| t.save_to_png(&path)) {
                 Some(Ok(())) => {}
                 Some(Err(e)) => eprintln!("{}: {e}", path.display()),
                 None => eprintln!("cannot draw the picture"),
@@ -273,7 +271,7 @@ impl Page {
     fn draw(&self, cr: &cairo::Context, width: f64) {
         let view = self.view.borrow();
         let Some(v) = view.as_ref() else { return };
-        let (targets, calendar) = draw_page(cr, v, self.palette, self.day.get(), width);
+        let (targets, calendar) = draw_page(cr, v, self.palette.get(), self.day.get(), width);
         *self.targets.borrow_mut() = targets;
         self.calendar.set(calendar);
     }
@@ -282,7 +280,6 @@ impl Page {
         let hit =
             self.targets.borrow().iter().find(|((tx, ty, tw, th), _)| x >= *tx && x <= tx + tw && y >= *ty && y <= ty + th).map(|t| t.1);
         match hit {
-            Some(0) => return self.save(),
             Some(1) => return self.month(),
             Some(2) => return self.year(),
             Some(3) => return self.step(-1),
@@ -313,37 +310,27 @@ fn draw_page(cr: &cairo::Context, v: &View, p: Palette, day: Option<(i64, u64)>,
     let w = (width - 2.0 * MARGIN).min(COLUMN);
     let x0 = (width - w) / 2.0;
 
-    // The title and the save button.
+    // "Month · Year": the chosen half in the line colour, as the header's switcher marks its choice.
     let mut y = 20.0;
-    Text::new(cr, tr("Reading stats"), SERIF, 26.0, true, Some(w - 48.0), 1).draw(cr, x0, y, p.ink, 1.0);
-    let share = (x0 + w - 36.0, y, 36.0, 36.0);
-    icon(cr, crate::icons::SHARE, (share.0 + 6.0, share.1 + 6.0, 24.0), p.ink);
-    targets.push((share, 0));
-    y += 36.0 + 16.0;
-
-    // "Month · Year".
     let month = matches!(v.period, Period::Month { .. });
-    let halves = [(x0, y, w / 2.0, 44.0), (x0 + w / 2.0, y, w / 2.0, 44.0)];
-    cr.save().ok();
-    rounded(cr, (x0, y, w, 44.0), 12.0);
-    cr.clip();
-    let selected = halves[if month { 0 } else { 1 }];
-    set_source(cr, p.ink, 1.0);
-    cr.rectangle(selected.0, selected.1, selected.2, selected.3);
-    let _ = cr.fill();
-    cr.restore().ok();
+    let sx = x0 + (w - SEGMENT.0) / 2.0;
+    let half = SEGMENT.0 / 2.0;
+    let halves = [(sx, y, half, SEGMENT.1), (sx + half, y, half, SEGMENT.1)];
     set_source(cr, p.line, 1.0);
     cr.set_line_width(1.0);
-    rounded(cr, (x0 + 0.5, y + 0.5, w - 1.0, 43.0), 12.0);
+    rounded(cr, (sx + 0.5, y + 0.5, SEGMENT.0 - 1.0, SEGMENT.1 - 1.0), 7.0);
     let _ = cr.stroke();
+    let selected = halves[if month { 0 } else { 1 }];
+    rounded(cr, (selected.0 + 2.0, selected.1 + 2.0, selected.2 - 4.0, selected.3 - 4.0), 5.0);
+    let _ = cr.fill();
     for (i, (name, r)) in [tr("Month"), tr("Year")].into_iter().zip(halves).enumerate() {
         let on = (i == 0) == month;
-        let t = Text::new(cr, name, SANS, 15.0, false, None, 0);
+        let t = Text::new(cr, name, SANS, 13.0, on, None, 0);
         let (tw, th) = t.size();
-        t.draw(cr, r.0 + (r.2 - tw) / 2.0, r.1 + (r.3 - th) / 2.0, if on { p.sheet } else { p.ink }, 1.0);
+        t.draw(cr, r.0 + (r.2 - tw) / 2.0, r.1 + (r.3 - th) / 2.0, if on { p.ink } else { p.muted }, 1.0);
         targets.push((r, 1 + i as u8));
     }
-    y += 44.0 + 12.0;
+    y += SEGMENT.1 + 12.0;
 
     // The period between its arrows.
     let (back, forward) = ((x0, y, 44.0, 44.0), (x0 + w - 44.0, y, 44.0, 44.0));
@@ -351,17 +338,17 @@ fn draw_page(cr: &cairo::Context, v: &View, p: Palette, day: Option<(i64, u64)>,
     icon(cr, crate::icons::CHEVRON_RIGHT, (forward.0 + 10.0, forward.1 + 10.0, 24.0), if v.can_next { p.ink } else { p.line });
     targets.push((back, 3));
     targets.push((forward, 4));
-    let title = Text::new(cr, &v.title, SERIF, 21.0, false, None, 0);
+    let title = Text::new(cr, &v.title, SERIF, 19.0, false, None, 0);
     let (tw, th) = title.size();
     title.draw(cr, x0 + (w - tw) / 2.0, y + (44.0 - th) / 2.0, p.ink, 1.0);
     y += 44.0 + 20.0;
 
     // The three figures.
     let mut x = x0;
-    let value_height = Text::new(cr, "0", SERIF, 22.0, false, None, 0).size().1;
+    let value_height = Text::new(cr, "0", SERIF, 20.0, false, None, 0).size().1;
     for ((value, caption), weight) in v.figures.iter().zip([1.5, 1.0, 1.0]) {
         let cw = w * weight / 3.5;
-        Text::new(cr, value, SERIF, 22.0, false, None, 0).draw(cr, x, y, p.ink, 1.0);
+        Text::new(cr, value, SERIF, 20.0, false, None, 0).draw(cr, x, y, p.ink, 1.0);
         Text::new(cr, caption, SANS, 13.0, false, Some(cw - 8.0), 0).draw(cr, x, y + value_height + 2.0, p.muted, 1.0);
         x += cw;
     }
@@ -396,7 +383,7 @@ fn height(v: &View, width: f64) -> f64 {
     let (calendar, books, figures) = (v.height as f64, &v.books, &v.figures);
     let surface = cairo::ImageSurface::create(cairo::Format::ARgb32, 1, 1).expect("a surface");
     let cr = cairo::Context::new(&surface).expect("a context");
-    let mut y = 20.0 + 36.0 + 16.0 + 44.0 + 12.0 + 44.0 + 20.0 + figures_height(&cr, figures, w) + 24.0 + calendar + 40.0 + 8.0;
+    let mut y = 20.0 + SEGMENT.1 + 12.0 + 44.0 + 20.0 + figures_height(&cr, figures, w) + 24.0 + calendar + 40.0 + 8.0;
     y += Text::new(&cr, tr("Finished"), SERIF, 19.0, true, None, 0).size().1 + 6.0;
     if books.is_empty() {
         y += 16.0 + Text::new(&cr, tr("What you finish will appear here"), SANS, 15.0, false, Some(w), 0).size().1;
@@ -416,7 +403,7 @@ fn figures_height(cr: &cairo::Context, figures: &[(String, String); 3], w: f64) 
         .zip([1.5, 1.0, 1.0])
         .map(|((_, c), k)| Text::new(cr, c, SANS, 13.0, false, Some(w * k / 3.5 - 8.0), 0).size().1)
         .fold(0.0, f64::max);
-    Text::new(cr, "0", SERIF, 22.0, false, None, 0).size().1 + 2.0 + caption
+    Text::new(cr, "0", SERIF, 20.0, false, None, 0).size().1 + 2.0 + caption
 }
 
 /// A Lucide icon's strokes at `(x, y)`, `size` square, in `rgb`.
@@ -468,90 +455,104 @@ pub fn save_pngs(store: &SharedStore, dir: &std::path::Path) {
     }
 }
 
-/// Opens the stats window on the current month over `parent`, or brings the open one forward on it.
-pub fn open(parent: &impl IsA<gtk::Window>, store: &SharedStore) {
-    let month = Period::month_of(day_number(now(), offset()));
-    if let Some(window) = OPEN.with(|o| o.borrow().as_ref().and_then(|w| w.upgrade())) {
-        window.present();
-        return;
-    }
-    crate::fonts::add_interface_fonts();
-    let palette = THEMES[Settings::load(&store.borrow()).theme_index(crate::appearance::dark())];
-    let area = gtk::DrawingArea::builder().hexpand(true).build();
-    let scrolled = gtk::ScrolledWindow::builder().child(&area).hscrollbar_policy(gtk::PolicyType::Never).build();
-    let window = gtk::Window::builder()
-        .title(tr("Reading stats"))
-        .transient_for(parent)
-        .default_width(520)
-        .default_height(820)
-        .child(&scrolled)
-        .build();
-    let page = Rc::new(Page {
-        store: store.clone(),
-        palette,
-        period: Cell::new(month),
-        view: RefCell::default(),
-        day: Cell::new(None),
-        targets: RefCell::default(),
-        calendar: Cell::new((0.0, 0.0)),
-        area: area.clone(),
-        window: window.clone(),
-    });
-    let p = page.clone();
-    area.set_draw_func(move |_, cr, width, _| p.draw(cr, width as f64));
-    let p = Rc::downgrade(&page);
-    area.connect_resize(move |_, _, _| {
-        if let Some(p) = p.upgrade() {
-            p.reload();
-        }
-    });
-    let click = gtk::GestureClick::new();
-    let p = Rc::downgrade(&page);
-    click.connect_released(move |_, _, x, y| {
-        if let Some(p) = p.upgrade() {
-            p.click(x, y);
-        }
-    });
-    area.add_controller(click);
-    let keys = gtk::EventControllerKey::new();
-    let (p, s) = (Rc::downgrade(&page), scrolled.clone());
-    keys.connect_key_pressed(move |_, key, code, state| {
-        let Some(p) = p.upgrade() else { return glib::Propagation::Proceed };
-        if state.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK) {
-            return glib::Propagation::Proceed;
-        }
-        let adj = s.vadjustment();
-        let scroll = |dy: f64| adj.set_value((adj.value() + dy).clamp(adj.lower(), adj.upper() - adj.page_size()));
-        let page_step = adj.page_size() - 40.0;
-        match crate::page_view::latin(key, code) {
-            gdk::Key::Left | gdk::Key::h => p.step(-1),
-            gdk::Key::Right | gdk::Key::l => p.step(1),
-            gdk::Key::Down | gdk::Key::j => scroll(40.0),
-            gdk::Key::Up | gdk::Key::k => scroll(-40.0),
-            gdk::Key::space if state.contains(gdk::ModifierType::SHIFT_MASK) => scroll(-page_step),
-            gdk::Key::space | gdk::Key::Page_Down => scroll(page_step),
-            gdk::Key::Page_Up => scroll(-page_step),
-            gdk::Key::Home => scroll(-adj.upper()),
-            gdk::Key::End => scroll(adj.upper()),
-            gdk::Key::m => p.month(),
-            gdk::Key::y => p.year(),
-            gdk::Key::s => p.save(),
-            gdk::Key::Escape => p.window.close(),
-            _ => return glib::Propagation::Proceed,
-        }
-        glib::Propagation::Stop
-    });
-    window.add_controller(keys);
-    set_background(&window, palette);
-    OPEN.with(|o| *o.borrow_mut() = Some(window.downgrade()));
-    window.present();
-    page.reload();
+/// The "Reading stats" section: its scrolled page, built once per library window.
+pub struct Section {
+    pub widget: gtk::ScrolledWindow,
+    page: Rc<Page>,
 }
 
-/// The window's background in the theme's paper, so nothing flashes around the drawing.
-fn set_background(window: &gtk::Window, p: Palette) {
-    let provider = gtk::CssProvider::new();
-    provider.load_from_string(&format!(".forzac-stats {{ background: #{:06x}; }}", p.paper));
-    window.add_css_class("forzac-stats");
-    gtk::style_context_add_provider_for_display(&WidgetExt::display(window), &provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+impl Section {
+    /// The section for the library `window`, drawn in `palette`; `escape` runs on `Esc` (back to the books).
+    pub fn new(window: &gtk::Window, store: &SharedStore, palette: Palette, escape: impl Fn() + 'static) -> Section {
+        crate::fonts::add_interface_fonts();
+        let area = gtk::DrawingArea::builder().hexpand(true).focusable(true).build();
+        let widget = gtk::ScrolledWindow::builder().child(&area).hscrollbar_policy(gtk::PolicyType::Never).build();
+        let page = Rc::new(Page {
+            store: store.clone(),
+            palette: Cell::new(palette),
+            period: Cell::new(Period::month_of(day_number(now(), offset()))),
+            view: RefCell::default(),
+            day: Cell::new(None),
+            targets: RefCell::default(),
+            calendar: Cell::new((0.0, 0.0)),
+            area: area.clone(),
+            window: window.clone(),
+        });
+        let p = Rc::downgrade(&page);
+        area.set_draw_func(move |_, cr, width, _| {
+            if let Some(p) = p.upgrade() {
+                p.draw(cr, width as f64)
+            }
+        });
+        let p = Rc::downgrade(&page);
+        area.connect_resize(move |_, _, _| {
+            if let Some(p) = p.upgrade() {
+                p.reload();
+            }
+        });
+        let click = gtk::GestureClick::new();
+        let p = Rc::downgrade(&page);
+        click.connect_released(move |_, _, x, y| {
+            if let Some(p) = p.upgrade() {
+                p.click(x, y);
+            }
+        });
+        area.add_controller(click);
+        let keys = gtk::EventControllerKey::new();
+        let (p, s) = (Rc::downgrade(&page), widget.clone());
+        keys.connect_key_pressed(move |_, key, code, state| {
+            let Some(p) = p.upgrade() else { return glib::Propagation::Proceed };
+            if state.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK) {
+                return glib::Propagation::Proceed;
+            }
+            let adj = s.vadjustment();
+            let scroll = |dy: f64| adj.set_value((adj.value() + dy).clamp(adj.lower(), adj.upper() - adj.page_size()));
+            let page_step = adj.page_size() - 40.0;
+            match crate::page_view::latin(key, code) {
+                gdk::Key::Left | gdk::Key::h => p.step(-1),
+                gdk::Key::Right | gdk::Key::l => p.step(1),
+                gdk::Key::Down | gdk::Key::j => scroll(40.0),
+                gdk::Key::Up | gdk::Key::k => scroll(-40.0),
+                gdk::Key::space if state.contains(gdk::ModifierType::SHIFT_MASK) => scroll(-page_step),
+                gdk::Key::space | gdk::Key::Page_Down => scroll(page_step),
+                gdk::Key::Page_Up => scroll(-page_step),
+                gdk::Key::Home => scroll(-adj.upper()),
+                gdk::Key::End => scroll(adj.upper()),
+                gdk::Key::m => p.month(),
+                gdk::Key::y => p.year(),
+                gdk::Key::s => p.save(),
+                gdk::Key::Escape => escape(),
+                _ => return glib::Propagation::Proceed,
+            }
+            glib::Propagation::Stop
+        });
+        area.add_controller(keys);
+        Section { widget, page }
+    }
+
+    /// The current month, as when the section shows the first time.
+    pub fn reset(&self) {
+        self.page.show(Period::month_of(day_number(now(), offset())));
+    }
+
+    /// Takes the keys.
+    pub fn focus(&self) {
+        self.page.area.grab_focus();
+    }
+
+    /// "Save Image…" from the header or `s`.
+    pub fn save(&self) {
+        self.page.save();
+    }
+
+    /// Room under the content for the bottom pill of a narrow window (`library-sections`).
+    pub fn set_bottom(&self, px: i32) {
+        self.page.area.set_margin_bottom(px);
+    }
+
+    /// Another theme (`settings`): a redraw.
+    pub fn set_palette(&self, palette: Palette) {
+        self.page.palette.set(palette);
+        self.page.area.queue_draw();
+    }
 }

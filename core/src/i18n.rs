@@ -613,6 +613,10 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Theme", "Тема"),
     ("Add a Book", "Добавить книгу"),
     ("Open a Book…", "Открыть книгу…"),
+    ("Version {version}", "Версия {version}"),
+    ("Source code", "Исходный код"),
+    ("Keyboard Shortcuts", "Клавиши"),
+    ("Main Menu", "Главное меню"),
     ("Delete", "Удалить"),
     // Panels.
     ("Contents", "Содержание"),

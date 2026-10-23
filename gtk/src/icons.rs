@@ -10,18 +10,12 @@ pub type Paths = &'static [&'static str];
 
 pub const CHEVRON_LEFT: Paths = &["m15 18-6-6 6-6"];
 pub const CHEVRON_RIGHT: Paths = &["m9 18 6-6-6-6"];
-pub const SHARE: Paths = &[
-    "M21 5a3 3 0 1 1-6 0a3 3 0 1 1 6 0",
-    "M9 12a3 3 0 1 1-6 0a3 3 0 1 1 6 0",
-    "M21 19a3 3 0 1 1-6 0a3 3 0 1 1 6 0",
-    "m8.59 13.51 6.83 3.98",
-    "m15.41 6.51-6.82 3.98",
-];
 pub const LIST: Paths = &["M3 12h.01", "M3 18h.01", "M3 6h.01", "M8 12h13", "M8 18h13", "M8 6h13"];
 pub const X: Paths = &["M18 6 6 18", "m6 6 12 12"];
+pub const PLUS: Paths = &["M5 12h14", "M12 5v14"];
+pub const MENU: Paths = &["M4 12h16", "M4 6h16", "M4 18h16"];
+pub const DOWNLOAD: Paths = &["M12 15V3", "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", "m7 10 5 5 5-5"];
 pub const SEARCH: Paths = &["M19 11a8 8 0 1 1-16 0a8 8 0 1 1 16 0", "m21 21-4.3-4.3"];
-pub const ELLIPSIS: Paths =
-    &["M13 12a1 1 0 1 1-2 0a1 1 0 1 1 2 0", "M20 12a1 1 0 1 1-2 0a1 1 0 1 1 2 0", "M6 12a1 1 0 1 1-2 0a1 1 0 1 1 2 0"];
 pub const ALIGN_JUSTIFY: Paths = &["M3 6h18", "M3 12h18", "M3 18h18"];
 pub const ALIGN_LEFT: Paths = &["M3 6h18", "M3 12h12", "M3 18h15"];
 pub const SPACING: [Paths; 3] =

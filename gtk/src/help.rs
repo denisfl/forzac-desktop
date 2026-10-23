@@ -35,7 +35,8 @@ pub struct Help {
 }
 
 impl Help {
-    pub fn new() -> Rc<Help> {
+    /// The keys of a book window, or of the library window (`library`).
+    pub fn new(library: bool) -> Rc<Help> {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
         root.add_css_class("forzac-panel");
         root.add_css_class("forzac-help");
@@ -52,7 +53,7 @@ impl Help {
         card.set_margin_end(24);
         root.append(&card);
 
-        let help = i18n::help(Platform::Linux);
+        let help = if library { i18n::library_help(Platform::Linux) } else { i18n::help(Platform::Linux) };
         let head = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         head.add_css_class("help-head");
         let title = gtk::Label::new(Some(help.title));
