@@ -3,3 +3,4 @@ target/
 /macos/build/
 /target-png/
 !/data/icons/**/*.png
+/target-linux/

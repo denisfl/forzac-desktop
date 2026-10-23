@@ -2011,12 +2011,12 @@ impl Library {
             }
         });
         sheet.append(&language);
-        sheet.append(&label(tr("Forzac will speak the chosen language after a restart."), "question-body"));
+        sheet.append(&label(tr("The language changes after a restart."), "question-body"));
 
         sheet.append(&label(tr("Sync"), "settings-heading"));
         let explanation = label(
             tr(
-                "Your place, bookmarks, highlights, shelves, book details and reading stats are the same in Forzac on every computer and phone that shares the Books folder. Keep the folder in sync with Dropbox, iCloud Drive or Syncthing; on Android only Syncthing keeps a folder on the phone.",
+                "Keep the Books folder in Syncthing, Dropbox or iCloud Drive, and every device opens your books where you left off. On a phone, only Syncthing works.",
             ),
             "question-body",
         );

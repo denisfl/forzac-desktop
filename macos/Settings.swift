@@ -83,10 +83,10 @@ final class SettingsWindow: NSObject, NSWindowDelegate, NSToolbarDelegate {
         syncNow.target = self
         syncNow.action = #selector(sync(_:))
 
-        let general = pane([heading(tr("Theme")), themeRow, heading(tr("Language")), language, note(tr("Forzac will speak the chosen language after a restart."))])
+        let general = pane([heading(tr("Theme")), themeRow, heading(tr("Language")), language, note(tr("The language changes after a restart."))])
         general.setCustomSpacing(24, after: themeRow)
         let books = pane([
-            heading(tr("Sync")), note(tr("Your place, bookmarks, highlights, shelves, book details and reading stats are the same in Forzac on every computer and phone that shares the Books folder. Keep the folder in sync with Dropbox, iCloud Drive or Syncthing; on Android only Syncthing keeps a folder on the phone.")),
+            heading(tr("Sync")), note(tr("Keep the Books folder in Syncthing, Dropbox or iCloud Drive, and every device opens your books where you left off. On a phone, only Syncthing works.")),
             folderRow, status, caption(tr("Other devices")), devices, syncNow,
         ])
         // Room around the folder and before the button.
