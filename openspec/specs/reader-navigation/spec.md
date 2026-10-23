@@ -141,8 +141,8 @@ today inclusive, its highlights and its bookmarks, with plural forms ("6 h · 12
 show only when the log's first day (any device) is not later than the day the book was first opened here; without a
 known first opening neither time nor days show. Under the totals, in the link colour, the current month SHALL show its
 finished books and time by the stats (`reading-stats`): "October: 3 books · 14 h" ("Октябрь: 3 книги · 14 ч"). A
-click on it, or `Tab` to it and `Enter`, SHALL open the stats window on the current month; closing the window returns
-to the end page.
+click on it, or `Tab` to it and `Enter`, SHALL bring the library window forward (opening it if needed) on "Reading
+stats" (`library`, `Sections`) at the current month; the book window stays on its end page behind it.
 
 #### Scenario: Finishing a book
 - **WHEN** the reader presses `Space` on the last page of the book
@@ -171,6 +171,10 @@ to the end page.
 - **WHEN** the reader presses `Tab` on the end page, then `Enter`
 - **THEN** the stats window opens on the current month with the book first under "Finished"; `Esc` returns to the end
   page
+
+#### Scenario: The month opens the stats
+- **WHEN** the reader clicks "October: 3 books · 14 h" on the end page while the library window is closed
+- **THEN** the library window opens on "Reading stats" at October, and the book window still shows its end page
 
 ### Requirement: Navigation on a spread
 On a spread (`page-turning`) both pages SHALL work as one page does: a click on a note marker, link, wide image, table

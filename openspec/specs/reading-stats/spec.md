@@ -53,35 +53,6 @@ leave the computer.
   from the Mac
 - **THEN** the book counts once, in May 2025
 
-### Requirement: The stats window
-"Reading stats" ("Статистика") SHALL be a window of its own showing one period: the title "Reading stats" with the
-share button, "Month · Year" ("Месяц · Год"), the period ("October 2026" / "Октябрь 2026", or "2026") between arrows to
-the neighbour periods, three figures with captions (time read — "reading" / "за чтением"; books — "books finished" /
-"книги прочитано"; days — "days with a book" / "дня с книгой", with the plural forms of the interface language), the
-reading calendar, and "Finished" ("Прочитано"). The arrows SHALL go from the first month (year) with a log day or a
-finish to the current one; beyond them an arrow is inactive. It SHALL open on the current month. Time SHALL show in
-minutes under an hour and in whole hours, rounded, above ("35 min", "8 h", "41 h"). "Finished" SHALL list the period's
-books, the latest finished first: title, authors and date ("Alexander Pushkin · 26 September"); an empty period shows
-zeros, an empty calendar and "What you finish will appear here" ("Здесь появится то, что вы прочитаете"). The window
-SHALL follow the reader's theme and SHALL add no setting.
-
-Keys: `←` or `h` and `→` or `l` SHALL go to the previous and next period, `m` to Month and `y` to Year, `s` SHALL share
-(macOS) or save the picture (Linux), `↑` `↓` `j` `k` `Space` `Page Up` `Page Down` `Home` `End` SHALL scroll, and `Esc`
-(and `⌘W` on macOS) SHALL close the window; also in a Russian keyboard layout. Only one stats window SHALL exist; opening
-it again SHALL bring it forward on the current month.
-
-#### Scenario: Opened mid-month
-- **WHEN** on 18 October the reader opens "Reading stats"
-- **THEN** "Month" is selected, "October 2026" shows its days up to the 18th, the forward arrow is inactive
-
-#### Scenario: The year
-- **WHEN** the reader presses `y`
-- **THEN** "2026" shows twelve months, the year's figures and its finished books
-
-#### Scenario: An empty month
-- **WHEN** the reader presses `←` to a month without reading
-- **THEN** zeros, an empty calendar and "What you finish will appear here"
-
 ### Requirement: The reading calendar
 The calendar SHALL show the period's days in a grid of weeks starting on Monday in Russian and on Sunday in English. A
 month is one grid with the day numbers in its cells and the weekday names above; a year is twelve named months, three a
@@ -121,3 +92,38 @@ within 1 s. Nothing SHALL be drawn while the window is idle.
 #### Scenario: A year with 50 books
 - **WHEN** the log holds a year on three devices and 50 finished books, and the reader opens the stats and presses `y`
 - **THEN** the window shows within 150 ms and the year within 50 ms
+
+### Requirement: The Reading stats section
+"Reading stats" ("Статистика") SHALL be the library window's second section (`library`, `Sections`), showing one
+period: "Month · Year" ("Месяц · Год"), the period ("October 2026" / "Октябрь 2026", or "2026") between arrows to the
+neighbour periods, three figures with captions (time read — "reading" / "за чтением"; books — "books finished" / "книги
+прочитано"; days — "days with a book" / "дня с книгой", with the plural forms of the interface language), the reading
+calendar, and "Finished" ("Прочитано"). Its share action SHALL be in the window's head (`library`): Share on macOS,
+"Save Image…" on Linux. The arrows SHALL go from the first month (year) with a log day or a finish to the current one;
+beyond them an arrow is inactive. It SHALL show the current month when the library window opens on it or when the
+reader comes to it the first time since the window opened, and keep the chosen period while the reader switches between
+the sections. Time SHALL show in minutes under an hour and in whole hours, rounded, above ("35 min", "8 h", "41 h").
+"Finished" SHALL list the period's books, the latest finished first: title, authors and date ("Alexander Pushkin · 26
+September"); an empty period shows zeros, an empty calendar and "What you finish will appear here" ("Здесь появится то,
+что вы прочитаете"). The section SHALL follow the reader's theme, SHALL add no setting, and SHALL lay out without
+clipping in the window's narrowest size (`library`), the calendar shrinking with the width.
+
+Keys: `←` or `h` and `→` or `l` SHALL go to the previous and next period, `m` to Month and `y` to Year, `s` SHALL share
+(macOS) or save the picture (Linux), `↑` `↓` `j` `k` `Space` `Page Up` `Page Down` `Home` `End` SHALL scroll, and `Esc`
+SHALL return to "Books"; also in a Russian keyboard layout.
+
+#### Scenario: Opened mid-month
+- **WHEN** on 18 October the reader switches to "Reading stats"
+- **THEN** "Month" is selected, "October 2026" shows its days up to the 18th, the forward arrow is inactive
+
+#### Scenario: The year
+- **WHEN** the reader presses `y`
+- **THEN** "2026" shows twelve months, the year's figures and its finished books
+
+#### Scenario: An empty month
+- **WHEN** the reader presses `←` to a month without reading
+- **THEN** zeros, an empty calendar and "What you finish will appear here"
+
+#### Scenario: The period is kept
+- **WHEN** the reader goes back to September, switches to "Books" and back to "Reading stats"
+- **THEN** September is shown

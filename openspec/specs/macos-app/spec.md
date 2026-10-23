@@ -19,10 +19,13 @@ The macOS shell SHALL implement the shared specs — `reading-state`, `reader-na
 - **THEN** the panel looks as in the Android design and the page is set in Literata at the same place
 
 ### Requirement: Mac conventions
-The shell SHALL have the standard menus: Forzac (Settings `⌘,`, Quit `⌘Q`), File (Open `⌘O`, Open Recent, Close `⌘W`),
-Edit (Copy `⌘C`, Find), View (Contents, Bookmarks, Highlights, Pages or Scroll, theme, text size, Enter Full Screen
-`⌃⌘F`), Go (next and previous chapter, Back, Bookmark `⌘D`). Forzac › Settings… and `⌘,` SHALL open the reader's text
-settings ("Aa") when a book window is the key window, and the settings window (`settings`) otherwise.
+The shell SHALL have the standard menus: Forzac (Settings `⌘,`, Quit `⌘Q`), File (Open `⌘O`, Open Recent, Add a Folder…
+`⇧⌘O`, Show the Books Folder, Change the Books Folder…, Close `⌘W`), Edit (Copy `⌘C`, Find `⌘F`), View (in a book window:
+Contents, Bookmarks, Highlights, Pages or Scroll, theme, text size; in the library: Books `⌘1` and Reading stats `⌘2`,
+the shown one ticked; Enter Full Screen `⌃⌘F`), Go (next and previous chapter, Back, Bookmark `⌘D`). Every command of the
+library's toolbar (`library`, `The head on macOS`) SHALL be in these menus too. Forzac › Settings… and `⌘,` SHALL open
+the reader's text settings ("Aa") when a book window is the key window, and the settings window (`settings`) otherwise.
+Edit › Find and `⌘F` SHALL search the book in a book window and focus the library's search field in "Books".
 
 #### Scenario: Closing
 - **WHEN** the reader presses `⌘W`
@@ -39,6 +42,10 @@ settings ("Aa") when a book window is the key window, and the settings window (`
 #### Scenario: ⌘, in a book and in the library
 - **WHEN** the reader presses `⌘,` in a book window, closes the panel, switches to the library and presses `⌘,` again
 - **THEN** the first opens the "Aa" panel and the second the settings window
+
+#### Scenario: The sections from the menu
+- **WHEN** the library is the key window and the reader chooses View › Reading stats, then presses `⌘1`
+- **THEN** the library shows "Reading stats", ticked in the View menu, and then "Books"
 
 ### Requirement: Trackpad
 A horizontal two-finger swipe SHALL turn one page in its direction; in "Scroll" two-finger scrolling moves the column.
