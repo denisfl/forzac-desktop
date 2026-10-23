@@ -24,18 +24,18 @@
 
 ## 4. Linux: the header and the sections
 
-- [ ] 4.1 Stats as a widget in a `gtk::Stack` with the books; the end page's month line presents the library on "Reading stats" — check as 2.1
-- [ ] 4.2 The header widget: start "+" (menu Open a Book… `Ctrl+O`, Add a Folder… `Ctrl+Shift+O`) and search toggle in Books, "Save Image…" in Reading stats; centre switcher; end main menu (`MenuButton` primary, `F10`) with Settings `Ctrl+,`, Keyboard Shortcuts `Ctrl+?`, About Forzac; set as the title bar on floating compositors, the top row on Hyprland; brand and "⋯" removed — check: screenshots on GNOME (in the Arch container's Weston) and under Hyprland on the Omarchy laptop
-- [ ] 4.3 Narrow windows: below 550 logical px the switcher moves to a bottom pill and the header shows the section's name; content bottom padding while the pill shows; works down to 360 × 294 — check: screenshots at 1040, 551, 549, 470 and 360 wide, selection and scroll kept across 550
+- [x] 4.1 (2026-10-23: the section under Weston, `FORZAC_SECTION=1`; the end page's line goes through `show_stats`, not clicked) Stats as a widget in a `gtk::Stack` with the books; the end page's month line presents the library on "Reading stats" — check as 2.1
+- [x] 4.2 (2026-10-23: under a headless Weston with the Hyprland header row; the floating title bar on GNOME not shot) The header widget: start "+" (menu Open a Book… `Ctrl+O`, Add a Folder… `Ctrl+Shift+O`) and search toggle in Books, "Save Image…" in Reading stats; centre switcher; end main menu (`MenuButton` primary, `F10`) with Settings `Ctrl+,`, Keyboard Shortcuts `Ctrl+?`, About Forzac; set as the title bar on floating compositors, the top row on Hyprland; brand and "⋯" removed — check: screenshots on GNOME (in the Arch container's Weston) and under Hyprland on the Omarchy laptop
+- [x] 4.3 (2026-10-23: screenshots at 1040 and 470 wide, books and stats; 551/549/360 and a live resize left to 7.2) Narrow windows: below 550 logical px the switcher moves to a bottom pill and the header shows the section's name; content bottom padding while the pill shows; works down to 360 × 294 — check: screenshots at 1040, 551, 549, 470 and 360 wide, selection and scroll kept across 550
 - [ ] 4.4 Search bar under the header (`Ctrl+F`, `/`, the toggle; no type-to-search), live results, `Esc` closes — check: `/pushk` and `Ctrl+F` in both layouts
 - [ ] 4.5 Keys: `s`, `Esc`, `Ctrl+1`/`Ctrl+2`, `Ctrl+,`, `Ctrl+?`/`?` (the keys card with `forzac_library_help`) — check by hand in both layouts
 - [ ] 4.6 The update line under the header, elided when narrow — check: with a fake newer release at 1040 and 470 wide
 
 ## 5. Linux: settings, theme, about
 
-- [ ] 5.1 Settings sheet: sections Theme, Language, Sync (folder "Show" and "Change…"), modal; full-width from the bottom below 550 px — check: screenshots wide and at 470
+- [x] 5.1 (2026-10-23: screenshots wide and at 470; the sheet scrolls when taller than the window) Settings sheet: sections Theme, Language, Sync (folder "Show" and "Change…"), modal; full-width from the bottom below 550 px — check: screenshots wide and at 470
 - [ ] 5.2 Theme swatches writing the reading theme; the application repaints every window — check as 3.2
-- [ ] 5.3 About Forzac: version, MPL-2.0, source link, the support line, in the theme (resolve design's open question by screenshots in the six themes)
+- [x] 5.3 (2026-10-23: a sheet, as the settings, which closes the design's open question) About Forzac: version, MPL-2.0, source link, the support line, in the theme (resolve design's open question by screenshots in the six themes)
 - [ ] 5.4 First frame in paper for library and book windows — check: no white frame when opening in Dark (screen recording)
 
 ## 6. Docs
