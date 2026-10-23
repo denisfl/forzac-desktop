@@ -1008,6 +1008,9 @@ impl Library {
         let update_label = gtk::Label::new(None);
         update_label.add_css_class("update");
         update_label.set_ellipsize(pango::EllipsizeMode::End);
+        // A click, as on the Mac: focused, its link would wear a focus ring after the first key. (A label makes itself
+        // focusable when it gets a link, so not `set_focusable`.)
+        update_label.set_can_focus(false);
         update_label.connect_activate_link(|label, uri| {
             let window = label.root().and_downcast::<gtk::Window>();
             gtk::UriLauncher::new(uri).launch(window.as_ref(), gio::Cancellable::NONE, |_| {});
@@ -2790,7 +2793,6 @@ impl Library {
             let handled = weak.upgrade().is_some_and(|l| l.help.key(key, crate::page_view::latin(key, code), state));
             if handled { glib::Propagation::Stop } else { glib::Propagation::Proceed }
         });
-        self.window.add_controller(help_keys);
         let controller = gtk::ShortcutController::new();
         controller.set_propagation_phase(gtk::PropagationPhase::Capture);
         // `section_key`: a key of "Books" that "Reading stats" uses itself (its own `h` `l` `j` `k` `s`…) or ignores.
@@ -3059,6 +3061,8 @@ impl Library {
         );
         add_global("<Control>w", false, Box::new(move |l| l.window.close()));
         self.window.add_controller(controller);
+        // Added last: a widget's controllers of one phase run newest first, and the card goes before the shortcuts.
+        self.window.add_controller(help_keys);
 
         // Dropping files: each opens in its window; the web's dashed frame while a file is over the window.
         let frame = gtk::Box::new(gtk::Orientation::Vertical, 0);

@@ -1374,6 +1374,10 @@ final class LibraryWindow: NSObject, NSSearchFieldDelegate, NSWindowDelegate, NS
             let link = Installer.shared.phase == .offered ? tr("install") : tr("download")
             text.append(NSAttributedString(string: link, attributes: [.font: interfaceFont(13), .foregroundColor: nsColor(palette.link)]))
         }
+        // Too long for a narrow window: elided, still one click.
+        let elided = NSMutableParagraphStyle()
+        elided.lineBreakMode = .byTruncatingTail
+        text.addAttribute(.paragraphStyle, value: elided, range: NSRange(location: 0, length: text.length))
         updateText.attributedStringValue = text
         updateText.sizeToFit()
         hasUpdate = true
