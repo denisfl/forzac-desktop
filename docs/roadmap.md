@@ -26,7 +26,9 @@ order; the library's screens (17–19) are designed after the UX review (`docs/u
 `sync-handover` (format: [sync-format.md](sync-format.md); the Android side: `sync-folder`, `sync-clock`), released in
 0.13.0 on 2026-10-21. Then `app-settings` (2026-10-21, for 0.14.0): the settings window with the language and syncing,
 as the Android app's. Then `reading-log` and `reading-stats` (2026-10-22): the reading log, synced with the phone, and
-the stats window with the end page's totals, as the Android app's 0.9.10.
+the stats window with the end page's totals, as the Android app's 0.9.10. Then `library-sections` (2026-10-23): "Books"
+and "Reading stats" as sections of the library window, as the Android app's 0.9.11, placed by each platform's guidelines
+(a toolbar segmented control on macOS; the header on Linux, a bottom pill under 550 px), the theme in the settings.
 
 | # | Change | What | Done when | Size |
 |---|---|---|---|---|

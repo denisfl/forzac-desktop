@@ -55,17 +55,25 @@ Books live in one folder, `~/Books` (`~/Книги` if the interface was Russian
 from anywhere else is copied there as `Author — Title.ext` (the original stays where it was; the same book is not
 copied twice), and books put into the folder by hand or by a sync service join the library. An existing folder of that
 name is used as it is: nothing in it is renamed or moved, subfolders and other formats are left alone. The first start
-of a version with the folder copies the books read before into it. "Change the Books folder…" in the library's "⋯"
-menu moves the books to another folder — one kept by Dropbox, iCloud Drive or Syncthing, say — or uses it as it is.
+of a version with the folder copies the books read before into it. "Change…" beside the Books folder in the settings
+moves the books to another folder — one kept by Dropbox, iCloud Drive or Syncthing, say — or uses it as it is.
 Computers sharing such a folder share where each book was left, bookmarks, highlights, shelves and edits too: each
 writes its own file into the folder's `.forzac/` when the library shows ([the format](docs/sync-format.md)).
 
-Without a file, Forzac shows the library: the folder's books with their covers, the last one to continue first
-(`Enter` opens one, `/` searches, `F` shows the Books folder, `d` removes a book: its file goes to the Trash, its
-bookmarks and highlights stay for when it is put back). Tabs sort and group it by title, author, series or shelf
+Without a file, Forzac shows the library window with two sections, "Books" and "Reading stats", as the Android app
+has them. On macOS a segmented control in the toolbar switches them (`⌘1`, `⌘2`), with "+" and the search field or
+Share beside it and every command in the menu bar; on Linux the switcher is in the header, with "+" and search or
+"Save Image…" at its start and the main menu (Settings `Ctrl+,`, Keyboard Shortcuts `Ctrl+?`, About; `F10`) at its end,
+and in a window narrower than 550 pixels — half a laptop screen in Omarchy — it becomes a pill at the bottom
+(`Ctrl+1`, `Ctrl+2`). "Books" shows the folder's books with their covers, the last one to continue first (`Enter`
+opens one, `/` searches, `F` shows the Books folder, `d` removes a book: its file goes to the Trash, its bookmarks and
+highlights stay for when it is put back, `s` shows the stats, `?` the library's keys). "Reading stats" shows a month or
+a year: the hours, the books finished, the days with a book, a calendar shaded by the time read, and the finished
+books; its picture goes to the share menu on macOS and is saved on Linux. Tabs sort and group it by title, author, series or shelf
 (`Tab`); a book's "⋯" menu shows its details, edits them (kept by Forzac, the file is not changed) and puts it on
 shelves, and "Send to Kindle" converts it to MOBI and copies it onto a Kindle connected by cable (one older than 2024,
-which shows as a disk); a dropped folder or `Ctrl+Shift+O` adds a whole folder of books. The state is kept in
+which shows as a disk); a dropped folder or `Ctrl+Shift+O` adds a whole folder of books. The settings (`⌘,` on macOS, the main menu on Linux) hold the theme — the
+reading theme, chosen there without a book — the language and syncing. The state is kept in
 `$XDG_DATA_HOME/forzac/state` on Linux and `~/Library/Application Support/Forzac/state` on macOS, cover thumbnails in
 `$XDG_CACHE_HOME/forzac/covers` and `~/Library/Caches/Forzac/covers`.
 
@@ -116,7 +124,7 @@ OS 13 (arm64): `sudo apt install ./forzac-linux-arm64.deb`, made by `scripts/pac
 in new windows of that process.
 
 The release archives and the macOS app look for a newer release on GitHub at most once a day, when the library
-opens, and offer it in one line there; on macOS a click installs it (Sparkle, from the release's EdDSA-signed disk
+opens, and offer it in one line on top of "Books"; on macOS a click installs it (Sparkle, from the release's EdDSA-signed disk
 image) and restarts the app. Packages leave updates to their package manager: a build whose
 `share/forzac` holds a file named `packaged` (the AUR packages and the `.deb` install it) never asks.
 

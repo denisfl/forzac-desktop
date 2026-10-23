@@ -5,7 +5,7 @@
 ## 1. Core
 
 - [x] 1.1 `i18n::library_help(platform)`: sections "Books", "Reading stats", "Window" with each shell's keys (`⌘1`/`⌘2`, `Ctrl+1`/`Ctrl+2`, `Ctrl+,`, `Ctrl+?`, `F10` on Linux only) and the support line; both languages; tests like `help`'s (every key the library handles is listed, nothing else; Russian strings present)
-- [ ] 1.2 (added with each shell's code: the catalogue test rejects strings nobody asks for) Strings for the sections, the toolbar and header ("Books", "Reading stats", "Open a Book…", "Add a Folder…", "Save Image…", "Main Menu", "Keyboard Shortcuts", "About Forzac", "General", "Books" pane, "Theme", the six theme names, "Show"); catalogue test passes
+- [x] 1.2 (added with each shell's code: the catalogue test rejects strings nobody asks for) Strings for the sections, the toolbar and header ("Books", "Reading stats", "Open a Book…", "Add a Folder…", "Save Image…", "Main Menu", "Keyboard Shortcuts", "About Forzac", "General", "Books" pane, "Theme", the six theme names, "Show"); catalogue test passes
 - [x] 1.3 C ABI `forzac_library_help(platform)` as `forzac_help`; `macos/forzac.h`; `cargo test -p forzac-core`, clippy and fmt pass
 
 ## 2. macOS: the window and its toolbar
@@ -40,7 +40,7 @@
 
 ## 6. Docs
 
-- [ ] 6.1 `README.md` keys and the library's description; `docs/roadmap.md`; `docs/android-parity.md` (the sections and Theme in Settings now match the phone) — check: the README keys table lists every key of `library_help`
+- [x] 6.1 `README.md` keys and the library's description; `docs/roadmap.md`; `docs/android-parity.md` (the sections and Theme in Settings now match the phone) — check: the README keys table lists every key of `library_help`
 
 ## 7. Check on hardware
 
