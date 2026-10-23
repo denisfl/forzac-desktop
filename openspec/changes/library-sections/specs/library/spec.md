@@ -41,6 +41,10 @@ opened book is selected when the library opens in Recent, the first book in the 
   is selected, and the reader presses `j`
 - **THEN** the selection moves to the next author's book in the same column, or its last book when that row is shorter
 
+#### Scenario: The stats by key
+- **WHEN** the reader presses `s` in the library
+- **THEN** the library shows the "Reading stats" section on the current month
+
 #### Scenario: To the stats and back
 - **WHEN** the reader presses `s` in "Books", then `Esc`
 - **THEN** "Reading stats" shows the current month, then "Books" shows again with the same book selected and the same

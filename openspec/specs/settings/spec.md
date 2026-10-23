@@ -37,11 +37,11 @@ language after a restart." ("Форзац заговорит на выбранн
 
 ### Requirement: Sync
 The "Sync" section SHALL show, in this order:
-- the explanation: "Your place, bookmarks, highlights, shelves and book details are the same in Forzac on every
-  computer and phone that shares the Books folder. Keep the folder in sync with Dropbox, iCloud Drive or Syncthing; on
-  Android only Syncthing keeps a folder on the phone." ("Место чтения, закладки, цитаты, полки и правки книг — одни и
-  те же в Форзаце на всех компьютерах и телефонах с общей папкой «Книги». Синхронизируйте папку через Dropbox, iCloud
-  Drive или Syncthing; на Android папку на телефоне держит только Syncthing.");
+- the explanation: "Your place, bookmarks, highlights, shelves, book details and reading stats are the same in Forzac
+  on every computer and phone that shares the Books folder. Keep the folder in sync with Dropbox, iCloud Drive or
+  Syncthing; on Android only Syncthing keeps a folder on the phone." ("Место чтения, закладки, цитаты, полки, правки
+  книг и статистика — одни и те же в Форзаце на всех компьютерах и телефонах с общей папкой «Книги». Синхронизируйте
+  папку через Dropbox, iCloud Drive или Syncthing; на Android папку на телефоне держит только Syncthing.");
 - the Books folder's path, the home folder written `~`, with "Change…" ("Сменить…"), which runs "Change the Books
   folder…" (`books-folder`) and shows the new path when it is done;
 - the state: "Syncing…" ("Синхронизация…") while a sync runs; else "Synced {when}" ("Синхронизировано {when}") after
