@@ -8,9 +8,11 @@ import AppKit
 
 /// The shades of the link colour for the levels 1–4 of a day (level 0 is the line colour).
 private let levelAlpha: [CGFloat] = [0, 0.3, 0.5, 0.75, 1]
-/// The content's widest column and its margin in the window.
-private let column: CGFloat = 560
+/// The content's widest column and its margin in the window: a desktop window's column, narrower than the phone's.
+private let column: CGFloat = 420
 private let margin: CGFloat = 24
+/// "Month · Year": a small segmented control, centred.
+private let segment = CGSize(width: 220, height: 30)
 
 /// A period's stats as Swift values (`ForzacStats` lives only until the next call).
 struct StatsModel {
@@ -220,8 +222,8 @@ final class StatsView: NSView {
 
     // MARK: Fonts and the layout's parts
 
-    private let periodFont = bookFont("Literata", 21)
-    private let figureFont = bookFont("Literata", 22)
+    private let periodFont = bookFont("Literata", 19)
+    private let figureFont = bookFont("Literata", 20)
     private let headingFont = bookFont("Literata", 19, bold: true)
     private let bookTitleFont = bookFont("Literata", 17)
 
@@ -229,7 +231,7 @@ final class StatsView: NSView {
     func contentHeight(_ width: CGFloat) -> CGFloat {
         guard let m = model else { return 0 }
         let w = min(column, width - 2 * margin)
-        var y: CGFloat = 20 + 44 + 12 + 44 + 20 + figuresHeight(m, w) + 24 + m.height + 40 + 8
+        var y: CGFloat = 20 + segment.height + 12 + 44 + 20 + figuresHeight(m, w) + 24 + m.height + 40 + 8
         y += attributed(tr("Finished"), headingFont, 0).size().height + 6
         if m.books.isEmpty {
             y += 16 + attributed(tr("What you finish will appear here"), interfaceFont(15), 0).size().height
@@ -264,29 +266,28 @@ final class StatsView: NSView {
         let w = width
         let x0 = (bounds.width - w) / 2
 
-        // "Month · Year".
+        // "Month · Year": the chosen half in the line colour, as the toolbar's segmented control marks its choice.
         var y: CGFloat = 20
-        let segment = CGRect(x: x0, y: y, width: w, height: 44)
-        let halves = [CGRect(x: x0, y: y, width: w / 2, height: 44), CGRect(x: x0 + w / 2, y: y, width: w / 2, height: 44)]
-        ctx.saveGState()
-        ctx.addPath(CGPath(roundedRect: segment, cornerWidth: 12, cornerHeight: 12, transform: nil))
-        ctx.clip()
-        let selected = halves[m.month > 0 ? 0 : 1]
-        ctx.setFillColor(color(p.ink))
-        ctx.fill(selected)
-        ctx.restoreGState()
+        let sx = x0 + (w - segment.width) / 2
+        let half = segment.width / 2
+        let halves = [CGRect(x: sx, y: y, width: half, height: segment.height), CGRect(x: sx + half, y: y, width: half, height: segment.height)]
+        let outline = CGRect(x: sx, y: y, width: segment.width, height: segment.height)
         ctx.setStrokeColor(color(p.line))
         ctx.setLineWidth(1)
-        ctx.addPath(CGPath(roundedRect: segment.insetBy(dx: 0.5, dy: 0.5), cornerWidth: 12, cornerHeight: 12, transform: nil))
+        ctx.addPath(CGPath(roundedRect: outline.insetBy(dx: 0.5, dy: 0.5), cornerWidth: 7, cornerHeight: 7, transform: nil))
         ctx.strokePath()
+        let selected = halves[m.month > 0 ? 0 : 1].insetBy(dx: 2, dy: 2)
+        ctx.setFillColor(color(p.line))
+        ctx.addPath(CGPath(roundedRect: selected, cornerWidth: 5, cornerHeight: 5, transform: nil))
+        ctx.fillPath()
         for (i, (name, r)) in zip([tr("Month"), tr("Year")], halves).enumerated() {
             let on = (i == 0) == (m.month > 0)
-            let t = attributed(name, interfaceFont(15), on ? p.sheet : p.ink)
+            let t = attributed(name, interfaceFont(13, on ? .medium : .regular), on ? p.ink : p.muted)
             let s = t.size()
             drawText(t, at: CGPoint(x: r.midX - s.width / 2, y: r.midY - s.height / 2))
             targets.append((r, { [weak self] in i == 0 ? self?.showMonth() : self?.showYear() }))
         }
-        y += 44 + 12
+        y += segment.height + 12
 
         // The period between its arrows.
         let back = CGRect(x: x0, y: y, width: 44, height: 44), forward = CGRect(x: x0 + w - 44, y: y, width: 44, height: 44)
