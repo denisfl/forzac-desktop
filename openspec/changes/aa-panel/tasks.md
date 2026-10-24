@@ -16,4 +16,4 @@
 
 ## 4. Check
 
-- [ ] 4.1 The maintainer looks at both shells and decides on the release
+- [x] 4.1 (2026-10-24: the maintainer approved the panel on the phone and asked to ship it on the phone, the web and the desktop; released as 0.19.0) The maintainer looks at both shells and decides on the release

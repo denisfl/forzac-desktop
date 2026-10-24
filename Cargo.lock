@@ -206,7 +206,7 @@ dependencies = [
 
 [[package]]
 name = "forzac-core"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "base64",
  "encoding_rs",
@@ -221,7 +221,7 @@ dependencies = [
 
 [[package]]
 name = "forzac-gtk"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "forzac-core",
  "gtk4",
