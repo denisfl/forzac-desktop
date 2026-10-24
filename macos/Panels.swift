@@ -88,11 +88,13 @@ class SheetView: LayerView {
     }
 }
 
-/// A flat control: a label or an icon; filled with ink when selected.
+/// A flat control: a label or an icon; a soft fill under it when selected (`aa-panel`). An `option` of a group shows
+/// its content muted unless selected.
 final class FlatButton: LayerView {
     let content: NSView
     var onClick: (() -> Void)?
     var selected = false { didSet { tint() } }
+    var option = false
     var enabled = true { didSet { alphaValue = enabled ? 1 : 0.35 } }
     private var palette = themes[0]
 
@@ -118,11 +120,20 @@ final class FlatButton: LayerView {
     }
 
     private func tint() {
-        layer!.backgroundColor = selected ? color(palette.ink) : nil
-        let ink = nsColor(selected ? palette.sheet : palette.ink)
+        layer!.backgroundColor = selected ? selection(palette) : nil
+        let ink = nsColor(selected || !option ? palette.ink : palette.muted)
         (content as? NSTextField)?.textColor = ink
         (content as? IconView)?.tint = ink
     }
+}
+
+/// The selected preset's fill: the theme's ink at 12 % over the panel (`aa-panel`).
+func selection(_ p: Palette) -> CGColor {
+    func channel(_ shift: UInt32) -> CGFloat {
+        let ink = CGFloat((p.ink >> shift) & 0xFF), sheet = CGFloat((p.sheet >> shift) & 0xFF)
+        return (sheet + (ink - sheet) * 0.12) / 255
+    }
+    return CGColor(srgbRed: channel(16), green: channel(8), blue: channel(0), alpha: 1)
 }
 
 /// Options side by side in a rounded frame.
@@ -130,8 +141,8 @@ final class Segmented: LayerView {
     let buttons: [FlatButton]
     var dividers: [LayerView] = []
 
-    /// Options `width` wide, else of equal widths filling the frame (unless `equal` is false: the caller sizes them).
-    init(_ buttons: [FlatButton], width: CGFloat? = nil, equal: Bool = true) {
+    /// Options of equal widths filling the frame.
+    init(_ buttons: [FlatButton]) {
         self.buttons = buttons
         super.init()
         layer!.cornerRadius = 12
@@ -143,9 +154,7 @@ final class Segmented: LayerView {
             addSubview(b)
             NSLayoutConstraint.activate([b.topAnchor.constraint(equalTo: topAnchor), b.bottomAnchor.constraint(equalTo: bottomAnchor)])
             b.leadingAnchor.constraint(equalTo: previous?.trailingAnchor ?? leadingAnchor).isActive = true
-            if let width { b.widthAnchor.constraint(equalToConstant: width).isActive = true } else if equal, let first = buttons.first, b !== first {
-                b.widthAnchor.constraint(equalTo: first.widthAnchor).isActive = true
-            }
+            if let first = buttons.first, b !== first { b.widthAnchor.constraint(equalTo: first.widthAnchor).isActive = true }
             previous = b
         }
         previous?.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
@@ -164,27 +173,28 @@ final class Segmented: LayerView {
     }
 }
 
-/// A caption above a control.
-func captioned(_ text: String, _ control: NSView) -> (NSStackView, NSTextField) {
+/// A 12 px caption above a control, 8 px apart; `value` follows the caption in ink ("Theme Light").
+func captioned(_ text: String, _ control: NSView, value: NSTextField? = nil) -> (NSStackView, NSTextField) {
     let caption = label(text, interfaceFont(12), 0)
-    let column = NSStackView(views: [caption, control])
+    let line = NSStackView(views: [caption] + (value.map { [$0] } ?? []))
+    line.spacing = 4
+    let column = NSStackView(views: [line, control])
     column.orientation = .vertical
     column.alignment = .leading
-    column.spacing = 6
+    column.spacing = 8
     control.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
     return (column, caption)
 }
 
 // MARK: - Settings
 
-/// The settings sheet: theme circles; text size and alignment; font chips; line spacing and margins; pages.
+/// The settings sheet (`aa-panel`, as Android's): every row runs from edge to edge in equal cells, a caption above each
+/// control: the theme cards; text size | alignment; the font chips; line spacing | margins; pages.
 final class SettingsSheet: SheetView {
     private weak var view: PageView?
-    private var circles: [LayerView] = []
-    private var circleLabels: [NSTextField] = []
-    private let ring = CALayer()
+    private var cards: [LayerView] = []
+    private let themeName = label("", interfaceFont(12, .medium), 0)
     private let size: Segmented
-    private let sizeLabel = label("", interfaceFont(14), 0)
     private let align: Segmented
     private var chips: [FlatButton] = []
     private let spacing: Segmented
@@ -192,7 +202,7 @@ final class SettingsSheet: SheetView {
     private let pages: Segmented
     private var captions: [NSTextField] = []
     private let themesRow = NSStackView()
-    private let fontsRow = NSStackView()
+    private let fontsRow: ChipsRow
     /// The controls in reading order and the core's setting each changes.
     private var controls: [(NSView, UInt32)] = []
     private var current = 0
@@ -200,109 +210,103 @@ final class SettingsSheet: SheetView {
 
     init(view: PageView) {
         self.view = view
-        let smaller = FlatButton(label("A", bookFont("PT Serif", 14), 0))
-        let larger = FlatButton(label("A", bookFont("PT Serif", 22), 0))
-        let number = FlatButton(sizeLabel)
-        size = Segmented([smaller, number, larger], equal: false)
-        align = Segmented([Icons.alignJustify, Icons.alignLeft].map { FlatButton(IconView($0, size: 20)) }, width: 48)
+        let smaller = FlatButton(label("A", bookFont("PT Serif", 15), 0))
+        let larger = FlatButton(label("A", bookFont("PT Serif", 21), 0))
+        size = Segmented([smaller, larger])
+        align = Segmented([Icons.alignJustify, Icons.alignLeft].map { FlatButton(IconView($0, size: 20)) })
         spacing = Segmented(Icons.spacing.map { FlatButton(IconView($0, size: 20)) })
         margins = Segmented(Icons.margins.map { FlatButton(IconView($0, size: 20)) })
         pages = Segmented([tr("Slide"), tr("Scroll")].map { FlatButton(label($0, interfaceFont(14), 0)) })
-        super.init(spacing: 18, insets: NSEdgeInsets(top: 10, left: 20, bottom: 24, right: 20))
+        // Fonts, each name in its own font and always in ink: the chip is the font's sample.
+        chips = familyNames.enumerated().map { i, name in FlatButton(label(name, bookFont(familyFonts[i], 15), 0)) }
+        fontsRow = ChipsRow(chips)
+        super.init(spacing: 20, insets: NSEdgeInsets(top: 10, left: 20, bottom: 24, right: 20))
         addGrabber()
 
-        // Themes: a circle in each theme's colours, the name below.
-        themesRow.distribution = .equalSpacing
+        // Themes: six equal cards, each its theme's paper with "Aa" in its ink; the name of the shown one in the caption.
+        themesRow.distribution = .fillEqually
+        themesRow.spacing = 8
         for (i, name) in themeNames.enumerated() {
             let p = themes[i]
-            let circle = LayerView()
-            fixed(circle, width: 44, height: 44)
-            circle.layer!.cornerRadius = 22
-            circle.layer!.backgroundColor = color(p.paper)
-            circle.layer!.borderWidth = 1
-            circle.layer!.borderColor = color(p.line)
-            let aa = label("Aa", bookFont("PT Serif", 16), p.ink)
-            circle.addSubview(aa)
-            NSLayoutConstraint.activate([aa.centerXAnchor.constraint(equalTo: circle.centerXAnchor), aa.centerYAnchor.constraint(equalTo: circle.centerYAnchor)])
-            let name = label(name, interfaceFont(11), 0)
-            let cell = NSStackView(views: [circle, name])
-            cell.orientation = .vertical
-            cell.spacing = 8
-            fixed(cell, width: 56)
-            let click = NSClickGestureRecognizer(target: self, action: #selector(pickTheme(_:)))
-            cell.addGestureRecognizer(click)
-            themesRow.addArrangedSubview(cell)
-            circles.append(circle)
-            circleLabels.append(name)
+            let card = LayerView()
+            fixed(card, height: 56)
+            card.layer!.cornerRadius = 12
+            card.layer!.backgroundColor = color(p.paper)
+            card.setAccessibilityElement(true)
+            card.setAccessibilityRole(.button)
+            card.setAccessibilityLabel(name)
+            let aa = label("Aa", bookFont("PT Serif", 17), p.ink)
+            card.addSubview(aa)
+            NSLayoutConstraint.activate([aa.centerXAnchor.constraint(equalTo: card.centerXAnchor), aa.centerYAnchor.constraint(equalTo: card.centerYAnchor)])
+            card.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(pickTheme(_:))))
+            themesRow.addArrangedSubview(card)
+            cards.append(card)
         }
-        ring.borderWidth = 2
-        ring.cornerRadius = 28
-        layer!.addSublayer(ring)
-        stack.addArrangedSubview(themesRow)
-        themesRow.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true
+        let (themeColumn, c0) = captioned(tr("Theme"), themesRow, value: themeName)
+        add(themeColumn)
 
         // Text size and alignment.
         smaller.onClick = { [weak self] in self?.change(2, -1) }
         larger.onClick = { [weak self] in self?.change(2, 1) }
-        number.widthAnchor.constraint(equalToConstant: 44).isActive = true
-        smaller.widthAnchor.constraint(equalTo: larger.widthAnchor).isActive = true
-        for b in [smaller, number] {
-            let d = LayerView()
-            fixed(d, width: 1)
-            size.addSubview(d)
-            NSLayoutConstraint.activate([d.topAnchor.constraint(equalTo: size.topAnchor), d.bottomAnchor.constraint(equalTo: size.bottomAnchor), d.leadingAnchor.constraint(equalTo: b.trailingAnchor)])
-            size.dividers.append(d)
-        }
-        let row = NSStackView(views: [size, align])
-        row.spacing = 12
-        size.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        align.setContentHuggingPriority(.required, for: .horizontal)
-        stack.addArrangedSubview(row)
-        row.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true
+        let (sizeColumn, c1) = captioned(tr("Size"), size)
+        let (alignColumn, c2) = captioned(tr("Alignment"), align)
+        add(halves(sizeColumn, alignColumn))
 
-        // Fonts, each name in its own font.
-        fontsRow.spacing = 8
-        for (i, name) in familyNames.enumerated() {
-            let chip = FlatButton(label(name, bookFont(familyFonts[i], 15), 0))
-            fixed(chip, height: 40)
-            chip.layer!.cornerRadius = 20
-            chip.layer!.borderWidth = 1
-            chip.widthAnchor.constraint(equalTo: chip.content.widthAnchor, constant: 32).isActive = true
-            chip.onClick = { [weak self] in self?.set { $0.family = UInt32(i) } }
-            fontsRow.addArrangedSubview(chip)
-            chips.append(chip)
-        }
-        stack.addArrangedSubview(fontsRow)
+        for (i, chip) in chips.enumerated() { chip.onClick = { [weak self] in self?.set { $0.family = UInt32(i) } } }
+        let (fontsColumn, c3) = captioned(tr("Font"), fontsRow)
+        add(fontsColumn)
 
         // Line spacing and margins; pages.
-        let (spacingColumn, c1) = captioned(tr("Line spacing"), spacing)
-        let (marginsColumn, c2) = captioned(tr("Margins"), margins)
-        let pair = NSStackView(views: [spacingColumn, marginsColumn])
-        pair.spacing = 16
-        pair.distribution = .fillEqually
-        stack.addArrangedSubview(pair)
-        pair.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true
-        let (pagesColumn, c3) = captioned(tr("Pages"), pages)
-        stack.addArrangedSubview(pagesColumn)
-        pagesColumn.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true
-        captions = [c1, c2, c3]
+        let (spacingColumn, c4) = captioned(tr("Line spacing"), spacing)
+        let (marginsColumn, c5) = captioned(tr("Margins"), margins)
+        add(halves(spacingColumn, marginsColumn))
+        let (pagesColumn, c6) = captioned(tr("Pages"), pages)
+        add(pagesColumn)
+        captions = [c0, c1, c2, c3, c4, c5, c6]
 
+        // 1 px dividers between the segments.
+        for segmented in [size, align, spacing, margins, pages] {
+            for b in segmented.buttons.dropLast() {
+                let d = LayerView()
+                fixed(d, width: 1)
+                segmented.addSubview(d)
+                NSLayoutConstraint.activate([d.topAnchor.constraint(equalTo: segmented.topAnchor), d.bottomAnchor.constraint(equalTo: segmented.bottomAnchor), d.leadingAnchor.constraint(equalTo: b.trailingAnchor)])
+                segmented.dividers.append(d)
+            }
+        }
+        for segmented in [align, spacing, margins, pages] { for b in segmented.buttons { b.option = true } }
         for (i, b) in align.buttons.enumerated() { b.onClick = { [weak self] in self?.set { $0.align = UInt32(i) } } }
         for (i, b) in spacing.buttons.enumerated() { b.onClick = { [weak self] in self?.set { $0.spacing = UInt32(i) } } }
         for (i, b) in margins.buttons.enumerated() { b.onClick = { [weak self] in self?.set { $0.margins = UInt32(i) } } }
         for (i, b) in pages.buttons.enumerated() { b.onClick = { [weak self] in self?.set { $0.turning = UInt32(i) } } }
         controls = [(themesRow, 0), (size, 2), (align, 4), (fontsRow, 1), (spacing, 3), (margins, 5), (pages, 6)]
         keysRing.borderWidth = 2
-        keysRing.cornerRadius = 12
+        keysRing.cornerRadius = 14
+        keysRing.isHidden = true
         layer!.addSublayer(keysRing)
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
+    /// A row from the left padding to the right one.
+    private func add(_ row: NSView) {
+        stack.addArrangedSubview(row)
+        row.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true
+    }
+
+    /// Two equal halves 16 px apart.
+    private func halves(_ first: NSView, _ second: NSView) -> NSStackView {
+        let row = NSStackView(views: [first, second])
+        row.spacing = 16
+        row.distribution = .fillEqually
+        row.alignment = .top
+        return row
+    }
+
     override var acceptsFirstResponder: Bool { true }
 
     @objc private func pickTheme(_ g: NSClickGestureRecognizer) {
-        guard let i = themesRow.arrangedSubviews.firstIndex(where: { $0 === g.view }) else { return }
+        guard let i = cards.firstIndex(where: { $0 === g.view }) else { return }
         set { $0.theme = Int32(i) }
     }
 
@@ -326,10 +330,8 @@ final class SettingsSheet: SheetView {
         let p = view.palette
         colour(p)
         for control in [size, align, spacing, margins, pages] { control.colour(p) }
-        sizeLabel.stringValue = String(format: "%g", withUnsafePointer(to: s) { forzac_settings_text_size($0) })
-        sizeLabel.textColor = nsColor(p.muted)
         size.buttons[0].enabled = s.size > 0
-        size.buttons[2].enabled = s.size + 1 < forzac_settings_size_count()
+        size.buttons[1].enabled = s.size + 1 < forzac_settings_size_count()
         align.select(Int(s.align))
         spacing.select(Int(s.spacing))
         margins.select(Int(s.margins))
@@ -337,30 +339,33 @@ final class SettingsSheet: SheetView {
         for (i, chip) in chips.enumerated() {
             chip.colour(p)
             chip.selected = i == Int(s.family)
-            chip.layer!.borderColor = color(chip.selected ? p.ink : p.line)
+            chip.layer!.borderColor = chip.selected ? selection(p) : color(p.line)
         }
-        for l in circleLabels + captions { l.textColor = nsColor(p.muted) }
-        ring.borderColor = color(p.ink)
+        for (i, card) in cards.enumerated() {
+            let shown = i == view.theme
+            card.layer!.borderWidth = shown ? 2 : 1
+            card.layer!.borderColor = color(shown ? p.ink : themes[i].line)
+        }
+        if view.theme < themeNames.count { themeName.stringValue = themeNames[view.theme] }
+        themeName.textColor = nsColor(p.ink)
+        for l in captions { l.textColor = nsColor(p.muted) }
         keysRing.borderColor = color(p.ink, alpha: 0.55)
         layoutSubtreeIfNeeded()
-        placeRings()
+        fontsRow.reveal(chips[min(Int(s.family), chips.count - 1)])
+        placeRing()
     }
 
     override func layout() {
         super.layout()
-        placeRings()
+        placeRing()
     }
 
-    /// The ring around the shown theme (a 4 px gap, a 2 px ring) and the outline of the control the keys change.
-    private func placeRings() {
-        guard let view, view.theme < circles.count else { return }
+    /// The outline of the control the keys change.
+    private func placeRing() {
+        guard !controls.isEmpty else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        let circle = circles[view.theme]
-        ring.frame = layerFrame(of: circle).insetBy(dx: -6, dy: -6)
-        // Around the theme circles with room for the shown theme's ring (6 px beyond its circle).
-        let room: CGFloat = controls[current].0 === themesRow ? -10 : -4
-        keysRing.frame = layerFrame(of: controls[current].0).insetBy(dx: room, dy: room)
+        keysRing.frame = layerFrame(of: controls[current].0).insetBy(dx: -4, dy: -4)
         CATransaction.commit()
     }
 
@@ -369,11 +374,11 @@ final class SettingsSheet: SheetView {
 
     override func keyDown(with e: NSEvent) {
         switch e.shortcutKey {
-        case 0x26, 0x7D: keysUsed(); current = min(controls.count - 1, current + 1); placeRings() // j ↓
-        case 0x28, 0x7E: keysUsed(); current = max(0, current - 1); placeRings()                    // k ↑
-        case 0x25, 0x7C: keysUsed(); change(controls[current].1, 1)                                 // l →
-        case 0x04, 0x7B: keysUsed(); change(controls[current].1, -1)                                // h ←
-        case 0x35, 0x01, 0x0C: close()                                                  // Esc s q
+        case 0x26, 0x7D: keysUsed(); current = min(controls.count - 1, current + 1); placeRing() // j ↓
+        case 0x28, 0x7E: keysUsed(); current = max(0, current - 1); placeRing()                    // k ↑
+        case 0x25, 0x7C: keysUsed(); change(controls[current].1, 1)                                // l →
+        case 0x04, 0x7B: keysUsed(); change(controls[current].1, -1)                               // h ←
+        case 0x35, 0x01, 0x0C: close()                                                 // Esc s q
         default: super.keyDown(with: e)
         }
     }
@@ -393,6 +398,52 @@ final class SettingsSheet: SheetView {
     func close() {
         isHidden = true
         if let view { window?.makeFirstResponder(view) }
+    }
+}
+
+/// The font chips (`aa-panel`): 44 px, 12 px corners, 16 px padding. When they all fit, they stretch evenly to the
+/// row's right edge like the other rows; when not, they keep their own widths and the row scrolls sideways.
+final class ChipsRow: NSScrollView {
+    private let chips: [FlatButton]
+    private let row = NSView()
+
+    init(_ chips: [FlatButton]) {
+        self.chips = chips
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        drawsBackground = false
+        hasHorizontalScroller = false
+        hasVerticalScroller = false
+        verticalScrollElasticity = .none
+        fixed(self, height: 44)
+        for chip in chips {
+            chip.translatesAutoresizingMaskIntoConstraints = true
+            chip.layer!.cornerRadius = 12
+            chip.layer!.borderWidth = 1
+            row.addSubview(chip)
+        }
+        documentView = row
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        let gap: CGFloat = 8
+        let natural = chips.map { ceil($0.content.fittingSize.width) + 32 }
+        let spare = bounds.width - natural.reduce(0, +) - gap * CGFloat(chips.count - 1)
+        let extra = spare > 0 ? spare / CGFloat(chips.count) : 0
+        var x: CGFloat = 0
+        for (chip, w) in zip(chips, natural) {
+            chip.frame = CGRect(x: x, y: 0, width: w + extra, height: 44)
+            x += w + extra + gap
+        }
+        row.frame = CGRect(x: 0, y: 0, width: max(x - gap, bounds.width), height: 44)
+    }
+
+    /// Scrolls `chip` into view (the keys may pick one beyond the edge).
+    func reveal(_ chip: FlatButton) {
+        chip.scrollToVisible(chip.bounds)
     }
 }
 

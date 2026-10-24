@@ -42,12 +42,12 @@ impl PageStyle {
     /// The default page for a window: a column of at most 34 em (about 65 characters), centred, in PT Serif with
     /// the normal line spacing (the default settings, see `settings`).
     pub fn for_window(width: f32, height: f32, text_size: f32) -> Self {
-        Self::column(width, height, text_size, 34.0, 48.0)
+        Self::column(width, height, text_size, 34.0, 0.07)
     }
 
-    /// A page with the text column at most `measure` em wide and side margins of at least `min_margin`.
-    pub fn column(width: f32, height: f32, text_size: f32, measure: f32, min_margin: f32) -> Self {
-        let margin_h = min_margin.max((width - text_size * measure) / 2.0);
+    /// A page with the text column at most `measure` em wide and side margins of at least `share` of its width.
+    pub fn column(width: f32, height: f32, text_size: f32, measure: f32, share: f32) -> Self {
+        let margin_h = (share * width).max((width - text_size * measure) / 2.0);
         PageStyle {
             width,
             height,

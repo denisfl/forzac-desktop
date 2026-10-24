@@ -39,18 +39,16 @@ impl Theme {
         let hex = |c: u32| format!("#{c:06x}");
         let Palette { paper, ink, muted, line, sheet, link } = THEMES[theme];
         let (paper, ink, muted, line, sheet, link) = (hex(paper), hex(ink), hex(muted), hex(line), hex(sheet), hex(link));
-        // The theme circles keep their own theme's colours. GTK draws a later shadow over an earlier one: the gap in the
-        // panel's colour lies over the ring, as on Android (a 4 px gap, a 2 px ring).
-        let circles: String = THEMES
+        // The theme cards keep their own theme's colours; the shown one has a 2 px frame in the current ink (`aa-panel`).
+        let cards: String = THEMES
             .iter()
             .enumerate()
             .map(|(i, t)| {
                 format!(
-                    ".forzac-panel .circle.theme-{i} {{ background-color: {}; color: {}; box-shadow: inset 0 0 0 1px {}; }}
-                     .forzac-panel .circle.theme-{i}.selected {{ box-shadow: inset 0 0 0 1px {}, 0 0 0 6px {ink}, 0 0 0 4px {sheet}; }}\n",
+                    ".forzac-panel .card.theme-{i} {{ background-color: {}; color: {}; box-shadow: inset 0 0 0 1px {}; }}
+                     .forzac-panel .card.theme-{i}.selected {{ box-shadow: inset 0 0 0 2px {ink}; }}\n",
                     hex(t.paper),
                     hex(t.ink),
-                    hex(t.line),
                     hex(t.line),
                 )
             })
@@ -65,11 +63,14 @@ impl Theme {
              .forzac-help .help-support link {{ color: {link}; }}
              .forzac-sheet {{ background-color: {sheet}; box-shadow: 0 -1px 0 {line}, 0 -12px 32px alpha(black, 0.08); }}
              .forzac-side {{ background-color: {paper}; box-shadow: -1px 0 0 {line}, -12px 0 32px alpha(black, 0.08); }}
-             .forzac-panel .grabber, .forzac-panel .rule, .forzac-panel .divider {{ background-color: {line}; }}
+             .forzac-panel .grabber, .forzac-panel .rule {{ background-color: {line}; }}
              .forzac-panel .segmented {{ border: 1px solid {line}; }}
+             .forzac-panel .segment:not(:first-child) {{ border-left: 1px solid {line}; }}
              .forzac-panel .chip {{ border: 1px solid {line}; }}
              .forzac-panel button:hover {{ background-color: alpha({ink}, 0.06); }}
-             .forzac-panel .segment.selected, .forzac-panel .chip.selected {{ background-color: {ink}; border-color: {ink}; color: {sheet}; }}
+             .forzac-panel .option {{ color: {muted}; }}
+             .forzac-panel .segment.selected, .forzac-panel .chip.selected {{ background-color: mix({sheet}, {ink}, 0.12); border-color: mix({sheet}, {ink}, 0.12); color: {ink}; }}
+             .forzac-panel .segment.selected:not(:first-child) {{ border-left-color: {line}; }}
              .forzac-panel .keys {{ outline: 2px solid alpha({ink}, 0.55); }}
              .forzac-panel .dot {{ background-color: {ink}; }}
              .forzac-panel .snippet {{ color: alpha({ink}, 0.78); }}
@@ -84,7 +85,7 @@ impl Theme {
              .bar-top {{ box-shadow: inset 0 -1px {line}; }}
              .bar-bottom {{ box-shadow: inset 0 1px {line}; }}
              .forzac-panel button.bar-aa {{ border: 1px solid {line}; }}
-             {circles}"
+             {cards}"
         ));
     }
 }
@@ -100,20 +101,18 @@ const STATIC_CSS: &str = "
     .forzac-panel .grabber { min-width: 36px; min-height: 4px; border-radius: 2px; }
     .forzac-panel .viewer-close { border-radius: 22px; }
     .forzac-panel .rule { min-height: 1px; }
-    .forzac-panel .divider { min-width: 1px; }
-    .forzac-panel .theme-name { font-size: 11px; }
-    .forzac-panel .circle { min-width: 44px; min-height: 44px; border-radius: 22px; font-family: 'PT Serif'; font-size: 16px; }
+    .forzac-panel .card { min-height: 56px; border-radius: 12px; font-family: 'PT Serif'; font-size: 17px; }
     .forzac-panel .segmented { border-radius: 12px; min-height: 44px; }
     .forzac-panel .segmented button { min-height: 44px; }
-    .forzac-panel .size-smaller { font-family: 'PT Serif'; font-size: 14px; }
-    .forzac-panel .size-larger { font-family: 'PT Serif'; font-size: 22px; }
-    .forzac-panel .size { font-size: 14px; font-feature-settings: 'tnum'; }
-    .forzac-panel .chip { min-height: 40px; border-radius: 20px; padding: 0 16px; font-size: 15px; }
+    .forzac-panel .size-smaller { font-family: 'PT Serif'; font-size: 15px; }
+    .forzac-panel .size-larger { font-family: 'PT Serif'; font-size: 21px; }
+    .forzac-panel .chip { min-height: 44px; border-radius: 12px; padding: 0 16px; font-size: 15px; }
     .forzac-panel .font-pt-serif { font-family: 'PT Serif'; }
     .forzac-panel .font-literata { font-family: 'Literata'; }
     .forzac-panel .font-source-serif { font-family: 'Source Serif 4'; }
     .forzac-panel .font-pt-sans { font-family: 'PT Sans'; }
     .forzac-panel .caption { font-size: 12px; }
+    .forzac-panel .caption-value { font-weight: 500; }
     .forzac-panel .keys { outline-offset: 3px; border-radius: 12px; }
     .forzac-panel .note-label { font-size: 12px; font-weight: 500; letter-spacing: 0.72px; }
     .forzac-panel .panel-title { font-size: 17px; font-weight: 600; }

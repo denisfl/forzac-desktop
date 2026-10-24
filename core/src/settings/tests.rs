@@ -66,9 +66,14 @@ fn margins_change_the_column() {
     s.margins = Margins::Wide;
     let wide = s.page_style(1600.0, 900.0).text_width();
     assert!(narrow > medium && medium > wide, "{narrow} {medium} {wide}");
-    // A narrow window: the least side margin decides.
-    s.margins = Margins::Wide;
-    assert!((s.page_style(500.0, 900.0).margin_h - 72.0).abs() < 0.01);
+    // A narrow window: the share of its width decides (as on Android, 4 / 7 / 13 %).
+    for (margins, margin) in [(Margins::Narrow, 20.0), (Margins::Medium, 35.0), (Margins::Wide, 65.0)] {
+        s.margins = margins;
+        assert!((s.page_style(500.0, 900.0).margin_h - margin).abs() < 0.01, "{margins:?}");
+    }
+    // A wide one: the measure, 34 em at 20 px in a 1000 px window.
+    s.margins = Margins::Medium;
+    assert!((s.page_style(1000.0, 1200.0).margin_h - 160.0).abs() < 0.01);
 }
 
 #[test]
@@ -78,7 +83,7 @@ fn a_wide_window_shows_a_spread() {
     let page = s.page_style(1440.0, 900.0);
     assert_eq!(page.width, 720.0);
     assert!(page.spread, "a spread's page");
-    assert!((page.text_width() - 624.0).abs() < 0.01, "31 em between the least margins");
+    assert!((page.text_width() - 619.2).abs() < 0.01, "31 em between the least margins, 7 % of the page each");
     s.step(Setting::Size, 2, false);
     assert_eq!(s.text_size(), 24.0);
     assert!(!s.spread(1440.0, 900.0), "26 em halves");

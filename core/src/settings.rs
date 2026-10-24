@@ -68,7 +68,8 @@ impl Align {
     }
 }
 
-/// How wide the text column may grow and the least side margin.
+/// The side margins: a share of the page's width and, on a wide page, the widest text column (`aa-panel`, as on
+/// Android): a page's margin is at least the share and at least what keeps the line within the measure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Margins {
     Narrow,
@@ -80,12 +81,12 @@ pub enum Margins {
 impl Margins {
     pub const ALL: [Margins; 3] = [Margins::Narrow, Margins::Medium, Margins::Wide];
 
-    /// The widest column in em and the least side margin in pixels.
+    /// The widest column in em and the least side margin as a share of the page's width.
     fn column(self) -> (f32, f32) {
         match self {
-            Margins::Narrow => (38.0, 24.0),
-            Margins::Medium => (34.0, 48.0),
-            Margins::Wide => (30.0, 72.0),
+            Margins::Narrow => (38.0, 0.04),
+            Margins::Medium => (34.0, 0.07),
+            Margins::Wide => (30.0, 0.13),
         }
     }
 
@@ -204,8 +205,9 @@ impl Settings {
     /// Whether a window of `width` × `height` logical pixels shows two pages side by side: "Slide", wider than tall,
     /// and each half holds a column of `MIN_SPREAD_COLUMN` with the least side margins.
     pub fn spread(&self, width: f32, height: f32) -> bool {
-        let (_, min_margin) = self.margins.column();
-        self.turning == Turning::Slide && width > height && width / 2.0 - 2.0 * min_margin >= MIN_SPREAD_COLUMN * self.text_size()
+        let (_, share) = self.margins.column();
+        let half = width / 2.0;
+        self.turning == Turning::Slide && width > height && half - 2.0 * share * half >= MIN_SPREAD_COLUMN * self.text_size()
     }
 
     /// How far a spread's pages are drawn towards the gutter (the left page right, the right page left), so the gutter
@@ -215,14 +217,14 @@ impl Settings {
         if !self.spread(width, height) {
             return 0.0;
         }
-        let (_, min_margin) = self.margins.column();
+        let (_, share) = self.margins.column();
         let margin = self.page_style(width, height).margin_h;
-        (margin / 3.0).min(margin - min_margin)
+        (margin / 3.0).min(margin - share * width / 2.0)
     }
 
     /// The page for a window of `width` × `height` logical pixels: half the window in a spread.
     pub fn page_style(&self, width: f32, height: f32) -> PageStyle {
-        let (measure, min_margin) = self.margins.column();
+        let (measure, share) = self.margins.column();
         let spread = self.spread(width, height);
         let width = if spread { width / 2.0 } else { width };
         PageStyle {
@@ -230,7 +232,7 @@ impl Settings {
             justify: self.align == Align::Justified,
             family: self.family,
             spread,
-            ..PageStyle::column(width, height, self.text_size(), measure, min_margin)
+            ..PageStyle::column(width, height, self.text_size(), measure, share)
         }
     }
 

@@ -641,6 +641,9 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Text settings", "Настройки текста"),
     ("p. {n}", "стр. {n}"),
     // Settings.
+    ("Size", "Размер"),
+    ("Alignment", "Выравнивание"),
+    ("Font", "Шрифт"),
     ("Line spacing", "Интервал"),
     ("Margins", "Поля"),
     ("Pages", "Листание"),

@@ -103,7 +103,7 @@ modules (`core/typesetting/src/main/kotlin/app/truenrth/forzac/typesetting/…` 
 | C5 | Fonts: Noto Serif (default; Android's system serif), Literata, PT Serif, Source Serif, PT Sans (`BookFonts.kt`) | PT Serif (default), Literata, Source Serif, PT Sans, all bundled (`core/src/fonts.rs` `Family`) | unclear |
 | C6 | Sizes 15, 16, 17, 18, 20, 22, 24 sp, default 18 | Sizes 16, 18, 20, 22, 24, 27, 30 px, default 20 (`core/src/settings.rs` `TEXT_SIZES`) | unclear |
 | C7 | Spacing 1.45 / 1.62 / 1.85, alignment justified / left | The same | same |
-| C8 | Margins 18 / 28 / 40 dp, the column at most 34 em (tablet-layout) | Margins as the widest column, 38 / 34 / 30 em, and the least side margin, 24 / 48 / 72 px (`core/src/settings.rs` `Margins::column`) | unclear |
+| C8 | Margins a share of the page's width, 4 / 7 / 13 %, and on a wide page the widest column, 38 / 34 / 30 em (`ReaderSettings.kt` `Margins.horizontal`, `aa-panel`) | The same, per page of a spread (`core/src/settings.rs` `Margins::column`, `aa-panel`) | same |
 | C9 | Settings global and remembered; an unknown value falls back to the default | The same (`Settings::load`/`save`, spec reader-settings) | same |
 | C10 | The theme colours the page, menu, contents, notes, settings, system bar icons and the library (`MainActivity.kt`) | The page, the panels, the Mac window's appearance and the library (`gtk/src/library.rs` `set_theme`, `macos/Library.swift`) | same |
 
@@ -207,7 +207,7 @@ Every gap, unclear and "Not planned" row with its proposal. The maintainer accep
 | C4 | A 200 ms cross-fade on theme change | android-parity |
 | C5 | Keep the four bundled fonts with PT Serif first (Noto Serif is Android's system font, not a choice made for the book) | — |
 | C6 | Keep the desktop sizes (a screen read from further away) | — |
-| C8 | Keep the desktop margins (any window width) | — |
+| C8 | Keep the desktop margins (any window width). **Reversed with `aa-panel` (2026-10-24):** Android's share of the page's width and measure | `aa-panel` |
 | C10 | The recent-books window in the reader's theme | android-parity |
 | P5 | GTK shows the recent books after the last book closes, as macOS does | android-parity |
 | E1 | A message in both shells with Android's wording and reason; "file unavailable" apart from "not a book" | android-parity |

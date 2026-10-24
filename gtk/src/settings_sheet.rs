@@ -1,5 +1,6 @@
-//! The settings panel (`s`): a bottom sheet laid out as the Android app's settings (`SettingsSheet.kt`, the design's
-//! `Settings.dc.html`): theme circles; the text size and the alignment; font chips; line spacing and margins; pages.
+//! The settings panel (`s`): a bottom sheet laid out as the Android app's settings (`SettingsSheet.kt`, `aa-panel`): every
+//! row runs from edge to edge in equal cells, a caption above each control: the theme cards; the text size | the
+//! alignment; the font chips; line spacing | margins; pages.
 //! `j`/`k` move through the seven controls in reading order (the current one is outlined), `h`/`l` change its value; a
 //! click picks a value directly. Every change shows at once and is saved; `Esc` or `s` closes.
 
@@ -26,12 +27,14 @@ pub struct SettingsSheet {
     current: Cell<usize>,
     /// The keys were used since the sheet opened: only then is the control they change outlined.
     keyboard: Cell<bool>,
-    circles: Vec<gtk::Button>,
-    size: gtk::Label,
+    cards: Vec<gtk::Button>,
+    /// The shown theme's name after the theme's caption.
+    theme_name: gtk::Label,
     smaller: gtk::Button,
     larger: gtk::Button,
     aligns: Vec<gtk::Button>,
     chips: Vec<gtk::Button>,
+    fonts: gtk::Viewport,
     spacings: Vec<gtk::Button>,
     margins: Vec<gtk::Button>,
     pages: Vec<gtk::Button>,
@@ -49,40 +52,46 @@ fn button(classes: &[&str], child: &impl IsA<gtk::Widget>) -> gtk::Button {
     b
 }
 
-/// A row of options in a rounded frame; each option fills its share (`homogeneous`) or `width` pixels.
-fn segmented(options: &[gtk::Button], width: Option<i32>) -> gtk::Box {
+/// Equal options in a rounded frame filling its cell, 1 px dividers between them.
+fn segmented(options: &[gtk::Button]) -> gtk::Box {
     let frame = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     frame.add_css_class("segmented");
     frame.set_overflow(gtk::Overflow::Hidden);
-    frame.set_homogeneous(width.is_none());
+    frame.set_homogeneous(true);
     for option in options {
         option.add_css_class("segment");
-        match width {
-            Some(w) => option.set_width_request(w),
-            None => option.set_hexpand(true),
-        }
+        option.set_hexpand(true);
         frame.append(option);
     }
     frame
 }
 
-fn divider() -> gtk::Box {
-    let d = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    d.add_css_class("divider");
-    d
-}
-
-/// `content` with a small caption above it.
-fn captioned(caption: &str, content: &impl IsA<gtk::Widget>) -> gtk::Box {
-    let column = gtk::Box::new(gtk::Orientation::Vertical, 6);
+/// `content` with a 12 px caption 8 px above it; `value` follows the caption in ink ("Theme Light").
+fn captioned(caption: &str, content: &impl IsA<gtk::Widget>, value: Option<&gtk::Label>) -> gtk::Box {
+    let column = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    let line = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     let label = gtk::Label::new(Some(caption));
     label.add_css_class("caption");
     label.add_css_class("muted");
-    label.set_xalign(0.0);
-    column.append(&label);
+    line.append(&label);
+    if let Some(value) = value {
+        value.add_css_class("caption");
+        value.add_css_class("caption-value");
+        line.append(value);
+    }
+    column.append(&line);
     column.append(content);
     column.set_hexpand(true);
     column
+}
+
+/// Two equal halves 16 px apart.
+fn halves(first: &gtk::Box, second: &gtk::Box) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+    row.set_homogeneous(true);
+    row.append(first);
+    row.append(second);
+    row
 }
 
 fn select(buttons: &[gtk::Button], selected: usize) {
@@ -99,7 +108,7 @@ impl SettingsSheet {
     /// `save` remembers the settings and recolours the panels after a change.
     pub fn new(overlay: &gtk::Overlay, view: &PageView, save: Rc<dyn Fn()>) -> Rc<Self> {
         crate::fonts::add_interface_fonts();
-        let panel = gtk::Box::new(gtk::Orientation::Vertical, 18);
+        let panel = gtk::Box::new(gtk::Orientation::Vertical, 20);
         panel.add_css_class("forzac-panel");
         panel.add_css_class("forzac-sheet");
         panel.set_valign(gtk::Align::End);
@@ -107,81 +116,61 @@ impl SettingsSheet {
         panel.set_focusable(true);
         panel.append(&grabber());
 
-        // Themes: a circle in each theme's colours, the name below.
-        let themes = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        // Themes: six equal cards, each its theme's paper with "Aa" in its ink; the shown one's name in the caption.
+        let themes = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         themes.set_homogeneous(true);
         let names = [tr("Light"), tr("Sepia"), tr("Dark"), tr("Dawn"), tr("Wave"), tr("Forest")];
-        let circles: Vec<gtk::Button> = names
+        let cards: Vec<gtk::Button> = names
             .iter()
             .enumerate()
             .map(|(i, name)| {
-                let cell = gtk::Box::new(gtk::Orientation::Vertical, 8);
-                let aa = gtk::Label::new(Some("Aa"));
-                let circle = button(&["circle", &format!("theme-{i}")], &aa);
-                circle.set_halign(gtk::Align::Center);
-                cell.append(&circle);
-                let label = gtk::Label::new(Some(name));
-                label.add_css_class("theme-name");
-                label.add_css_class("muted");
-                cell.append(&label);
-                themes.append(&cell);
-                circle
+                let card = button(&["card", &format!("theme-{i}")], &gtk::Label::new(Some("Aa")));
+                card.set_tooltip_text(Some(name));
+                themes.append(&card);
+                card
             })
             .collect();
-        panel.append(&themes);
+        let theme_name = gtk::Label::new(None);
+        panel.append(&captioned(tr("Theme"), &themes, Some(&theme_name)));
 
         // Text size and alignment.
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         let smaller = button(&["size-smaller"], &gtk::Label::new(Some("A")));
         let larger = button(&["size-larger"], &gtk::Label::new(Some("A")));
-        let size = gtk::Label::new(None);
-        size.add_css_class("size");
-        size.add_css_class("muted");
-        size.set_width_request(44);
-        let size_frame = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        size_frame.add_css_class("segmented");
-        size_frame.set_overflow(gtk::Overflow::Hidden);
-        size_frame.set_hexpand(true);
-        smaller.set_hexpand(true);
-        larger.set_hexpand(true);
-        size_frame.append(&smaller);
-        size_frame.append(&divider());
-        size_frame.append(&size);
-        size_frame.append(&divider());
-        size_frame.append(&larger);
-        row.append(&size_frame);
-        let aligns: Vec<gtk::Button> = [icons::ALIGN_JUSTIFY, icons::ALIGN_LEFT].iter().map(|p| button(&[], &Icon::new(p, 20))).collect();
-        let align_frame = segmented(&aligns, Some(48));
-        row.append(&align_frame);
-        panel.append(&row);
+        let size_frame = segmented(&[smaller.clone(), larger.clone()]);
+        let aligns: Vec<gtk::Button> =
+            [icons::ALIGN_JUSTIFY, icons::ALIGN_LEFT].iter().map(|p| button(&["option"], &Icon::new(p, 20))).collect();
+        let align_frame = segmented(&aligns);
+        panel.append(&halves(&captioned(tr("Size"), &size_frame, None), &captioned(tr("Alignment"), &align_frame, None)));
 
-        // Fonts, each name in its own font.
-        let fonts = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        // Fonts, each name in its own font. When they all fit, they stretch evenly to the row's right edge; when not,
+        // they keep their widths and the row scrolls sideways.
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let chips: Vec<gtk::Button> = Family::ALL
             .iter()
             .map(|f| {
                 let chip = button(&["chip", &format!("font-{}", f.key())], &gtk::Label::new(Some(f.name())));
-                fonts.append(&chip);
+                chip.set_hexpand(true);
+                row.append(&chip);
                 chip
             })
             .collect();
-        panel.append(&fonts);
+        let fonts = gtk::Viewport::new(None::<&gtk::Adjustment>, None::<&gtk::Adjustment>);
+        fonts.set_child(Some(&row));
+        let scrolled =
+            gtk::ScrolledWindow::builder().child(&fonts).vscrollbar_policy(gtk::PolicyType::Never).propagate_natural_height(true).build();
+        panel.append(&captioned(tr("Font"), &scrolled, None));
 
         // Line spacing and margins.
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 16);
-        row.set_homogeneous(true);
-        let spacings: Vec<gtk::Button> = icons::SPACING.iter().map(|p| button(&[], &Icon::new(p, 20))).collect();
-        let spacing_frame = segmented(&spacings, None);
-        row.append(&captioned(tr("Line spacing"), &spacing_frame));
-        let margins: Vec<gtk::Button> = icons::MARGINS.iter().map(|p| button(&[], &Icon::new(p, 20))).collect();
-        let margin_frame = segmented(&margins, None);
-        row.append(&captioned(tr("Margins"), &margin_frame));
-        panel.append(&row);
+        let spacings: Vec<gtk::Button> = icons::SPACING.iter().map(|p| button(&["option"], &Icon::new(p, 20))).collect();
+        let spacing_frame = segmented(&spacings);
+        let margins: Vec<gtk::Button> = icons::MARGINS.iter().map(|p| button(&["option"], &Icon::new(p, 20))).collect();
+        let margin_frame = segmented(&margins);
+        panel.append(&halves(&captioned(tr("Line spacing"), &spacing_frame, None), &captioned(tr("Margins"), &margin_frame, None)));
 
         // Pages.
-        let pages: Vec<gtk::Button> = [tr("Slide"), tr("Scroll")].iter().map(|t| button(&[], &gtk::Label::new(Some(t)))).collect();
-        let pages_frame = segmented(&pages, None);
-        panel.append(&captioned(tr("Pages"), &pages_frame));
+        let pages: Vec<gtk::Button> = [tr("Slide"), tr("Scroll")].iter().map(|t| button(&["option"], &gtk::Label::new(Some(t)))).collect();
+        let pages_frame = segmented(&pages);
+        panel.append(&captioned(tr("Pages"), &pages_frame, None));
 
         panel.set_visible(false);
         overlay.add_overlay(&panel);
@@ -190,7 +179,7 @@ impl SettingsSheet {
             themes.upcast(),
             size_frame.upcast(),
             align_frame.upcast(),
-            fonts.upcast(),
+            scrolled.upcast(),
             spacing_frame.upcast(),
             margin_frame.upcast(),
             pages_frame.upcast(),
@@ -200,12 +189,13 @@ impl SettingsSheet {
             controls,
             current: Cell::new(0),
             keyboard: Cell::new(false),
-            circles,
-            size,
+            cards,
+            theme_name,
             smaller,
             larger,
             aligns,
             chips,
+            fonts,
             spacings,
             margins,
             pages,
@@ -241,7 +231,7 @@ impl SettingsSheet {
                 });
             }
         };
-        pick(&sheet.circles, |s, i| s.theme = Some(i));
+        pick(&sheet.cards, |s, i| s.theme = Some(i));
         pick(&sheet.aligns, |s, i| s.align = [Align::Justified, Align::Left][i]);
         pick(&sheet.chips, |s, i| s.family = Family::ALL[i]);
         pick(&sheet.spacings, |s, i| s.spacing = [Spacing::Compact, Spacing::Normal, Spacing::Loose][i]);
@@ -304,12 +294,15 @@ impl SettingsSheet {
     /// Marks the current values.
     fn show(&self, view: &PageView) {
         let s = view.settings();
-        select(&self.circles, view.theme());
-        self.size.set_text(&s.text_size().to_string());
+        select(&self.cards, view.theme());
+        self.theme_name.set_text(tr(settings::THEMES[view.theme()]));
         self.smaller.set_sensitive(s.size > 0);
         self.larger.set_sensitive(s.size < settings::TEXT_SIZES.len() - 1);
         select(&self.aligns, s.align as usize);
-        select(&self.chips, Family::ALL.iter().position(|f| *f == s.family).unwrap_or(0));
+        let font = Family::ALL.iter().position(|f| *f == s.family).unwrap_or(0);
+        select(&self.chips, font);
+        // The keys may pick a chip beyond the edge.
+        self.fonts.scroll_to(&self.chips[font], None);
         select(&self.spacings, s.spacing as usize);
         select(&self.margins, s.margins as usize);
         select(&self.pages, s.turning as usize);
