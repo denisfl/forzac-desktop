@@ -116,6 +116,10 @@ const char *forzac_title(const ForzacDocument *doc);
 const char *forzac_book_id(const ForzacDocument *doc);
 const char *forzac_authors(const ForzacDocument *doc);
 uint32_t forzac_chapter_count(const ForzacDocument *doc);
+// What the screen takes from the top and bottom of the page (a phone's notch or Dynamic Island, its home indicator) and
+// whether pages have the running head, for the next forzac_paginate and forzac_count_new; until it is called nothing is
+// taken and pages have the head (the desktop's).
+void forzac_set_frame(ForzacDocument *doc, float top, float bottom, bool running_head);
 // Typesets `chapter` for the window with `settings`, makes it current; returns its page count.
 uint32_t forzac_paginate(ForzacDocument *doc, uint32_t chapter, float width, float height, const ForzacSettings *settings);
 // Pages of the current chapter. A ForzacPage is valid until the next call on the same document.

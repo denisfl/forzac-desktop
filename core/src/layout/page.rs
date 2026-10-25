@@ -138,10 +138,11 @@ impl ChapterLayout {
         let width = style.text_width();
         // Every chapter starts on a spread's left page: its even pages are left pages.
         let head = if style.spread && i.is_multiple_of(2) { &self.book_title } else { &self.title };
-        if i > 0
+        if style.running_head
+            && i > 0
             && let Some(title) = head
         {
-            let y = style.margin_top / 2.0 + size * 0.35;
+            let y = style.inset_top + (style.margin_top - style.inset_top) / 2.0 + size * 0.35;
             out.runs.push(label(typesetter, title, Ink::Secondary, size, style.width / 2.0, y, width));
         }
         let foot = match pages.filter(|p| p.style() == style) {
@@ -151,7 +152,7 @@ impl ChapterLayout {
             ),
             None => format!("{} / {} · {}%", i + 1, self.pages.len(), (self.progress(i) * 100.0).round() as u32),
         };
-        let y = style.height - style.margin_bottom / 2.0 + size * 0.35;
+        let y = style.height - style.inset_bottom - (style.margin_bottom - style.inset_bottom) / 2.0 + size * 0.35;
         out.runs.push(label(typesetter, &foot, Ink::Secondary, size, style.width / 2.0, y, width));
         out
     }

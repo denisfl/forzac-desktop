@@ -190,6 +190,9 @@ pub struct Document {
     layouts: Vec<ChapterLayout>,
     /// The chapter of the last [`forzac_paginate`].
     current: usize,
+    /// What the screen takes from the top and bottom of the page, and whether it has the running head
+    /// ([`forzac_set_frame`]).
+    frame: (f32, f32, bool),
     page: PageContent,
     published: Published,
     contents: Vec<ForzacTocEntry>,
@@ -382,6 +385,7 @@ pub unsafe extern "C" fn forzac_open(path: *const c_char, error: *mut u32) -> *m
         typesetter: None,
         layouts: Vec::new(),
         current: 0,
+        frame: (0.0, 0.0, true),
         page: PageContent::default(),
         published: Published::default(),
         contents: Vec::new(),
@@ -437,6 +441,17 @@ pub unsafe extern "C" fn forzac_chapter_count(doc: *const Document) -> u32 {
     unsafe { &*doc }.book.chapters.len() as u32
 }
 
+/// What the screen takes from the top and bottom of the page (a phone's notch or Dynamic Island, its home indicator) and
+/// whether pages have the running head, for the next [`forzac_paginate`] and [`forzac_count_new`]. Until it is called:
+/// nothing taken, with the head (the desktop's pages).
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_set_frame(doc: *mut Document, top: f32, bottom: f32, running_head: bool) {
+    unsafe { &mut *doc }.frame = (top, bottom, running_head);
+}
+
 /// Typesets `chapter` (or takes its kept layout) for a window of `width` × `height` with `settings`, makes it the
 /// current chapter and returns its page count.
 ///
@@ -451,7 +466,8 @@ pub unsafe extern "C" fn forzac_paginate(
     settings: *const ForzacSettings,
 ) -> u32 {
     let doc = unsafe { &mut *doc };
-    let style = Settings::from(unsafe { *settings }).page_style(width, height);
+    let (top, bottom, head) = doc.frame;
+    let style = Settings::from(unsafe { *settings }).page_style(width, height).framed(top, bottom, head);
     if doc.style != Some(style) {
         doc.typesetter = Some(Typesetter::new(style, doc.hyphenator.clone()));
         doc.style = Some(style);
@@ -1238,7 +1254,8 @@ pub struct Count {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn forzac_count_new(doc: *const Document, width: f32, height: f32, settings: *const ForzacSettings) -> *mut Count {
     let doc = unsafe { &*doc };
-    let style = Settings::from(unsafe { *settings }).page_style(width, height);
+    let (top, bottom, head) = doc.frame;
+    let style = Settings::from(unsafe { *settings }).page_style(width, height).framed(top, bottom, head);
     Box::into_raw(Box::new(Count {
         book: doc.book.clone(),
         style,

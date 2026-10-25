@@ -194,6 +194,25 @@ fn running_head_and_foot() {
 }
 
 #[test]
+fn a_phone_page_without_running_head() {
+    let window = PageStyle::for_window(400.0, 850.0, 18.0);
+    let style = window.framed(59.0, 34.0, false);
+    assert_eq!((style.margin_top, style.margin_bottom), (79.0, 74.0), "the Android app's margins inside what is taken");
+    assert_eq!(window.framed(0.0, 0.0, true), window, "the desktop's page");
+    let mut b = book((0..20).map(|_| paragraph(TEXT)).collect());
+    b.chapters[0].title = Some("Глава".into());
+    let mut t = typesetter(style);
+    let ch = paginate(&b, 0, &style, &mut t);
+    let page = ch.render(1, &style, &mut t);
+    let secondary: Vec<&GlyphRun> = page.runs.iter().filter(|r| r.ink == Ink::Secondary).collect();
+    assert_eq!(secondary.len(), 1, "the foot only");
+    let foot = secondary[0].positions[0][1];
+    assert!(foot > style.height - style.margin_bottom && foot < style.height - 34.0, "the foot is above the home indicator: {foot}");
+    let first = page.runs.iter().find(|r| r.ink != Ink::Secondary).unwrap().positions[0][1];
+    assert!(first > 79.0 && first < 79.0 + 2.0 * 18.0, "the text starts below the Dynamic Island: {first}");
+}
+
+#[test]
 fn notes_are_typeset_as_one_tall_page() {
     let mut b = book(vec![paragraph(TEXT)]);
     let note = crate::model::Note { title: Some("1".into()), blocks: (0..3).map(|_| paragraph(TEXT)).collect() };

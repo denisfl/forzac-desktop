@@ -36,6 +36,12 @@ pub struct PageStyle {
     pub family: Family,
     /// A page of a two-page spread (`Settings::spread`): the left page's head is the book's title.
     pub spread: bool,
+    /// What the screen takes from the page at its top and bottom edges (a phone's notch or Dynamic Island, its home
+    /// indicator): the margins, the running head and the foot lie inside them. 0 on the desktop (`framed`).
+    pub inset_top: f32,
+    pub inset_bottom: f32,
+    /// The chapter's title above the text, as on the desktop; the Android app's pages have none.
+    pub running_head: bool,
 }
 
 impl PageStyle {
@@ -59,6 +65,23 @@ impl PageStyle {
             justify: true,
             family: Family::PtSerif,
             spread: false,
+            inset_top: 0.0,
+            inset_bottom: 0.0,
+            running_head: true,
+        }
+    }
+
+    /// The page on a screen that takes `top` and `bottom` from it, with or without the running head. The margins
+    /// start inside what is taken; without the head they are the Android app's, 20 above the text and 40 below it.
+    pub fn framed(self, top: f32, bottom: f32, running_head: bool) -> Self {
+        let (own_top, own_bottom) = if running_head { (self.margin_top, self.margin_bottom) } else { (20.0, 40.0) };
+        PageStyle {
+            margin_top: top + own_top,
+            margin_bottom: bottom + own_bottom,
+            inset_top: top,
+            inset_bottom: bottom,
+            running_head,
+            ..self
         }
     }
 
