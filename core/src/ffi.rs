@@ -1381,6 +1381,18 @@ pub unsafe extern "C" fn forzac_minutes_left(doc: *const Document, at: ForzacLoc
     unsafe { &*doc }.book.minutes_left(at.into()) as u32
 }
 
+/// The menu's line of time left from `at` to the end of its chapter, or of the book with `book`, in the interface
+/// language ("7 min left in chapter", "3 h 25 min left in book"); valid until the next string from the document.
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_time_left(doc: *mut Document, at: ForzacLocator, book: bool) -> *const c_char {
+    let doc = unsafe { &mut *doc };
+    let minutes = if book { doc.book.book_minutes_left(at.into()) } else { doc.book.minutes_left(at.into()) };
+    doc.text(Some(&crate::model::time_left(minutes, book)))
+}
+
 /// Sets the interface language from the preferred languages, comma separated, preferred first (`ru-RU,en`).
 ///
 /// # Safety

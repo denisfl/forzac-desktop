@@ -638,6 +638,10 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Page {n} of {m}", "Страница {n} из {m}"),
     ("{n} min left in chapter", "{n} мин до конца главы"),
     ("Less than a minute left in chapter", "Меньше минуты до конца главы"),
+    ("{n} min left in book", "{n} мин до конца книги"),
+    ("{h} h left in book", "{h} ч до конца книги"),
+    ("{h} h {m} min left in book", "{h} ч {m} мин до конца книги"),
+    ("Less than a minute left in book", "Меньше минуты до конца книги"),
     ("Text settings", "Настройки текста"),
     ("p. {n}", "стр. {n}"),
     // Settings.

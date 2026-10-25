@@ -198,15 +198,50 @@ impl Book {
 
     /// Minutes of reading from `at` to the end of its chapter: its characters at 1000 a minute, rounded.
     pub fn minutes_left(&self, at: Locator) -> usize {
+        (self.chars_left(at) + CHARS_PER_MINUTE / 2) / CHARS_PER_MINUTE
+    }
+
+    /// Minutes of reading from `at` to the end of the book, the same way (Android's line under the chapter's).
+    pub fn book_minutes_left(&self, at: Locator) -> usize {
+        let after: usize = self.chapters.iter().skip(at.chapter + 1).flat_map(|c| &c.blocks).map(block_chars).sum();
+        (self.chars_left(at) + after + CHARS_PER_MINUTE / 2) / CHARS_PER_MINUTE
+    }
+
+    /// Characters from `at` to the end of its chapter.
+    fn chars_left(&self, at: Locator) -> usize {
         let Some(chapter) = self.chapters.get(at.chapter) else { return 0 };
-        let chars = |b: &Block| b.texts().iter().map(|t| t.text.chars().count()).sum::<usize>();
         let here = chapter.blocks.get(at.block).map_or(0, |b| match b.text() {
             Some(t) => t.text.get(at.offset.min(t.text.len())..).map_or(0, |rest| rest.chars().count()),
-            None => chars(b),
+            None => block_chars(b),
         });
-        let after: usize = chapter.blocks.iter().skip(at.block + 1).map(chars).sum();
-        (here + after + CHARS_PER_MINUTE / 2) / CHARS_PER_MINUTE
+        here + chapter.blocks.iter().skip(at.block + 1).map(block_chars).sum::<usize>()
     }
+}
+
+/// The menu's line of time left, `minutes` of reading: in the chapter ("7 min left in chapter", "Less than a minute
+/// left in chapter") or, with `book`, in the book, in hours from an hour on ("3 h 25 min left in book", "2 h left in
+/// book"), as Android's `ReaderMenu`.
+pub fn time_left(minutes: usize, book: bool) -> String {
+    time_left_in(crate::i18n::language(), minutes, book)
+}
+
+/// The same in `language`.
+pub fn time_left_in(language: crate::i18n::Language, minutes: usize, book: bool) -> String {
+    let tr = |english| crate::i18n::tr_in(language, english);
+    let (n, h, m) = (minutes.to_string(), (minutes / 60).to_string(), (minutes % 60).to_string());
+    match (book, minutes) {
+        (false, 0) => tr("Less than a minute left in chapter").to_owned(),
+        (false, _) => crate::i18n::fill(tr("{n} min left in chapter"), &[("n", &n)]),
+        (true, 0) => tr("Less than a minute left in book").to_owned(),
+        (true, 1..60) => crate::i18n::fill(tr("{n} min left in book"), &[("n", &n)]),
+        (true, _) if minutes.is_multiple_of(60) => crate::i18n::fill(tr("{h} h left in book"), &[("h", &h)]),
+        (true, _) => crate::i18n::fill(tr("{h} h {m} min left in book"), &[("h", &h), ("m", &m)]),
+    }
+}
+
+/// The characters of a block's texts.
+fn block_chars(b: &Block) -> usize {
+    b.texts().iter().map(|t| t.text.chars().count()).sum()
 }
 
 /// The byte ranges of `t`'s note markers.
@@ -432,6 +467,19 @@ mod tests {
     }
 
     #[test]
+    fn time_left_as_androids_menu() {
+        let en = |m, book| time_left_in(crate::i18n::Language::English, m, book);
+        let ru = |m, book| time_left_in(crate::i18n::Language::Russian, m, book);
+        assert_eq!(en(7, false), "7 min left in chapter");
+        assert_eq!(ru(0, false), "Меньше минуты до конца главы");
+        assert_eq!(
+            [en(0, true), en(45, true), en(120, true), en(205, true)],
+            ["Less than a minute left in book", "45 min left in book", "2 h left in book", "3 h 25 min left in book"]
+        );
+        assert_eq!([ru(59, true), ru(60, true), ru(61, true)], ["59 мин до конца книги", "1 ч до конца книги", "1 ч 1 мин до конца книги"]);
+    }
+
+    #[test]
     fn time_left_and_section() {
         let para = |text: String| Block::Paragraph { text: StyledText { text, styles: Vec::new() }, kind: Kind::Body };
         let book = Book {
@@ -444,6 +492,10 @@ mod tests {
         assert_eq!(book.minutes_left(at(0, 0)), 4, "3500 characters");
         assert_eq!(book.minutes_left(at(0, 1000)), 3, "2500 characters, by characters, not bytes");
         assert_eq!(book.minutes_left(at(1, 1900)), 0, "400 characters");
+        let mut two = book.clone();
+        two.chapters.push(Chapter { title: None, blocks: vec![para("ж".repeat(3000))] });
+        assert_eq!(two.book_minutes_left(at(0, 1000)), 6, "2500 characters here and 3000 in the next chapter");
+        assert_eq!(two.book_minutes_left(Locator { chapter: 1, block: 0, offset: 0 }), 3, "the last chapter alone");
         assert_eq!(book.section_at(at(0, 5)), "Книга", "before the first entry: the book");
         assert_eq!(book.section_at(at(1, 5)), "Вторая часть");
     }

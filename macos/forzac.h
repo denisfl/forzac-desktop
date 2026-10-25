@@ -258,6 +258,9 @@ const uint32_t *forzac_chapter_starts(ForzacDocument *doc, uint32_t *count);
 // The section `at` is in, else the book's title (valid until the next string); minutes left in its chapter.
 const char *forzac_section(ForzacDocument *doc, ForzacLocator at);
 uint32_t forzac_minutes_left(const ForzacDocument *doc, ForzacLocator at);
+// The menu's line of time left from `at` to the end of its chapter, or of the book with `book`, in the interface
+// language ("7 min left in chapter", "3 h 25 min left in book"); valid until the next string from the document.
+const char *forzac_time_left(ForzacDocument *doc, ForzacLocator at, bool book);
 
 // The interface language from the preferred languages, comma separated ("ru-RU,en"); then the catalogue: the Russian
 // of an English string (NULL: keep the English), a count with its noun ("{n} match", "{n} matches"; valid until the
