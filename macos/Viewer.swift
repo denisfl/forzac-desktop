@@ -27,6 +27,8 @@ final class Viewer: NSView {
     /// The image, or the table's tiles in a layer as big as the table.
     private let content = CALayer()
     private var image: CGImage?
+    /// The decoded image: line art is shown in the theme's ink (`image`, made again when the theme changes).
+    private var picture: Picture?
     /// The table typeset for the view at `typesetZoom` in `typesetTheme`: the core's handle, its size and areas.
     private var table: OpaquePointer?
     private var tablePage = ForzacPage()
@@ -65,8 +67,9 @@ final class Viewer: NSView {
         super.init(frame: .zero)
         switch subject {
         case .image(let id):
-            guard let image = page.picture(id) else { return nil }
-            self.image = image
+            guard let picture = page.picture(id) else { return nil }
+            self.picture = picture
+            self.image = tinted(picture, page.palette.ink)
         case .table:
             guard typeset(1) else { return nil }
         }
@@ -133,6 +136,10 @@ final class Viewer: NSView {
         layer!.backgroundColor = color(p.paper)
         closeCircle.layer!.backgroundColor = color(p.sheet)
         close.colour(p)
+        if let picture, picture.ink {
+            image = tinted(picture, p.ink)
+            content.contents = image
+        }
         if !isImage, typesetTheme != page.theme {
             _ = typeset(typesetZoom)
             place(animated: false)
@@ -291,7 +298,7 @@ final class Viewer: NSView {
             l.actions = ["position": NSNull(), "bounds": NSNull(), "contents": NSNull()]
             l.contents = bitmap(CGSize(width: tw, height: th), scale: scale, background: nil) { ctx in
                 ctx.translateBy(x: -tx, y: 0)
-                var pictures: [UnsafeRawPointer: CGImage] = [:]
+                var pictures: [UnsafeRawPointer: Picture] = [:]
                 drawPage(tablePage, in: ctx, height: th + ty, palette: palette, fonts: page.fonts, pictures: &pictures)
             }
             l.contentsScale = scale

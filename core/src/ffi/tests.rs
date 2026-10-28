@@ -557,3 +557,42 @@ fn a_spread_window_paginates_half_pages() {
         forzac_close(doc);
     }
 }
+
+#[test]
+fn svg_images_and_an_svg_cover() {
+    let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 300"><path d="M10 10 L190 290" stroke="#000" stroke-width="6"/></svg>"##;
+    let opf = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+        <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>T</dc:title><dc:language>en</dc:language></metadata>
+        <manifest><item id="t" href="t.xhtml" media-type="application/xhtml+xml"/>
+          <item id="c" href="cover.svg" media-type="image/svg+xml" properties="cover-image"/>
+          <item id="d" href="drawing.svg" media-type="image/svg+xml"/></manifest>
+        <spine><itemref idref="t"/></spine></package>"#;
+    let page = r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><p>Text</p><img src="drawing.svg"/></body></html>"#;
+    let container = r#"<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OPS/content.opf"/></rootfiles></container>"#;
+    let epub = crate::archive::zip(&[
+        ("META-INF/container.xml", container.as_bytes()),
+        ("OPS/content.opf", opf.as_bytes()),
+        ("OPS/t.xhtml", page.as_bytes()),
+        ("OPS/cover.svg", svg.as_bytes()),
+        ("OPS/drawing.svg", svg.as_bytes()),
+    ]);
+    let path = book_file().with_file_name("book.epub");
+    std::fs::write(&path, epub).unwrap();
+    let doc = unsafe { forzac_open(c(path.to_str().unwrap()).as_ptr(), std::ptr::null_mut()) };
+    assert!(!doc.is_null());
+    unsafe {
+        let mut len = 0;
+        let cover = std::slice::from_raw_parts(forzac_cover(doc, &mut len), len);
+        assert!(cover.starts_with(b"\x89PNG"), "an SVG cover comes as a PNG");
+
+        let bytes = forzac_image(doc, c("OPS/drawing.svg").as_ptr(), &mut len);
+        forzac_warm_images(doc, 0, 600, 600);
+        let raster = forzac_svg_raster(bytes, len, 600, 600);
+        assert!(!raster.is_null());
+        assert_eq!(((*raster).width, (*raster).height, (*raster).ink), (400, 600, true));
+        let pixels = std::slice::from_raw_parts((*raster).pixels, 400 * 600 * 4);
+        assert!(forzac_is_ink(pixels.as_ptr(), 400, 600, 400 * 4));
+        forzac_raster_free(raster);
+        forzac_close(doc);
+    }
+}

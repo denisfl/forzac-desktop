@@ -51,7 +51,9 @@ final class PageView: NSView {
     private var images: [UInt32: CGImage] = [:]
     private var pageAreas: [UInt32: [Area]] = [:]
     /// Decoded book images by the address of their bytes (the document keeps them).
-    private var pictures: [UnsafeRawPointer: CGImage] = [:]
+    private var pictures: [UnsafeRawPointer: Picture] = [:]
+    /// The chapter whose SVG images (and its neighbours') the core was last asked to draw ahead.
+    private var warmed: UInt32?
     private let current = CALayer()
     private let previous = CALayer()
     private let focusLayer = CALayer()
@@ -223,6 +225,11 @@ final class PageView: NSView {
         spread = withUnsafePointer(to: settings) { forzac_settings_spread($0, Float(size.width), Float(size.height)) }
         inset = CGFloat(withUnsafePointer(to: settings) { forzac_settings_spread_inset($0, Float(size.width), Float(size.height)) })
         pageCount = withUnsafePointer(to: settings) { forzac_paginate(doc, chapter, Float(size.width), Float(size.height), $0) }
+        if warmed != chapter {
+            warmed = chapter
+            let (w, h) = screenPixels
+            forzac_warm_images(doc, chapter, w, h)
+        }
         var top: Float = 0, line: Float = 0
         forzac_metrics(doc, &top, &line)
         (marginTop, lineHeight) = (CGFloat(top), CGFloat(line))
@@ -1033,14 +1040,11 @@ final class PageView: NSView {
     }
 
     /// Image `id` decoded, from the pages' cache when a page has shown it.
-    func picture(_ id: String) -> CGImage? {
+    func picture(_ id: String) -> Picture? {
         var len = 0
         guard let bytes = forzac_image(doc, id, &len) else { return nil }
         let key = UnsafeRawPointer(bytes)
-        if pictures[key] == nil {
-            let data = Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: key), count: len, deallocator: .none)
-            if let source = CGImageSourceCreateWithData(data as CFData, nil) { pictures[key] = CGImageSourceCreateImageAtIndex(source, 0, nil) }
-        }
+        if pictures[key] == nil { pictures[key] = decodePicture(key, len) }
         return pictures[key]
     }
 

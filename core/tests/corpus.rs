@@ -272,3 +272,74 @@ fn whole_book_page_counts() {
     }
     println!("slowest page count: {:.0} ms, {} pages, {}", slowest.0, slowest.1, slowest.2);
 }
+
+/// Standard Ebooks under `FORZAC_CORPUS` (`se-<author>_<title>.epub` and its `_advanced.epub`): the advanced EPUB reads
+/// as the compatible one, and the markup Standard Ebooks rely on reads as they mean it (`standard-ebooks`).
+#[test]
+fn standard_ebooks() {
+    let Some(books) = corpus() else {
+        eprintln!("skipped: set FORZAC_CORPUS to a directory of books");
+        return;
+    };
+    let name = |p: &PathBuf| p.file_name().unwrap().to_string_lossy().into_owned();
+    let blocks = |b: &Book| b.chapters.iter().flat_map(|c| c.blocks.clone()).collect::<Vec<_>>();
+    // Text without invisible characters: advanced EPUBs keep word joiners and hair spaces the compatible ones drop.
+    let shown = |s: &str| -> String {
+        s.chars().filter(|c| !c.is_whitespace() && !matches!(c, '\u{2060}' | '\u{200B}' | '\u{AD}' | '\u{FEFF}')).collect()
+    };
+    let visible = |b: &Book| shown(&blocks(b).iter().filter_map(|b| b.text().map(|t| t.text.clone())).collect::<String>());
+    let mut pairs = 0;
+    for advanced in books.iter().filter(|p| name(p).starts_with("se-") && name(p).ends_with("_advanced.epub")) {
+        let compatible = advanced.with_file_name(name(advanced).replace("_advanced.epub", ".epub"));
+        let (Ok(a), Ok(c)) = (forzac_core::open(advanced), forzac_core::open(&compatible)) else { continue };
+        pairs += 1;
+        let n = name(advanced);
+        let images = |b: &Book| blocks(b).iter().filter(|b| matches!(b, Block::Image { .. })).count();
+        let titles = |b: &Book| b.toc.iter().map(|e| shown(&e.title)).collect::<Vec<_>>();
+        eprintln!("{n}: {} chapters, {} images, cover {:?}", a.chapters.len(), images(&a), a.cover);
+        assert_eq!(a.chapters.len(), c.chapters.len(), "{n}: chapters");
+        assert!(titles(&a) == titles(&c), "{n}: contents");
+        assert_eq!(images(&a), images(&c), "{n}: images");
+        assert!(a.cover.as_ref().is_some_and(|id| a.images.contains_key(id)), "{n}: a cover");
+        assert!(blocks(&a).iter().all(|b| !matches!(b, Block::Image { id } if !a.images.contains_key(id))), "{n}: every image is there");
+        let (va, vc): (Vec<char>, Vec<char>) = (visible(&a).chars().collect(), visible(&c).chars().collect());
+        if let Some(at) = va.iter().zip(&vc).position(|(x, y)| x != y).or((va.len() != vc.len()).then(|| va.len().min(vc.len()))) {
+            let around = |v: &[char]| v[at.saturating_sub(40)..(at + 40).min(v.len())].iter().collect::<String>();
+            panic!("{n}: text differs at {at}:\n advanced   {}\n compatible {}", around(&va), around(&vc));
+        }
+        let lone_markers = blocks(&a).iter().filter(|b| b.text().is_some_and(|t| t.text.trim() == "•")).count();
+        assert_eq!(lone_markers, 0, "{n}: list markers with their items");
+        assert!(
+            !blocks(&a).iter().filter_map(|b| b.text()).any(|t| t.text.contains(['\u{2E3A}', '\u{2E3B}', '\u{2105}'])),
+            "{n}: rare signs"
+        );
+        let kinds = |kind: forzac_core::model::Kind| {
+            blocks(&a).iter().filter(|b| matches!(b, Block::Paragraph { kind: k, .. } if *k == kind)).count()
+        };
+        let styled =
+            |style: Style| blocks(&a).iter().filter_map(|b| b.text()).filter(|t| t.styles.iter().any(|s| s.style == style)).count();
+        eprintln!(
+            "  verse {}, cite {}, small caps {}, strong {}",
+            kinds(forzac_core::model::Kind::Verse),
+            kinds(forzac_core::model::Kind::Cite),
+            styled(Style::SmallCaps),
+            styled(Style::Strong)
+        );
+        if n.contains("john-keats") {
+            assert_eq!(a.chapters.len(), 133, "Keats: a chapter a poem");
+            assert!(kinds(forzac_core::model::Kind::Verse) > 750, "Keats: stanzas are verse");
+        }
+        if n.contains("alices-adventures") {
+            assert_eq!(images(&a), 44, "Alice: 44 pictures");
+            assert_eq!(a.images[a.cover.as_ref().unwrap()].content_type, "image/svg+xml");
+        }
+        if n.contains("dracula") {
+            assert!(kinds(forzac_core::model::Kind::Cite) < 300, "Dracula: the diaries are text, the letters quotations");
+        }
+        if n.contains("flatland") {
+            assert!(a.chapters.iter().any(|c| c.title.as_deref() == Some("I. Of the Nature of Flatland")));
+            assert!(styled(Style::SmallCaps) > 0, "Flatland: small capitals");
+        }
+    }
+    eprintln!("{pairs} pairs of Standard Ebooks");
+}

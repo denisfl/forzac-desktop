@@ -140,6 +140,7 @@ ForzacLocator forzac_flow_locator(ForzacDocument *doc, uint32_t chapter, float y
 // Contents, valid until the document is closed.
 const ForzacTocEntry *forzac_contents(ForzacDocument *doc, uint32_t *count);
 float forzac_progress(const ForzacDocument *doc, ForzacLocator at);
+// The cover's bytes: a raster image, or an SVG cover drawn into a PNG of at most 352 × 528; NULL when there is none.
 const uint8_t *forzac_cover(const ForzacDocument *doc, size_t *len);
 // A note for a panel `width` wide into *out; returns its height, negative when there is no such note.
 float forzac_note(ForzacDocument *doc, const char *id, float width, const ForzacSettings *settings, ForzacPage *out);
@@ -154,6 +155,20 @@ float forzac_link_preview(ForzacDocument *doc, const char *key, float width, con
 ForzacPage forzac_end_page(ForzacDocument *doc);
 // An image's file bytes (the target of a kind 2 area; the same pointer pages give); NULL when there is no such image.
 const uint8_t *forzac_image(const ForzacDocument *doc, const char *id, size_t *len);
+// An SVG drawn to fit max_w × max_h pixels (the screen): premultiplied RGBA, rows width * 4 bytes apart; `ink` a line
+// drawing, drawn in the theme's ink. NULL when the bytes are not an SVG. Kept by the core: slow only the first time.
+typedef struct {
+    const uint8_t *pixels;
+    uint32_t width;
+    uint32_t height;
+    bool ink;
+} ForzacRaster;
+ForzacRaster *forzac_svg_raster(const uint8_t *bytes, size_t len, uint32_t max_w, uint32_t max_h);
+void forzac_raster_free(ForzacRaster *raster);
+// Whether decoded pixels (premultiplied RGBA, rows `stride` bytes apart) are line art, drawn in the theme's ink.
+bool forzac_is_ink(const uint8_t *pixels, uint32_t width, uint32_t height, size_t stride);
+// Draws the SVG images of `chapter` and its neighbours on a thread of the core's, so turning to them is quick.
+void forzac_warm_images(const ForzacDocument *doc, uint32_t chapter, uint32_t max_w, uint32_t max_h);
 // A table typeset for the view (the `at` of a kind 3 area) at `zoom` times the text size; NULL when `at` is not a
 // table's first row. Its page is drawn from the origin, *width × *height, and stays valid until the table is freed.
 typedef struct ForzacTable ForzacTable;

@@ -254,7 +254,7 @@ fn several_images_are_not_a_cover() {
 }
 
 #[test]
-fn mislabelled_raster_images_are_recognised_by_content() {
+fn mislabelled_images_are_recognised_by_content() {
     let mut e = docs(&[(
         "a.xhtml",
         r#"<p>Схема</p><p><img src="img/1.jpg"/><img src="img/2.png"/><img src="img/3.gif"/><img src="img/4.webp"/></p>"#,
@@ -282,6 +282,7 @@ fn mislabelled_raster_images_are_recognised_by_content() {
             ("OPS/img/2.png", "image/png"),
             ("OPS/img/3.gif", "image/gif"),
             ("OPS/img/4.webp", "image/webp"),
+            ("OPS/img/5.svg", "image/svg+xml"),
             ("OPS/img/cover.jpg", "image/jpeg"),
         ]
     );
@@ -591,3 +592,200 @@ fn truncated_document_keeps_what_was_read() {
     let b = book(docs(&[("a.xhtml", "<h1>Глава</h1><p>Первый абзац.</p><p>Обрыв посреди")]));
     assert_eq!(texts(&b)[0], "Первый абзац.");
 }
+
+// region Standard Ebooks (`standard-ebooks`)
+
+fn blocks(book: &Book) -> Vec<&Block> {
+    book.chapters.iter().flat_map(|c| &c.blocks).collect()
+}
+
+fn headings(book: &Book) -> Vec<(&str, u32)> {
+    blocks(book)
+        .into_iter()
+        .filter_map(|b| if let Block::Heading { text, level } = b { Some((text.text.as_str(), *level)) } else { None })
+        .collect()
+}
+
+#[test]
+fn svg_images_and_cover() {
+    let mut e = docs(&[("a.xhtml", r#"<p>Text</p><figure><img src="img/illustration-1.svg"/></figure>"#)]);
+    e.manifest = r#"<item id="i1" href="img/illustration-1.svg" media-type="image/svg+xml"/>
+        <item id="cover-svg" href="img/cover.svg" media-type="image/svg+xml" properties="cover-image"/>"#
+        .into();
+    let svg = br#"<?xml version="1.0" encoding="utf-8"?><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 741 1089"/>"#;
+    e.binaries = vec![("OPS/img/illustration-1.svg", svg.to_vec()), ("OPS/img/cover.svg", svg.to_vec())];
+    let b = book(e);
+    assert!(blocks(&b).contains(&&Block::Image { id: "OPS/img/illustration-1.svg".into() }));
+    assert_eq!(b.images["OPS/img/illustration-1.svg"].content_type, "image/svg+xml");
+    assert_eq!(b.cover.as_deref(), Some("OPS/img/cover.svg"));
+}
+
+#[test]
+fn svg_document_in_the_spine_is_read_as_a_document() {
+    let opf = r#"<?xml version="1.0" encoding="utf-8"?>
+        <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+          <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>T</dc:title><dc:language>en</dc:language></metadata>
+          <manifest>
+            <item id="t" href="text.xhtml" media-type="application/xhtml+xml"/>
+            <item id="s" href="page.svg" media-type="image/svg+xml"/>
+            <item id="p1" href="p1.jpg" media-type="image/jpeg"/>
+          </manifest>
+          <spine><itemref idref="t"/><itemref idref="s"/></spine>
+        </package>"#;
+    let page = xhtml("<p>Text.</p>");
+    let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><image xlink:href="p1.jpg"/></svg>"#;
+    let b = parse(&zip(&[
+        ("META-INF/container.xml", CONTAINER_XML.as_bytes()),
+        ("OPS/content.opf", opf.as_bytes()),
+        ("OPS/text.xhtml", page.as_bytes()),
+        ("OPS/page.svg", svg.as_bytes()),
+        ("OPS/p1.jpg", b"\xFF\xD8\xFF\xE0 jpeg"),
+    ]))
+    .unwrap();
+    assert!(blocks(&b).contains(&&Block::Image { id: "OPS/p1.jpg".into() }));
+    assert!(!b.images.contains_key("OPS/page.svg"), "a document, not an image");
+}
+
+#[test]
+fn rare_dashes_replaced() {
+    let mut e = docs(&[("a.xhtml", "<p>it⸺(not under your <i>Protection⸻</i> ℅ Mr. Shandy</p>")]);
+    e.ncx = vec![("To ⸻", "a.xhtml")];
+    let b = book(e);
+    let (text, _) = paragraphs(&b)[0];
+    assert_eq!(text.text, "it——(not under your Protection——— c/o Mr. Shandy");
+    assert_eq!(span(text, Style::Emphasis), "Protection———", "styles keep their letters");
+    assert_eq!(b.toc[0].title, "To ———");
+}
+
+#[test]
+fn verse_by_epub_type() {
+    let b = book(docs(&[(
+        "a.xhtml",
+        r#"<article epub:type="z3998:poem"><h2>Imitation of Spenser</h2><p><span>Now Morning from her orient chamber came,</span><br/>
+            <span>And her first footsteps touch’d a verdant hill;</span></p></article>
+           <blockquote epub:type="z3998:verse"><p><span>A song</span></p></blockquote>
+           <p>Prose.</p>"#,
+    )]));
+    let p = paragraphs(&b);
+    assert_eq!(p[0].0.text, "Now Morning from her orient chamber came,\nAnd her first footsteps touch’d a verdant hill;");
+    assert_eq!(p.iter().map(|(_, k)| *k).collect::<Vec<_>>(), [Kind::Verse, Kind::Verse, Kind::Body]);
+}
+
+#[test]
+fn diary_is_text_letter_inside_is_quote() {
+    let b = book(docs(&[(
+        "a.xhtml",
+        r#"<blockquote epub:type="z3998:diary-entry"><p>3 May. Bistritz.</p>
+            <blockquote epub:type="z3998:letter"><p>My Friend.</p></blockquote></blockquote>"#,
+    )]));
+    assert_eq!(
+        paragraphs(&b).iter().map(|(t, k)| (t.text.as_str(), *k)).collect::<Vec<_>>(),
+        [("3 May. Bistritz.", Kind::Body), ("My Friend.", Kind::Cite)]
+    );
+}
+
+#[test]
+fn titlepage_with_image_is_a_picture() {
+    let poems: String = (1..=3)
+        .map(|i| format!(r#"<article id="p{i}" epub:type="z3998:poem"><h2>Poem {i}</h2><p><span>Line {i}</span></p></article>"#))
+        .collect();
+    let mut e = docs(&[
+        (
+            "titlepage.xhtml",
+            r#"<section id="titlepage" epub:type="titlepage"><h1 epub:type="title">Poetry</h1><p>By <b epub:type="z3998:personal-name">John Keats</b>.</p><img src="img/titlepage.svg"/></section>"#,
+        ),
+        ("poetry.xhtml", &format!(r#"<section id="poetry" epub:type="bodymatter z3998:fiction">{poems}</section>"#)),
+    ]);
+    e.ncx =
+        vec![("Titlepage", "titlepage.xhtml"), ("Poem 1", "poetry.xhtml#p1"), ("Poem 2", "poetry.xhtml#p2"), ("Poem 3", "poetry.xhtml#p3")];
+    let b = book(e);
+    assert_eq!(b.chapters.iter().map(|c| c.title.as_deref().unwrap_or("")).collect::<Vec<_>>(), ["Poem 1", "Poem 2", "Poem 3"]);
+    assert!(!texts(&b).iter().any(|t| t.contains("Keats")), "the title page's caption is not in the book");
+}
+
+#[test]
+fn titlepage_without_image_keeps_its_text() {
+    let b =
+        book(docs(&[("a.xhtml", r#"<section epub:type="titlepage"><h1>Poetry</h1><p>By John Keats.</p></section><h1>I</h1><p>Text</p>"#)]));
+    assert_eq!(texts(&b)[0], "By John Keats.");
+}
+
+#[test]
+fn hgroup_subtitle_is_a_lower_heading() {
+    let b = book(docs(&[(
+        "a.xhtml",
+        r#"<hgroup><h2 epub:type="ordinal">I</h2><p epub:type="title">Of the Nature of Flatland</p></hgroup><p>I call our world Flatland.</p>
+           <hgroup><p>A Romance of Many Dimensions</p></hgroup>"#,
+    )]));
+    assert_eq!(headings(&b), [("I", 1), ("Of the Nature of Flatland", 2)]);
+    assert_eq!(b.chapters[0].title.as_deref(), Some("I. Of the Nature of Flatland"));
+    assert_eq!(
+        paragraphs(&b)[1],
+        (&StyledText { text: "A Romance of Many Dimensions".into(), styles: vec![] }, Kind::Subtitle),
+        "no heading before it"
+    );
+}
+
+#[test]
+fn hidden_is_not_shown() {
+    let b = book(docs(&[(
+        "a.xhtml",
+        r#"<hgroup><h2>Sonnet</h2><p hidden="hidden" epub:type="subtitle">Happy Is England!</p></hgroup><p>Text</p>"#,
+    )]));
+    assert_eq!(headings(&b), [("Sonnet", 1)]);
+    assert_eq!(texts(&b), ["Text"]);
+}
+
+#[test]
+fn list_marker_joins_the_item_paragraph() {
+    let b = book(docs(&[("a.xhtml", "<ul><li><p>Claudius, king of Denmark</p></li><li><p>Hamlet</p></li></ul>")]));
+    assert_eq!(texts(&b), ["• Claudius, king of Denmark", "• Hamlet"]);
+}
+
+#[test]
+fn verse_line_indent() {
+    let b = book(docs(&[(
+        "a.xhtml",
+        r#"<article epub:type="z3998:poem"><p><span>Now Morning</span><br/>
+            <span class="i1">And her first</span><br/><span class="i2">footsteps</span></p></article>
+           <p><span class="i1">Prose</span></p>"#,
+    )]));
+    assert_eq!(texts(&b), ["Now Morning\n\u{2003}And her first\n\u{2003}\u{2003}footsteps", "Prose"]);
+}
+
+#[test]
+fn small_caps_from_standard_ebooks_css() {
+    let mut e = docs(&[("a.xhtml", "<p>By <b>John Keats</b>.</p><p><strong>Strong</strong></p>")]);
+    e.css = "b, strong { font-variant: small-caps; font-weight: normal; }";
+    let b = book(e);
+    let (text, _) = paragraphs(&b)[0];
+    assert_eq!(span(text, Style::SmallCaps), "John Keats");
+    assert!(!text.styles.iter().any(|s| s.style == Style::Strong), "no bold");
+    assert_eq!(span(paragraphs(&b)[1].0, Style::SmallCaps), "Strong");
+}
+
+#[test]
+fn small_caps_class_and_bold_small_caps() {
+    let mut e = docs(&[(
+        "a.xhtml",
+        r#"<p><span class="smcap">Chapter</span> One</p><p><b>Bold caps</b></p><p><i class="smcap">Italic caps</i></p>"#,
+    )]);
+    e.css = ".smcap { font-variant: small-caps; } b { font-variant: small-caps }";
+    let b = book(e);
+    let p = paragraphs(&b);
+    assert_eq!(span(p[0].0, Style::SmallCaps), "Chapter");
+    assert_eq!((span(p[1].0, Style::SmallCaps), span(p[1].0, Style::Strong)), ("Bold caps", "Bold caps"), "the weight stays");
+    assert_eq!((span(p[2].0, Style::SmallCaps), span(p[2].0, Style::Emphasis)), ("Italic caps", "Italic caps"));
+}
+
+#[test]
+fn plain_bold_stays_bold() {
+    let mut e = docs(&[("a.xhtml", "<p><b>Внимание</b></p>")]);
+    e.css = "p { font-variant: small-caps } b.x { font-weight: normal }";
+    let b = book(e);
+    let (text, _) = paragraphs(&b)[0];
+    assert_eq!(span(text, Style::Strong), "Внимание");
+    assert!(!text.styles.iter().any(|s| s.style == Style::SmallCaps));
+}
+
+// endregion

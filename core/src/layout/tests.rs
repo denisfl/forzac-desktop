@@ -592,3 +592,74 @@ fn tasks_are_boxes_and_done_ones_muted() {
     assert_eq!(line.strokes.iter().find(|s| s.shape != Shape::Fill).map(|s| (s.shape, s.ink)), Some((Shape::Checked, Ink::Text)));
     assert!(line.runs.iter().all(|r| r.ink == Ink::Secondary), "a done task's text muted");
 }
+
+fn styled(text: &str, kind: Kind, styles: Vec<StyleRange>) -> Block {
+    Block::Paragraph { text: StyledText { text: text.into(), styles }, kind }
+}
+
+fn first_x(line: &Line) -> f32 {
+    line.glyphs.first().map_or(0.0, |g| g.1)
+}
+
+#[test]
+fn the_first_line_indent_is_the_first_lines_only() {
+    let style = PageStyle::for_window(600.0, 900.0, 20.0);
+    let mut t = typesetter(style);
+    let b = book(vec![paragraph("To\nThe Inhabitants of Space\nAnd H. C.")]);
+    let layout = t.layout(&b.chapters[0].blocks[0], &b).unwrap();
+    let xs: Vec<f32> = text_of(&layout).lines.iter().map(first_x).collect();
+    assert_eq!(xs, [30.0, 0.0, 0.0], "an indent of 1.5 em, then lines after a break at the edge");
+}
+
+#[test]
+fn a_long_verse_line_goes_on_one_em_right_of_its_start() {
+    let style = PageStyle::for_window(600.0, 900.0, 20.0);
+    let mut t = typesetter(style);
+    let long = "And her first footsteps touch’d a verdant hill, crowning its lawny crest with amber flame, silv’ring the untainted gushes of its rill";
+    let b = book(vec![styled(&format!("Now Morning\n\u{2003}{long}\nShort"), Kind::Verse, vec![])]);
+    let layout = t.layout(&b.chapters[0].blocks[0], &b).unwrap();
+    let lines = &text_of(&layout).lines;
+    assert!(lines.len() >= 4, "the long line wraps");
+    let xs: Vec<f32> = lines.iter().map(first_x).collect();
+    assert_eq!(xs[0], 0.0);
+    assert_eq!(xs[1], 20.0, "an indented line 1 em in");
+    assert!(lines[1].runs.iter().flat_map(|r| &r.glyphs).all(|&g| g != 0), "the em space is room, not a missing glyph");
+    assert_eq!(xs[2], 40.0, "its wrapped part 2 em in");
+    assert_eq!(*xs.last().unwrap(), 0.0, "the next line at the edge");
+}
+
+#[test]
+fn small_capitals_of_the_font_or_reduced_capitals() {
+    let mut style = PageStyle::for_window(600.0, 900.0, 20.0);
+    let text = "By John Keats.";
+    let name = text.find("John").unwrap()..text.find('.').unwrap();
+    let caps = vec![StyleRange { start: name.start, end: name.end, style: Style::SmallCaps, target: None }];
+    let b = book(vec![paragraph(text), styled(text, Kind::Body, caps)]);
+    let runs = |style: PageStyle, block: usize| {
+        let mut t = typesetter(style);
+        let layout = t.layout(&b.chapters[0].blocks[block], &b).unwrap();
+        let line = &text_of(&layout).lines[0];
+        (line.runs.clone(), line.glyphs.iter().map(|g| g.0).collect::<Vec<_>>())
+    };
+
+    // PT Serif has no small capitals: capitals at 0.78 of the size, the text's offsets kept.
+    let (plain, plain_offsets) = runs(style, 0);
+    let (caps, offsets) = runs(style, 1);
+    assert_eq!(offsets, plain_offsets, "the same characters at the same offsets");
+    let sizes: Vec<f32> = caps.iter().map(|r| r.size).collect();
+    let small = 20.0 * SMALL_CAPS_SCALE;
+    assert_eq!(sizes, [20.0, small, 20.0, small, 20.0], "By J, ohn, K, eats, the full stop");
+    let mut shaper = crate::fonts::Shaper::new();
+    let o = shaper.shape(Face::Regular.id(), "OHN")[0].id;
+    assert_eq!(caps[1].glyphs[0] as u32, o, "a capital O");
+    assert_ne!(plain.len(), caps.len());
+
+    // Literata has them: one size, the font's own glyphs.
+    crate::fonts::set_assets(std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../assets")));
+    style.family = Family::Literata;
+    let (plain, _) = runs(style, 0);
+    let (caps, _) = runs(style, 1);
+    assert!(caps.iter().all(|r| r.size == 20.0));
+    assert_eq!(caps.iter().map(|r| r.glyphs.len()).sum::<usize>(), plain.iter().map(|r| r.glyphs.len()).sum::<usize>());
+    assert_ne!(caps[0].glyphs, plain[0].glyphs, "small capital glyphs");
+}

@@ -799,7 +799,8 @@ fn cover(book: &forzac_core::Book) -> gtk::Widget {
         .cover
         .as_ref()
         .and_then(|id| book.images.get(id))
-        .and_then(|i| gdk::Texture::from_bytes(&glib::Bytes::from(&i.bytes[..])).ok());
+        .map(|i| forzac_core::images::png(&i.bytes, 352, 528).unwrap_or_else(|| i.bytes.clone()))
+        .and_then(|bytes| gdk::Texture::from_bytes(&glib::Bytes::from_owned(bytes)).ok());
     let widget: gtk::Widget = match picture {
         Some(texture) => {
             // Filling the cover's box, cropped, with rounded corners.

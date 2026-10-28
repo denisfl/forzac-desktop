@@ -154,9 +154,73 @@ final class Fonts {
     }
 }
 
+/// A book image ready to draw, and whether it is line art: dark lines on transparency, drawn in the theme's ink so
+/// that a dark theme shows them (`standard-ebooks`).
+struct Picture {
+    let image: CGImage
+    let ink: Bool
+}
+
+/// The largest screen in pixels: an SVG is drawn to fit it, the size the view fits an image to.
+var screenPixels: (UInt32, UInt32) {
+    let sizes = NSScreen.screens.map { ($0.frame.width * $0.backingScaleFactor, $0.frame.height * $0.backingScaleFactor) }
+    return (UInt32(sizes.map(\.0).max() ?? 2880), UInt32(sizes.map(\.1).max() ?? 1800))
+}
+
+/// A book image's bytes (`len` of them, owned by the document) decoded: an SVG drawn by the core, anything else by
+/// Image I/O; nil when it cannot be.
+func decodePicture(_ bytes: UnsafeRawPointer, _ len: Int) -> Picture? {
+    let (w, h) = screenPixels
+    if let r = forzac_svg_raster(bytes.assumingMemoryBound(to: UInt8.self), len, w, h) {
+        defer { forzac_raster_free(r) }
+        let raster = r.pointee
+        let (rw, rh) = (Int(raster.width), Int(raster.height))
+        guard let provider = CGDataProvider(data: Data(bytes: raster.pixels, count: rw * rh * 4) as CFData),
+              let image = CGImage(width: rw, height: rh, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: rw * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue), provider: provider, decode: nil,
+                                  shouldInterpolate: true, intent: .defaultIntent) else { return nil }
+        return Picture(image: image, ink: raster.ink)
+    }
+    let data = Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: bytes), count: len, deallocator: .none)
+    guard let source = CGImageSourceCreateWithData(data as CFData, nil), let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+    return Picture(image: image, ink: isInk(image))
+}
+
+/// Whether a decoded image is line art: the core's test on at most 64 × 64 of its pixels; an image without alpha is not.
+private func isInk(_ image: CGImage) -> Bool {
+    guard ![.none, .noneSkipLast, .noneSkipFirst].contains(image.alphaInfo) else { return false }
+    let (w, h) = (min(image.width, 64), min(image.height, 64))
+    guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+    ctx.interpolationQuality = .none
+    ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+    guard let pixels = ctx.data else { return false }
+    return forzac_is_ink(pixels.assumingMemoryBound(to: UInt8.self), UInt32(w), UInt32(h), w * 4)
+}
+
+/// Draws `picture` into `r` of `ctx`: line art in `ink`, keeping its pixels' opacity; anything else as it is.
+func draw(_ picture: Picture, in r: CGRect, of ctx: CGContext, ink: CGColor) {
+    guard picture.ink else { return ctx.draw(picture.image, in: r) }
+    ctx.saveGState()
+    ctx.beginTransparencyLayer(in: r, auxiliaryInfo: nil)
+    ctx.draw(picture.image, in: r)
+    ctx.setBlendMode(.sourceIn)
+    ctx.setFillColor(ink)
+    ctx.fill(r)
+    ctx.endTransparencyLayer()
+    ctx.restoreGState()
+}
+
+/// Line art in `ink`, for a layer that shows it (the view); anything else as it is.
+func tinted(_ picture: Picture, _ ink: UInt32) -> CGImage {
+    guard picture.ink else { return picture.image }
+    let size = CGSize(width: picture.image.width, height: picture.image.height)
+    return bitmap(size, scale: 1, background: nil) { draw(picture, in: CGRect(origin: .zero, size: size), of: $0, ink: color(ink)) } ?? picture.image
+}
+
 /// Draws a typeset page (or a slice of a column, or a note) into `ctx`, whose height is `h`: images, table rules and
 /// glyph runs in `palette`. `pictures` caches decoded book images by the address of their bytes.
-func drawPage(_ page: ForzacPage, in ctx: CGContext, height h: CGFloat, palette: Palette, fonts: Fonts, pictures: inout [UnsafeRawPointer: CGImage]) {
+func drawPage(_ page: ForzacPage, in ctx: CGContext, height h: CGFloat, palette: Palette, fonts: Fonts, pictures: inout [UnsafeRawPointer: Picture]) {
     ctx.setAllowsFontSubpixelPositioning(true)
     ctx.setShouldSubpixelPositionFonts(true)
     ctx.interpolationQuality = .high
@@ -165,11 +229,8 @@ func drawPage(_ page: ForzacPage, in ctx: CGContext, height h: CGFloat, palette:
     for i in 0..<Int(page.image_count) {
         let image = page.images[i]
         let key = UnsafeRawPointer(image.bytes!)
-        if pictures[key] == nil {
-            let data = Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: key), count: image.len, deallocator: .none)
-            if let source = CGImageSourceCreateWithData(data as CFData, nil) { pictures[key] = CGImageSourceCreateImageAtIndex(source, 0, nil) }
-        }
-        if let picture = pictures[key] { ctx.draw(picture, in: flipped(image.rect)) }
+        if pictures[key] == nil { pictures[key] = decodePicture(key, image.len) }
+        if let picture = pictures[key] { draw(picture, in: flipped(image.rect), of: ctx, ink: color(palette.ink)) }
     }
     for i in 0..<Int(page.rule_count) {
         let rule = page.rules[i]

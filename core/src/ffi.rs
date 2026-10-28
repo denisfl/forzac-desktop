@@ -6,7 +6,7 @@
 
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::fonts::{self, Family, FontId, FontSource};
 use crate::hyphen::Hyphenator;
@@ -14,7 +14,7 @@ use crate::layout::{
     BookPages, ChapterLayout, CountControl, PageContent, PageStyle, Rect, TableView, Target, Typesetter, end_page, layout_note,
     layout_preview, layout_table, paginate,
 };
-use crate::model::{Book, LinkTarget, Locator};
+use crate::model::{Block, Book, LinkTarget, Locator};
 use crate::settings::{Align, Margins, Setting, Settings, Spacing, TEXT_SIZES, THEMES, Turning};
 
 #[repr(C)]
@@ -223,6 +223,8 @@ pub struct Document {
     reading: crate::log::Reading,
     /// The end page's totals ([`forzac_state_end_lines`]).
     end_lines: crate::layout::EndLines,
+    /// An SVG cover as a PNG of a thumbnail's size, made when first asked for ([`forzac_cover`]).
+    cover_png: OnceLock<Option<Vec<u8>>>,
 }
 
 /// A page's contents as the C arrays a [`ForzacPage`] points to.
@@ -406,6 +408,7 @@ pub unsafe extern "C" fn forzac_open(path: *const c_char, error: *mut u32) -> *m
         chapter_starts: Vec::new(),
         reading: crate::log::Reading::new(crate::sync::now()),
         end_lines: crate::layout::EndLines::default(),
+        cover_png: OnceLock::new(),
     }))
 }
 
@@ -628,16 +631,24 @@ pub unsafe extern "C" fn forzac_progress(doc: *const Document, at: ForzacLocator
     crate::state::progress(&unsafe { &*doc }.book, at.into())
 }
 
-/// The cover image's file bytes (owned by the document); null when the book has none.
+/// The cover image's file bytes (owned by the document): a raster image's own, an SVG drawn into a PNG of at most
+/// 352 × 528 (a thumbnail's size); null when the book has none.
 ///
 /// # Safety
 /// `doc` must come from [`forzac_open`]; `len` must be writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn forzac_cover(doc: *const Document, len: *mut usize) -> *const u8 {
-    let book = &unsafe { &*doc }.book;
+    let doc = unsafe { &*doc };
+    let book = &doc.book;
     let Some(image) = book.cover.as_ref().and_then(|id| book.images.get(id)) else { return std::ptr::null() };
-    unsafe { *len = image.bytes.len() };
-    image.bytes.as_ptr()
+    let bytes = if image.content_type == "image/svg+xml" {
+        let Some(png) = doc.cover_png.get_or_init(|| crate::images::png(&image.bytes, 352, 528)) else { return std::ptr::null() };
+        png
+    } else {
+        &image.bytes
+    };
+    unsafe { *len = bytes.len() };
+    bytes.as_ptr()
 }
 
 /// Note `id` typeset for a panel `width` wide (the design's note style for `settings`) into `*out`; returns its
@@ -709,6 +720,78 @@ pub unsafe extern "C" fn forzac_image(doc: *const Document, id: *const c_char, l
     let Some(image) = book.images.get(unsafe { str(id) }.as_ref()) else { return std::ptr::null() };
     unsafe { *len = image.bytes.len() };
     image.bytes.as_ptr()
+}
+
+/// An SVG drawn into pixels ([`forzac_svg_raster`]): premultiplied RGBA, rows `width * 4` bytes apart.
+#[repr(C)]
+pub struct ForzacRaster {
+    pub pixels: *const u8,
+    pub width: u32,
+    pub height: u32,
+    /// A line drawing, to draw in the theme's ink.
+    pub ink: bool,
+}
+
+/// SVG `bytes` drawn to fit `max_w` × `max_h` pixels (the screen; see `images::raster`); null when they are not an
+/// SVG or cannot be read. Kept by the core, so drawing it again is quick; slow the first time for a heavy drawing.
+/// Free it with [`forzac_raster_free`].
+///
+/// # Safety
+/// `bytes` must point to `len` readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_svg_raster(bytes: *const u8, len: usize, max_w: u32, max_h: u32) -> *mut ForzacRaster {
+    let bytes = unsafe { std::slice::from_raw_parts(bytes, len) };
+    let Some(raster) = crate::images::raster(bytes, max_w, max_h) else { return std::ptr::null_mut() };
+    let c = ForzacRaster { pixels: raster.pixels.as_ptr(), width: raster.width, height: raster.height, ink: raster.ink };
+    Box::into_raw(Box::new(OwnedRaster { c, raster })).cast()
+}
+
+/// What [`forzac_svg_raster`] returns: the struct first, so its pointer is the box's, and the raster it points into.
+#[repr(C)]
+struct OwnedRaster {
+    c: ForzacRaster,
+    raster: Arc<crate::images::Raster>,
+}
+
+/// # Safety
+/// `raster` must come from [`forzac_svg_raster`] (or be null) and not be used again.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_raster_free(raster: *mut ForzacRaster) {
+    if !raster.is_null() {
+        drop(unsafe { Box::from_raw(raster.cast::<OwnedRaster>()) });
+    }
+}
+
+/// Whether decoded pixels (premultiplied RGBA, rows `stride` bytes apart) are line art, to draw in the theme's ink.
+///
+/// # Safety
+/// `pixels` must point to `height * stride` readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_is_ink(pixels: *const u8, width: u32, height: u32, stride: usize) -> bool {
+    crate::images::is_ink(unsafe { std::slice::from_raw_parts(pixels, height as usize * stride) }, width, height, stride)
+}
+
+/// Draws the SVG images of chapter `chapter` and its neighbours to fit `max_w` × `max_h` on a thread of their own, so
+/// that turning to them finds them drawn ([`forzac_svg_raster`]).
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_warm_images(doc: *const Document, chapter: u32, max_w: u32, max_h: u32) {
+    let book = unsafe { &*doc }.book.clone();
+    // The chapter's own first, then the next, then the one before.
+    let near = [Some(chapter as usize), Some(chapter as usize + 1), (chapter as usize).checked_sub(1)];
+    let ids: Vec<String> = near
+        .into_iter()
+        .flatten()
+        .filter_map(|c| book.chapters.get(c))
+        .flat_map(|c| &c.blocks)
+        .filter_map(|b| if let Block::Image { id } = b { Some(id.clone()) } else { None })
+        .filter(|id| book.images.get(id).is_some_and(|i| i.content_type == "image/svg+xml"))
+        .collect();
+    if !ids.is_empty() {
+        std::thread::spawn(move || ids.iter().for_each(|id| drop(crate::images::raster(&book.images[id].bytes, max_w, max_h))));
+    }
 }
 
 /// A table typeset for the view, owning what its page points to.

@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use harfrust::{Buffer, Direction, Font, Script, ShapeOptions, ShapePlan, ShaperFont};
+use harfrust::{Buffer, Direction, Feature, Font, Script, ShapeOptions, ShapePlan, ShaperFont};
 use read_fonts::TableProvider;
 use read_fonts::types::{NameId, Tag};
 
@@ -349,8 +349,11 @@ pub struct Shaper {
     /// Fonts by id, so registered fonts do not take the registry's lock on every lookup.
     fonts: HashMap<FontId, &'static Font>,
     shapers: HashMap<FontId, ThreadShaper>,
-    plans: HashMap<(FontId, Option<Script>), ShapePlan>,
-    words: HashMap<(FontId, String), Arc<[Glyph]>>,
+    /// Plans and shaped words by font, script and whether the font's small capitals are on.
+    plans: HashMap<(FontId, Option<Script>, bool), ShapePlan>,
+    words: HashMap<(FontId, bool, String), Arc<[Glyph]>>,
+    /// Whether a font has small capitals (OpenType `smcp`).
+    small_caps: HashMap<FontId, bool>,
     buffer: Option<Buffer>,
 }
 
@@ -362,7 +365,14 @@ impl Default for Shaper {
 
 impl Shaper {
     pub fn new() -> Self {
-        Self { fonts: HashMap::new(), shapers: HashMap::new(), plans: HashMap::new(), words: HashMap::new(), buffer: Some(Buffer::new()) }
+        Self {
+            fonts: HashMap::new(),
+            shapers: HashMap::new(),
+            plans: HashMap::new(),
+            words: HashMap::new(),
+            small_caps: HashMap::new(),
+            buffer: Some(Buffer::new()),
+        }
     }
 
     fn font(&mut self, id: FontId) -> &'static Font {
@@ -380,8 +390,25 @@ impl Shaper {
         line.map(|l| (l.ascender.to_f32(), l.descender.to_f32())).unwrap_or((800.0, -200.0))
     }
 
+    /// Whether font `id` has real small capitals (OpenType `smcp`): Literata has them, Source Serif in its roman only.
+    pub fn has_small_caps(&mut self, id: FontId) -> bool {
+        if let Some(&has) = self.small_caps.get(&id) {
+            return has;
+        }
+        let gsub = self.font(id).tables().gsub().ok();
+        let features = gsub.and_then(|g| g.feature_list().ok());
+        let has = features.is_some_and(|list| list.feature_records().iter().any(|r| r.feature_tag() == Tag::new(b"smcp")));
+        self.small_caps.insert(id, has);
+        has
+    }
+
     pub fn shape(&mut self, id: FontId, text: &str) -> Arc<[Glyph]> {
-        if let Some(g) = self.words.get(&(id, text.to_owned())) {
+        self.shape_as(id, text, false)
+    }
+
+    /// `text` shaped in font `id`, with its small capitals when `small_caps` (see [`Shaper::has_small_caps`]).
+    pub fn shape_as(&mut self, id: FontId, text: &str, small_caps: bool) -> Arc<[Glyph]> {
+        if let Some(g) = self.words.get(&(id, small_caps, text.to_owned())) {
             return g.clone();
         }
         let mut buffer = self.buffer.take().unwrap_or_default();
@@ -392,10 +419,14 @@ impl Shaper {
             buffer.set_direction(Direction::LeftToRight);
         }
         let f = self.font(id);
-        let plan =
-            self.plans.entry((id, buffer.script())).or_insert_with(|| ShapePlan::new(f, buffer.direction(), buffer.script(), None, &[]));
+        let smcp = [Feature::new(Tag::new(b"smcp"), 1, ..)];
+        let features: &[Feature] = if small_caps { &smcp } else { &[] };
+        let plan = self
+            .plans
+            .entry((id, buffer.script(), small_caps))
+            .or_insert_with(|| ShapePlan::new(f, buffer.direction(), buffer.script(), None, features));
         let shaper = &self.shapers.entry(id).or_insert_with(|| ThreadShaper(ShaperFont::new(f))).0;
-        let _ = harfrust::shape(shaper, &mut buffer, ShapeOptions::new().plan(Some(plan)));
+        let _ = harfrust::shape(shaper, &mut buffer, ShapeOptions::new().plan(Some(plan)).features(features));
         let glyphs: Arc<[Glyph]> = buffer
             .glyph_infos()
             .iter()
@@ -403,7 +434,7 @@ impl Shaper {
             .map(|(i, p)| Glyph { id: i.glyph_id, advance: p.x_advance, x_offset: p.x_offset, y_offset: p.y_offset, cluster: i.cluster })
             .collect();
         self.buffer = Some(buffer);
-        self.words.insert((id, text.to_owned()), glyphs.clone());
+        self.words.insert((id, small_caps, text.to_owned()), glyphs.clone());
         glyphs
     }
 }

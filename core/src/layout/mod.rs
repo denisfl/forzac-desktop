@@ -18,7 +18,7 @@ pub use table::{TableView, layout_table};
 
 use crate::fonts::{self, Face, Family, FontId, Glyph, Shaper};
 use crate::hyphen::Hyphenator;
-use crate::knuth_plass::{self, INFINITY, Item};
+use crate::knuth_plass::{self, Break, INFINITY, Item};
 use crate::model::{Block, Book, Kind, Locator, Style, StyledText};
 
 /// Page geometry and text parameters, in logical pixels.
@@ -326,6 +326,7 @@ struct Piece {
 }
 
 /// A run of one style: face (or the monospace face), size, raise, ink, target and strikethrough.
+#[derive(Clone)]
 struct Segment {
     start: usize,
     end: usize,
@@ -336,6 +337,8 @@ struct Segment {
     rise: f32,
     ink: Ink,
     target: Option<Target>,
+    /// Set with the font's own small capitals (`smcp`).
+    small_caps: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -352,6 +355,8 @@ struct Spec {
     /// How far lines after the first start right of the first: a list item's wrapped lines under its text, not its
     /// marker.
     hang: f32,
+    /// Verse: the part of a line that does not fit goes on 1 em right of the line's start (`verse_breaks`).
+    hanging: bool,
     keep_with_next: bool,
     italic: bool,
     bold: bool,
@@ -414,6 +419,7 @@ impl Typesetter {
             space_after: 0.0,
             indent: false,
             hang: 0.0,
+            hanging: false,
             keep_with_next: false,
             italic: false,
             bold: false,
@@ -485,6 +491,7 @@ impl Typesetter {
                         width: w * 0.88,
                         x: w * 0.12,
                         hyphenate: false,
+                        hanging: true,
                         group: Group::Kind(Kind::Verse),
                         space_before: half,
                         space_after: half,
@@ -539,8 +546,7 @@ impl Typesetter {
     /// One logical pixel per image pixel, scaled down to the column and the page; never split.
     fn image(&mut self, id: &str, book: &Book) -> Option<BlockLayout> {
         let image = book.images.get(id)?;
-        let size = imagesize::blob_size(&image.bytes).ok()?;
-        let (iw, ih) = (size.width as f32, size.height as f32);
+        let (iw, ih) = crate::images::size(&image.bytes)?;
         if iw <= 0.0 || ih <= 0.0 {
             return None;
         }
@@ -569,14 +575,23 @@ impl Typesetter {
         }
     }
 
-    /// A paragraph set into lines of `spec.width`.
+    /// A paragraph set into lines of `spec.width`. The first-line indent is the first line's only: lines after a line
+    /// break (`br`) start at the edge, as in HTML.
     fn text(&mut self, text: &StyledText, spec: &Spec) -> TextLayout {
         let size = self.style.text_size * spec.scale;
-        let segments = segments(text, size, spec.italic, spec.bold, spec.mono);
+        let mut segments = segments(text, size, spec.italic, spec.bold, spec.mono);
+        let shown = self.small_caps(&text.text, &mut segments);
+        let shown = shown.as_deref().unwrap_or(&text.text);
         let indent = if spec.indent { self.style.text_size * 1.5 } else { 0.0 };
-        let (items, meta, pieces) = self.items(&text.text, &segments, indent, spec.justify, spec.hyphenate, spec.mono);
-        let breaks = knuth_plass::break_lines(&items, |line| if line == 0 { spec.width } else { spec.width - spec.hang });
-        let (lines, starts) = self.lines(&items, &meta, &pieces, &segments, &breaks, spec);
+        let (items, meta, pieces) = self.items(shown, &segments, indent, spec.justify, spec.hyphenate, spec.mono);
+        let (breaks, hangs) = if spec.hanging {
+            verse_breaks(&items, shown, size, spec.width)
+        } else {
+            let breaks = knuth_plass::break_lines(&items, |line| if line == 0 { spec.width } else { spec.width - spec.hang });
+            let hangs = (0..breaks.len()).map(|n| if n == 0 { 0.0 } else { spec.hang }).collect();
+            (breaks, hangs)
+        };
+        let (lines, starts) = self.lines(&items, &meta, &pieces, &segments, &breaks, &hangs, spec);
 
         let line_height = (size * self.style.line_height * spec.line_scale).floor();
         let face = segments.first().map_or(self.font_of(Face::Regular), |s| self.segment_font(s));
@@ -584,6 +599,46 @@ impl Typesetter {
         let units = size / self.shaper.units_per_em(face);
         let baseline = (line_height - (asc - desc) * units) / 2.0 + asc * units;
         TextLayout { lines, starts, line_height, baseline }
+    }
+
+    /// Small capitals of a font without its own (`smcp`): lower-case letters set as capitals at
+    /// [`SMALL_CAPS_SCALE`] of the size, in a copy of the text for typesetting only. A letter whose capital is longer
+    /// ("ß") stays: the copy has the text's length, so offsets, marks and the `Locator` are the text's. `None` when no
+    /// letter changed; segments in a font with small capitals keep their flag and are shaped with them.
+    fn small_caps(&mut self, text: &str, segments: &mut Vec<Segment>) -> Option<String> {
+        if !segments.iter().any(|s| s.small_caps) {
+            return None;
+        }
+        let mut shown: Option<String> = None;
+        let mut out = Vec::with_capacity(segments.len());
+        for seg in std::mem::take(segments) {
+            if !seg.small_caps || self.shaper.has_small_caps(self.segment_font(&seg)) {
+                out.push(seg);
+                continue;
+            }
+            // Runs of replaced letters and of the rest, each a segment of its own size.
+            let mut run: Option<(usize, bool)> = None;
+            for (offset, c) in text[seg.start..seg.end].char_indices().chain([(seg.end - seg.start, '\0')]) {
+                let at = seg.start + offset;
+                let capital = if at < seg.end { capital_of(c) } else { None };
+                if let Some(capital) = capital {
+                    let shown = shown.get_or_insert_with(|| text.to_owned());
+                    shown.replace_range(at..at + c.len_utf8(), capital.encode_utf8(&mut [0; 4]));
+                }
+                let reduced = capital.is_some();
+                match run {
+                    Some((start, r)) if at == seg.end || r != reduced => {
+                        let size = if r { seg.size * SMALL_CAPS_SCALE } else { seg.size };
+                        out.push(Segment { start, end: at, size, small_caps: false, ..seg.clone() });
+                        run = Some((at, reduced));
+                    }
+                    None => run = Some((at, reduced)),
+                    _ => {}
+                }
+            }
+        }
+        *segments = out;
+        shown
     }
 
     /// The paragraph as boxes (syllables), glue (spaces) and penalties (hyphenation points, breaks after dashes). In
@@ -615,6 +670,13 @@ impl Typesetter {
                 i += 1;
                 continue;
             }
+            if c == EM_SPACE {
+                // A verse line's indent: exactly 1 em, whatever the font has (most book faces lack the character).
+                items.push(Item::Box { width: segments[segment_at(segments, i)].size });
+                meta.push(Meta::Plain);
+                i += c.len_utf8();
+                continue;
+            }
             if c == ' ' {
                 let seg = &segments[segment_at(segments, i)];
                 let space = self.width_of(self.segment_font(seg), " ", seg.size);
@@ -635,7 +697,7 @@ impl Typesetter {
                 i += 1;
                 continue;
             }
-            let end = text[i..].find([' ', '\n']).map_or(text.len(), |e| i + e);
+            let end = text[i..].find([' ', '\n', EM_SPACE]).map_or(text.len(), |e| i + e);
             let penalty = if justify { 50.0 } else { 300.0 };
             self.word(text, segments, (i, end), hyphenate, penalty, &mut items, &mut meta, &mut pieces);
             i = end;
@@ -677,7 +739,7 @@ impl Typesetter {
     }
 
     fn piece(&mut self, text: &str, a: usize, b: usize, font: FontId, seg: &Segment, segment: usize) -> Piece {
-        let glyphs = self.shaper.shape(font, &text[a..b]);
+        let glyphs = self.shaper.shape_as(font, &text[a..b], seg.small_caps);
         let scale = seg.size / self.shaper.units_per_em(font);
         let (asc, desc) = self.shaper.line_metrics(font);
         Piece { start: a, font, size: seg.size, rise: seg.rise, scale, ascent: asc * scale, descent: -desc * scale, segment, glyphs }
@@ -763,13 +825,15 @@ impl Typesetter {
         self.shaper.shape(font, s).iter().map(|g| g.advance as f32 * scale).sum()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn lines(
         &mut self,
         items: &[Item],
         meta: &[Meta],
         pieces: &[Piece],
         segments: &[Segment],
-        breaks: &[knuth_plass::Break],
+        breaks: &[Break],
+        hangs: &[f32],
         spec: &Spec,
     ) -> (Vec<Line>, Vec<usize>) {
         let mut lines = Vec::new();
@@ -783,7 +847,7 @@ impl Typesetter {
                 s += 1;
             }
             let mut line = Line::default();
-            let mut x = if n == 0 { 0.0 } else { spec.hang };
+            let mut x = hangs[n];
             let mut line_start = None;
             for k in s..br.index {
                 match (items[k], meta[k]) {
@@ -836,6 +900,48 @@ impl Typesetter {
         (lines, starts)
     }
 }
+
+/// Breaks of a verse paragraph and where each line starts. Each line of the poem (up to a line break) is broken on its
+/// own, and the part that does not fit goes on 1 em right of where the line starts, its indent (em spaces) included —
+/// so that it is not taken for the next line, as Standard Ebooks' CSS sets it.
+fn verse_breaks(items: &[Item], text: &str, size: f32, width: f32) -> (Vec<Break>, Vec<f32>) {
+    let (mut breaks, mut hangs) = (Vec::new(), Vec::new());
+    let mut lines = text.split('\n');
+    let mut from = 0;
+    for (k, item) in items.iter().enumerate() {
+        if !matches!(item, Item::Penalty { penalty, .. } if *penalty <= -INFINITY) {
+            continue;
+        }
+        let em = lines.next().map_or(0, |l| l.chars().take_while(|c| *c == EM_SPACE).count());
+        let hang = (em + 1) as f32 * size;
+        for (n, b) in
+            knuth_plass::break_lines(&items[from..=k], |line| if line == 0 { width } else { width - hang }).into_iter().enumerate()
+        {
+            breaks.push(Break { index: from + b.index, ratio: b.ratio });
+            hangs.push(if n == 0 { 0.0 } else { hang });
+        }
+        from = k + 1;
+    }
+    (breaks, hangs)
+}
+
+/// The capital a lower-case letter is set as in small capitals: one character as long as the letter, else `None`.
+fn capital_of(c: char) -> Option<char> {
+    if !c.is_lowercase() {
+        return None;
+    }
+    let mut upper = c.to_uppercase();
+    match (upper.next(), upper.next()) {
+        (Some(u), None) if u.len_utf8() == c.len_utf8() => Some(u),
+        _ => None,
+    }
+}
+
+/// The em space of a verse line's indent (`i1`…`i9` in Standard Ebooks).
+const EM_SPACE: char = '\u{2003}';
+
+/// The capitals set for small capitals in a font without its own: about the height of the lower case.
+const SMALL_CAPS_SCALE: f32 = 0.78;
 
 /// A break point inside a word.
 #[derive(Clone, Copy, PartialEq)]
@@ -937,6 +1043,7 @@ fn segments(text: &StyledText, size: f32, italic: bool, bold: bool, mono: bool) 
                 rise,
                 ink: if link.is_some() { Ink::Link } else { Ink::Text },
                 target: note.or(link),
+                small_caps: has(Style::SmallCaps),
             }
         })
         .collect();
@@ -951,6 +1058,7 @@ fn segments(text: &StyledText, size: f32, italic: bool, bold: bool, mono: bool) 
             rise: 0.0,
             ink: Ink::Text,
             target: None,
+            small_caps: false,
         });
     }
     out

@@ -352,6 +352,8 @@ pub enum Style {
     /// Footnote marker; rendered as a superscript.
     NoteRef,
     Link,
+    /// Small capitals: lower-case letters as small capitals, the text itself unchanged.
+    SmallCaps,
 }
 
 /// A footnote or comment.

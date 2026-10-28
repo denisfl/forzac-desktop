@@ -8,7 +8,7 @@ mod xhtml;
 
 use std::collections::{HashMap, HashSet};
 
-use xhtml::{Anchor, Css, Doc};
+use xhtml::{Anchor, Css, Doc, without_rare_signs};
 
 use crate::Error;
 use crate::archive::{normalize_path, percent_decode};
@@ -20,6 +20,7 @@ pub(crate) const CONTAINER: &str = "META-INF/container.xml";
 /// Spine document types read as text; `RASTER` are images placed directly in the spine.
 const TEXT_DOCS: &[&str] = &["application/xhtml+xml", "text/html", "application/xml", "image/svg+xml"];
 const RASTER: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
+const SVG: &str = "image/svg+xml";
 
 struct Item {
     id: String,
@@ -184,7 +185,7 @@ pub(crate) fn read(archive: &HashMap<String, Vec<u8>>) -> Result<Book, Error> {
         .iter()
         .filter_map(|i| {
             let bytes = files.get(i.path.as_str()).filter(|b| !b.is_empty())?;
-            Some((i.path.clone(), Image { content_type: image_type(i, &files)?, bytes: bytes.to_vec() }))
+            Some((i.path.clone(), Image { content_type: image_type(i, &files, &opf.spine)?, bytes: bytes.to_vec() }))
         })
         .collect();
 
@@ -340,7 +341,7 @@ fn read_opf(files: &HashMap<&str, &[u8]>) -> Result<Opf, Error> {
         }
     }
 
-    let images = || items.iter().filter(|i| image_type(i, files).is_some());
+    let images = || items.iter().filter(|i| image_type(i, files, &spine).is_some());
     let cover = images()
         .find(|i| i.properties.split_whitespace().any(|p| p == "cover-image"))
         .or_else(|| images().find(|i| Some(&i.id) == cover_id.as_ref()))
@@ -364,11 +365,15 @@ fn read_opf(files: &HashMap<&str, &[u8]>) -> Result<Opf, Error> {
     Ok(Opf { title: collapse(&title), authors, language, description, series, genres, year, items, spine, ncx, cover })
 }
 
-/// The image type of a manifest item: its declared `image/*` type (SVG is read as a document), or, when the manifest
-/// labels it otherwise (`application/octet-stream`), the raster type its bytes start with.
-fn image_type(item: &Item, files: &HashMap<&str, &[u8]>) -> Option<String> {
+/// The image type of a manifest item: its declared `image/*` type, or, when the manifest labels it otherwise
+/// (`application/octet-stream`), the type its bytes show. An SVG in the spine is a document, not an image.
+fn image_type(item: &Item, files: &HashMap<&str, &[u8]>, spine: &[(String, bool)]) -> Option<String> {
+    let in_spine = || spine.iter().any(|(p, _)| *p == item.path);
+    if item.media_type == SVG {
+        return (!in_spine()).then(|| SVG.to_owned());
+    }
     if item.media_type.starts_with("image/") {
-        return (item.media_type != "image/svg+xml").then(|| item.media_type.clone());
+        return Some(item.media_type.clone());
     }
     let bytes = files.get(item.path.as_str())?;
     let kind = if bytes.starts_with(b"\xFF\xD8\xFF") {
@@ -379,6 +384,8 @@ fn image_type(item: &Item, files: &HashMap<&str, &[u8]>) -> Option<String> {
         "image/gif"
     } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
         "image/webp"
+    } else if crate::images::is_svg(bytes) && !in_spine() {
+        SVG
     } else {
         return None;
     };
@@ -400,7 +407,8 @@ fn first_image_in(doc: &str, bytes: &[u8]) -> Option<String> {
     image
 }
 
-/// Classes that make text italic or bold, from the book's CSS. Only simple selectors: `.c` and `tag.c`.
+/// Classes that make text italic, bold or small capitals, from the book's CSS: only simple selectors, `.c` and `tag.c`;
+/// for `b` and `strong`, the small capitals and normal weight of their own rules.
 fn read_css(files: &HashMap<&str, &[u8]>, opf: &Opf) -> Css {
     let mut css = Css::default();
     for item in opf.items.iter().filter(|i| i.media_type == "text/css") {
@@ -414,21 +422,49 @@ fn read_css(files: &HashMap<&str, &[u8]>, opf: &Opf) -> Css {
             let Some((selectors, body)) = rule.split_once('{') else { continue };
             let body: String = body.to_lowercase().chars().filter(|c| !c.is_whitespace()).collect();
             let italic = body.contains("font-style:italic") || body.contains("font-style:oblique");
-            let bold = ["bold", "bolder", "600", "700", "800", "900"].iter().any(|w| body.contains(&format!("font-weight:{w}")));
-            if !italic && !bold {
+            let weight = |words: &[&str]| words.iter().any(|w| css_value(&body, "font-weight", w));
+            let bold = weight(&["bold", "bolder", "600", "700", "800", "900"]);
+            let normal = weight(&["normal", "lighter", "100", "200", "300", "400"]);
+            let small_caps = css_value(&body, "font-variant", "small-caps") || css_value(&body, "font-variant-caps", "small-caps");
+            if !italic && !bold && !normal && !small_caps {
                 continue;
             }
-            for class in selectors.split(',').filter_map(|s| simple_class(s.trim())) {
+            for selector in selectors.split(',').map(str::trim) {
+                let tag = selector.to_lowercase();
+                if tag == "b" || tag == "strong" {
+                    if small_caps {
+                        css.small_caps_tags.insert(tag.clone());
+                    }
+                    if normal {
+                        css.normal_weight_tags.insert(tag);
+                    }
+                    continue;
+                }
+                let Some(class) = simple_class(selector) else { continue };
                 if italic {
                     css.italic.insert(class.clone());
                 }
                 if bold {
-                    css.bold.insert(class);
+                    css.bold.insert(class.clone());
+                }
+                if small_caps {
+                    css.small_caps.insert(class);
                 }
             }
         }
     }
     css
+}
+
+/// Whether a declaration block (lower case, without whitespace) sets `property` to `value`: `font-weight:normal`, not
+/// `font-weight:normalish`.
+fn css_value(body: &str, property: &str, value: &str) -> bool {
+    let declaration = format!("{property}:{value}");
+    body.match_indices(&declaration).any(|(at, _)| {
+        let before = body[..at].chars().next_back();
+        let after = body[at + declaration.len()..].chars().next();
+        before.is_none_or(|c| c == ';' || c == '{') && after.is_none_or(|c| c == ';' || c == '!')
+    })
 }
 
 /// The class of a selector `.c` or `tag.c`, lower case; anything more complex is `None`.
@@ -460,7 +496,7 @@ fn read_nav(files: &HashMap<&str, &[u8]>, opf: &Opf) -> Option<Vec<RawToc>> {
                 }
                 if toc_depth.is_some() && name == "a" {
                     let href = attr(&attrs, "href").map(str::to_owned);
-                    let title = xml.text().unwrap_or_default(); // consumes the element
+                    let title = without_rare_signs(&xml.text().unwrap_or_default()); // consumes the element
                     if let Some(href) = href.filter(|_| !title.is_empty()) {
                         entries.push(RawToc {
                             title,
@@ -504,7 +540,7 @@ fn read_ncx(files: &HashMap<&str, &[u8]>, opf: &Opf) -> Option<Vec<RawToc>> {
             Ev::Eof => break,
             Ev::Start(name, attrs) => match name.as_str() {
                 "text" => {
-                    let text = xml.text().unwrap_or_default(); // consumes the element
+                    let text = without_rare_signs(&xml.text().unwrap_or_default()); // consumes the element
                     label.get_or_insert(text);
                 }
                 _ => {

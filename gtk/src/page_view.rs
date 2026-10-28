@@ -122,9 +122,69 @@ fn rect(r: Rect) -> graphene::Rect {
     graphene::Rect::new(r.x, r.y, r.w, r.h)
 }
 
-/// Image `id` of `book` decoded; `None` when it cannot be.
-fn decode(book: &Book, id: &str) -> Option<gdk::Texture> {
-    book.images.get(id).and_then(|i| gdk::Texture::from_bytes(&glib::Bytes::from(&i.bytes[..])).ok())
+/// A book image decoded, and whether it is line art: dark lines on transparency, drawn in the theme's ink so that a
+/// dark theme shows them (`standard-ebooks`).
+#[derive(Clone)]
+pub struct Picture {
+    pub texture: gdk::Texture,
+    pub ink: bool,
+}
+
+/// The largest monitor in pixels: an SVG is drawn to fit it, the size the view fits an image to. On the main thread.
+pub fn screen_pixels() -> (u32, u32) {
+    let monitors = gdk::Display::default().map(|d| d.monitors());
+    let size = monitors.iter().flat_map(|l| l.iter::<gdk::Monitor>()).flatten().fold((0, 0), |(w, h), m| {
+        let (g, scale) = (m.geometry(), m.scale());
+        (w.max((g.width() as f64 * scale) as u32), h.max((g.height() as f64 * scale) as u32))
+    });
+    if size.0 == 0 || size.1 == 0 { (2560, 1600) } else { size }
+}
+
+/// Image `id` of `book` decoded, an SVG drawn by the core to fit `screen` (`screen_pixels`); `None` when it cannot be.
+fn decode(book: &Book, id: &str, screen: (u32, u32)) -> Option<Picture> {
+    let bytes = &book.images.get(id)?.bytes;
+    if let Some(raster) = forzac_core::images::raster(bytes, screen.0, screen.1) {
+        let (w, h, ink) = (raster.width, raster.height, raster.ink);
+        let pixels = glib::Bytes::from_owned(Pixels(raster));
+        let texture = gdk::MemoryTexture::new(w as i32, h as i32, gdk::MemoryFormat::R8g8b8a8Premultiplied, &pixels, w as usize * 4);
+        return Some(Picture { texture: texture.upcast(), ink });
+    }
+    let texture = gdk::Texture::from_bytes(&glib::Bytes::from(&bytes[..])).ok()?;
+    Some(Picture { ink: is_ink(&texture), texture })
+}
+
+/// An SVG's raster as a texture's bytes, without a copy.
+struct Pixels(Arc<forzac_core::images::Raster>);
+
+impl AsRef<[u8]> for Pixels {
+    fn as_ref(&self) -> &[u8] {
+        &self.0.pixels
+    }
+}
+
+/// Whether a decoded texture is line art (the core's test); one without alpha (a JPEG) is not.
+fn is_ink(texture: &gdk::Texture) -> bool {
+    use gdk::MemoryFormat as F;
+    if matches!(texture.format(), F::R8g8b8 | F::B8g8r8 | F::R16g16b16 | F::R16g16b16Float | F::R32g32b32Float | F::G8 | F::G16) {
+        return false;
+    }
+    let mut downloader = gdk::TextureDownloader::new(texture);
+    downloader.set_format(gdk::MemoryFormat::R8g8b8a8Premultiplied);
+    let (pixels, stride) = downloader.download_bytes();
+    forzac_core::images::is_ink(&pixels, texture.width() as u32, texture.height() as u32, stride)
+}
+
+/// Draws `picture` into `bounds`: line art in `ink`, keeping its pixels' opacity; anything else as it is.
+pub fn draw_picture(snapshot: &gtk::Snapshot, picture: &Picture, filter: gsk::ScalingFilter, bounds: &graphene::Rect, ink: &gdk::RGBA) {
+    if picture.ink {
+        snapshot.push_mask(gsk::MaskMode::Alpha);
+    }
+    snapshot.append_scaled_texture(&picture.texture, filter, bounds);
+    if picture.ink {
+        snapshot.pop();
+        snapshot.append_color(ink, bounds);
+        snapshot.pop();
+    }
 }
 
 /// Ids of the images in `chapters`.
@@ -144,7 +204,7 @@ struct Prefetched {
     style: PageStyle,
     layouts: Vec<ChapterLayout>,
     typesetter: Typesetter,
-    textures: Vec<(String, Option<gdk::Texture>)>,
+    textures: Vec<(String, Option<Picture>)>,
 }
 
 /// Opens a note or an external link for the view.
@@ -197,7 +257,7 @@ pub struct State {
     worker: Option<Typesetter>,
     busy: bool,
     /// Decoded images by id; `None` for one that cannot be decoded.
-    textures: HashMap<String, Option<gdk::Texture>>,
+    textures: HashMap<String, Option<Picture>>,
     style: Option<PageStyle>,
     /// Whether the window shows two pages side by side ("Slide" in a wide window, `Settings::spread`).
     spread: bool,
@@ -660,8 +720,8 @@ impl PageView {
     }
 
     /// Image `id` decoded, from the pages' cache when a page has shown it.
-    pub fn texture(&self, id: &str) -> Option<gdk::Texture> {
-        self.with(|s| s.textures.entry(id.to_owned()).or_insert_with(|| decode(&s.book, id)).clone())
+    pub fn picture(&self, id: &str) -> Option<Picture> {
+        self.with(|s| s.textures.entry(id.to_owned()).or_insert_with(|| decode(&s.book, id, screen_pixels())).clone())
     }
 
     /// The table whose first row is `at` typeset for the view at `zoom` times the text size: its node in the current
@@ -1169,9 +1229,9 @@ impl PageView {
             }
             let typesetter = s.worker.take().unwrap_or_else(|| Typesetter::new(style, s.hyphenator.clone()));
             s.busy = true;
-            Some((s.book.clone(), style, chapters, images, typesetter))
+            Some((s.book.clone(), style, chapters, images, typesetter, screen_pixels()))
         });
-        let Some((book, style, chapters, images, mut typesetter)) = job else { return };
+        let Some((book, style, chapters, images, mut typesetter, screen)) = job else { return };
         let view = self.downgrade();
         glib::spawn_future_local(async move {
             let done = gio::spawn_blocking(move || {
@@ -1179,7 +1239,7 @@ impl PageView {
                     typesetter = Typesetter::new(style, typesetter.hyphenator());
                 }
                 let layouts = chapters.iter().map(|&c| paginate(&book, c, &style, &mut typesetter)).collect();
-                let textures = images.into_iter().map(|id| (id.clone(), decode(&book, &id))).collect();
+                let textures = images.into_iter().map(|id| (id.clone(), decode(&book, &id, screen))).collect();
                 Prefetched { style, layouts, typesetter, textures }
             })
             .await;
@@ -1743,7 +1803,7 @@ fn content_node(
     content: &PageContent,
     theme: usize,
     fonts: &mut Fonts,
-    textures: &mut HashMap<String, Option<gdk::Texture>>,
+    textures: &mut HashMap<String, Option<Picture>>,
     book: &Book,
 ) -> Option<gsk::RenderNode> {
     let Palette { ink: text, link, .. } = THEMES[theme];
@@ -1752,9 +1812,9 @@ fn content_node(
     let snapshot = gtk::Snapshot::new();
     for image in &content.images {
         // Decoded on the worker; an image the worker has not reached yet (the first page) is decoded here.
-        let texture = textures.entry(image.id.clone()).or_insert_with(|| decode(book, &image.id));
-        if let Some(texture) = texture {
-            snapshot.append_scaled_texture(texture, gsk::ScalingFilter::Trilinear, &rect(image.rect));
+        let picture = textures.entry(image.id.clone()).or_insert_with(|| decode(book, &image.id, screen_pixels()));
+        if let Some(picture) = picture {
+            draw_picture(&snapshot, picture, gsk::ScalingFilter::Trilinear, &rect(image.rect), &rgba(text));
         }
     }
     for rule in &content.rules {

@@ -10,7 +10,7 @@ use gtk::subclass::prelude::*;
 use gtk::{gdk, glib, graphene, gsk, prelude::*};
 
 use crate::icons::{self, Icon};
-use crate::page_view::{PageView, THEMES, draw_focus, rgba, stops};
+use crate::page_view::{PageView, Picture, THEMES, draw_focus, draw_picture, rgba, stops};
 use crate::panels::shortcut;
 
 /// Zoom factor of a key press or a wheel step; the limits for images (times the fitted size) and tables (times the
@@ -53,7 +53,7 @@ struct Motion {
 pub struct State {
     page: PageView,
     subject: Subject,
-    texture: Option<gdk::Texture>,
+    picture: Option<Picture>,
     table: Option<Table>,
     /// An image: times the fitted size; a table: times the text size.
     zoom: f32,
@@ -88,7 +88,7 @@ impl State {
     /// has not been typeset at yet).
     fn content(&self, zoom: f32) -> (f32, f32) {
         let (w, h) = self.size;
-        if let Some(t) = &self.texture {
+        if let Some(t) = self.picture.as_ref().map(|p| &p.texture) {
             let (iw, ih) = (t.width().max(1) as f32, t.height().max(1) as f32);
             let fit = (w / iw).min(h / ih);
             (iw * fit * zoom, ih * fit * zoom)
@@ -165,8 +165,8 @@ glib::wrapper! {
 /// Opens `subject` over the page in `overlay`; `None` when it cannot be shown (an image that cannot be decoded).
 /// The view is the returned widget, until it closes.
 pub fn open(overlay: &gtk::Overlay, page: &PageView, subject: Subject) -> Option<Canvas> {
-    let (texture, table) = match &subject {
-        Subject::Image(id) => (Some(page.texture(id)?), None),
+    let (picture, table) = match &subject {
+        Subject::Image(id) => (Some(page.picture(id)?), None),
         Subject::Table(at) => {
             let (node, w, h, areas) = page.table_view(*at, 1.0)?;
             (None, Some(Table { node, size: (w, h), areas, zoom: 1.0, theme: page.theme() }))
@@ -176,7 +176,7 @@ pub fn open(overlay: &gtk::Overlay, page: &PageView, subject: Subject) -> Option
     *canvas.imp().state.borrow_mut() = Some(State {
         page: page.clone(),
         subject,
-        texture,
+        picture,
         table,
         zoom: 1.0,
         pos: [0.0; 2],
@@ -581,10 +581,12 @@ impl Canvas {
             let theme = s.page.theme();
             snapshot.append_color(&rgba(THEMES[theme].paper), &graphene::Rect::new(0.0, 0.0, w, h));
             let (pos, zoom) = s.at(now);
-            if let Some(texture) = &s.texture {
+            if let Some(picture) = &s.picture {
                 let size = s.content(zoom);
-                let filter = if size.0 > texture.width() as f32 { gsk::ScalingFilter::Linear } else { gsk::ScalingFilter::Trilinear };
-                snapshot.append_scaled_texture(texture, filter, &graphene::Rect::new(pos[0], pos[1], size.0, size.1));
+                let filter =
+                    if size.0 > picture.texture.width() as f32 { gsk::ScalingFilter::Linear } else { gsk::ScalingFilter::Trilinear };
+                let bounds = graphene::Rect::new(pos[0], pos[1], size.0, size.1);
+                draw_picture(snapshot, picture, filter, &bounds, &rgba(THEMES[theme].ink));
             } else if let Some(t) = &s.table {
                 snapshot.save();
                 snapshot.translate(&graphene::Point::new(pos[0], pos[1]));

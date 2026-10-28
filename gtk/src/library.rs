@@ -49,6 +49,9 @@ fn thumbnail(id: &str) -> PathBuf {
 /// Writes the thumbnail of a cover (`bytes`), or the empty marker for none; on a worker thread.
 fn write_thumbnail(id: &str, bytes: Option<&[u8]>) {
     use gtk::gdk_pixbuf::PixbufLoader;
+    // An SVG cover (Standard Ebooks) drawn by the core: the pixbuf loaders may have no SVG.
+    let drawn = bytes.and_then(|b| forzac_core::images::png(b, THUMB.0 as u32, THUMB.1 as u32));
+    let bytes = drawn.as_deref().or(bytes);
     let scaled = bytes.and_then(|bytes| {
         let loader = PixbufLoader::new();
         loader.connect_size_prepared(|l, w, h| {

@@ -28,11 +28,37 @@ pub(super) struct Anchor {
     pub end: usize,
 }
 
-/// CSS classes that make text italic or bold.
+/// CSS classes that make text italic, bold or small capitals; `small_caps_tags` and `normal_weight_tags` are the rules
+/// of `b` and `strong` themselves (Standard Ebooks set `b` in small capitals of the normal weight).
 #[derive(Default)]
 pub(super) struct Css {
     pub italic: HashSet<String>,
     pub bold: HashSet<String>,
+    pub small_caps: HashSet<String>,
+    pub small_caps_tags: HashSet<String>,
+    pub normal_weight_tags: HashSet<String>,
+}
+
+/// Signs the book fonts lack, replaced as the "compatible" EPUBs of Standard Ebooks replace them: the two- and
+/// three-em dashes and the care-of sign.
+pub(super) fn without_rare_signs(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match rare_sign(ch) {
+            Some(s) => out.push_str(s),
+            None => out.push(ch),
+        }
+    }
+    out
+}
+
+fn rare_sign(ch: char) -> Option<&'static str> {
+    match ch {
+        '\u{2E3A}' => Some("——"),
+        '\u{2E3B}' => Some("———"),
+        '\u{2105}' => Some("c/o"),
+        _ => None,
+    }
 }
 
 pub(super) struct Doc {
@@ -108,6 +134,9 @@ const STRONG: &[&str] = &["strong", "b"];
 const STRIKE: &[&str] = &["s", "strike", "del"];
 const CODE: &[&str] = &["code", "kbd", "samp", "tt"];
 const VERSE: &[&str] = &["poem", "stanza", "v", "verse"];
+/// `epub:type` of verse and of a diary (the DAISY `z3998` vocabulary of Standard Ebooks).
+const VERSE_TYPES: &[&str] = &["z3998:poem", "z3998:verse", "z3998:song", "z3998:hymn"];
+const DIARY_TYPES: &[&str] = &["z3998:diary", "z3998:diary-entry"];
 const NOTE_TYPES: &[&str] = &["footnote", "endnote", "rearnote"];
 
 struct Frame {
@@ -121,6 +150,9 @@ struct Frame {
     heading: Option<u32>,
     pre: bool,
     style: Option<Style>,
+    /// A second style: bold small capitals (`b` whose CSS keeps the weight), or a small-capitals class on an element
+    /// that has another style.
+    extra_style: Option<Style>,
     /// Where the element's text starts in the current paragraph (chars).
     start: usize,
     href: Option<String>,
@@ -128,6 +160,16 @@ struct Frame {
     ordered: bool,
     counter: usize,
     col_span: usize,
+    /// `epub:type="titlepage"`: with an image in it, its text is a caption for screen readers, and the page is the image.
+    titlepage: bool,
+    /// For `hgroup`: the raw level of the group's last heading; a `p` after it is a heading one level lower.
+    group_heading: Option<u32>,
+}
+
+impl Frame {
+    fn styles(&self) -> impl Iterator<Item = Style> {
+        self.style.into_iter().chain(self.extra_style)
+    }
 }
 
 /// The top-level table being read: rows collect and become blocks at the end of `table`.
@@ -155,7 +197,7 @@ pub(super) fn read(path: &str, bytes: &[u8], css: &Css) -> Doc {
         styles: Vec::new(),
         links: Vec::new(),
     };
-    let mut xml = Xml::new(&data).with_attributes(&["class", "type", "id", "name", "src", "href", "start", "colspan"]);
+    let mut xml = Xml::new(&data).with_attributes(&["class", "type", "id", "name", "src", "href", "start", "colspan", "hidden"]);
     // A break or gross markup error past the start keeps what was read.
     let _ = r.walk(&mut xml);
     r.flush();
@@ -209,7 +251,8 @@ impl Reader<'_> {
 
     fn start(&mut self, xml: &mut Xml, owned_name: String, attrs: &[(String, String)]) -> Res<()> {
         let name = owned_name.as_str();
-        if SKIP.contains(&name) {
+        // `hidden` is not shown in HTML (Standard Ebooks: captions for screen readers).
+        if SKIP.contains(&name) || attr(attrs, "hidden").is_some() {
             return xml.skip();
         }
         let class = attr(attrs, "class").unwrap_or_default().to_lowercase();
@@ -292,10 +335,16 @@ impl Reader<'_> {
         }
 
         let css = self.css;
+        let small_caps_tag = STRONG.contains(&name) && css.small_caps_tags.contains(name);
+        let small_caps_class = classes.iter().any(|c| css.small_caps.contains(*c));
         let style = if EMPHASIS.contains(&name) || classes.iter().any(|c| css.italic.contains(*c) || *c == "italic") {
             Some(Style::Emphasis)
+        } else if small_caps_tag {
+            Some(Style::SmallCaps)
         } else if STRONG.contains(&name) || classes.iter().any(|c| css.bold.contains(*c) || *c == "bold") {
             Some(Style::Strong)
+        } else if small_caps_class {
+            Some(Style::SmallCaps)
         } else {
             match name {
                 "sup" => Some(Style::Superscript),
@@ -305,7 +354,33 @@ impl Reader<'_> {
                 _ => None,
             }
         };
-        let heading = heading_level(name).or_else(|| classes.iter().find_map(|c| title_level(c)));
+        let extra_style = if small_caps_tag && !css.normal_weight_tags.contains(name) {
+            Some(Style::Strong)
+        } else if small_caps_class && style != Some(Style::SmallCaps) {
+            Some(Style::SmallCaps)
+        } else {
+            None
+        };
+        let mut heading = heading_level(name).or_else(|| classes.iter().find_map(|c| title_level(c)));
+        // A `p` in `hgroup` is a heading one level below the group's heading before it (a chapter's title under its
+        // number); without one, a subtitle.
+        let group = self.frames.last_mut().filter(|f| f.name == "hgroup");
+        let mut group_subtitle = false;
+        if let Some(group) = group {
+            if heading.is_some() {
+                group.group_heading = heading;
+            } else if name == "p" {
+                heading = group.group_heading.map(|h| (h + 1).min(6));
+                group_subtitle = heading.is_none();
+            }
+        }
+        // A verse line's indent (`i1`…`i9` at Standard Ebooks: that many em): em spaces at the line's start.
+        if name == "span" && self.frames.iter().any(|f| f.kind == Some(Kind::Verse)) {
+            let em = classes.iter().find_map(|c| c.strip_prefix('i').filter(|n| n.len() == 1).and_then(|n| n.parse::<usize>().ok()));
+            if let Some(n) = em.filter(|n| (1..=9).contains(n)) {
+                self.sb.extend(std::iter::repeat_n('\u{2003}', n));
+            }
+        }
         // An anchor inside a table is the table's start: its rows reach the table's sink only at its end.
         let anchor_start = if self.cells.contains(&sink) || self.in_cell() {
             self.table.as_ref().map_or(0, |t| self.sinks[t.sink].blocks.len())
@@ -317,7 +392,7 @@ impl Reader<'_> {
         }
         let ordered = name == "ol";
         let pre = name == "pre";
-        let kind = kind_of(name, &classes);
+        let kind = if group_subtitle { Some(Kind::Subtitle) } else { kind_of(name, &classes, epub_type) };
         let href = if name == "a" { attr(attrs, "href").map(str::to_owned) } else { None };
         self.frames.push(Frame {
             name: owned_name,
@@ -329,6 +404,7 @@ impl Reader<'_> {
             heading,
             pre,
             style,
+            extra_style,
             start: self.sb.len(),
             href,
             note_type: epub_type.contains("noteref"),
@@ -339,6 +415,8 @@ impl Reader<'_> {
                 0
             },
             col_span: if cell { attr(attrs, "colspan").and_then(|s| s.trim().parse().ok()).unwrap_or(1usize).clamp(1, 64) } else { 1 },
+            titlepage: epub_type.split_whitespace().any(|t| t == "titlepage"),
+            group_heading: None,
         });
         Ok(())
     }
@@ -358,6 +436,9 @@ impl Reader<'_> {
             // The paragraph closes while the element is still open: its kind and style belong to it.
             self.flush();
             let frame = self.frames.pop().unwrap();
+            if frame.titlepage {
+                self.drop_title_text(&frame);
+            }
             let in_cell = self.cells.contains(&frame.sink) || self.in_cell();
             self.end_table_part(&frame);
             if in_cell {
@@ -371,11 +452,28 @@ impl Reader<'_> {
             }
         } else {
             let frame = self.frames.pop().unwrap();
-            if let Some(style) = frame.style
-                && frame.start < self.sb.len()
-            {
-                self.styles.push((frame.start, self.sb.len(), style, None));
+            if frame.start < self.sb.len() {
+                let end = self.sb.len();
+                self.styles.extend(frame.styles().map(|style| (frame.start, end, style, None)));
             }
+        }
+    }
+
+    /// A title page with an image (Standard Ebooks): its title and author are a caption for screen readers, which the
+    /// book's CSS hides, and the page is the image. The images stay, the text goes; anchors inside point to its start.
+    fn drop_title_text(&mut self, frame: &Frame) {
+        let sink = &mut self.sinks[frame.sink];
+        let from = frame.anchor_start;
+        if from > sink.blocks.len() || !sink.blocks[from..].iter().any(|b| matches!(b, Block::Image { .. })) {
+            return;
+        }
+        let tail = sink.blocks.split_off(from);
+        sink.blocks.extend(tail.into_iter().filter(|b| matches!(b, Block::Image { .. })));
+        sink.link_only.retain(|&i| i < from);
+        let (hidden, end) = (sink.hidden, sink.blocks.len());
+        for a in self.anchors.values_mut().filter(|a| a.hidden == hidden && a.start >= from) {
+            a.start = a.start.min(end);
+            a.end = a.end.min(end);
         }
     }
 
@@ -472,6 +570,8 @@ impl Reader<'_> {
                 if self.sb.last().is_some_and(|l| *l != ' ' && *l != '\n') {
                     self.sb.push(' ');
                 }
+            } else if let Some(s) = rare_sign(ch) {
+                self.sb.extend(s.chars());
             } else {
                 self.sb.push(ch);
             }
@@ -499,10 +599,8 @@ impl Reader<'_> {
         }
         let len = self.sb.len();
         for f in &self.frames {
-            if let Some(style) = f.style
-                && f.start < len
-            {
-                self.styles.push((f.start, len, style, None));
+            if f.start < len {
+                self.styles.extend(f.styles().map(|style| (f.start, len, style, None)));
             }
         }
         self.emit();
@@ -580,15 +678,19 @@ fn cell_text(blocks: &[Block]) -> StyledText {
     out
 }
 
-fn kind_of(name: &str, classes: &[&str]) -> Option<Kind> {
+/// The kind of an element's paragraphs, by its classes and `epub:type`.
+fn kind_of(name: &str, classes: &[&str], epub_type: &str) -> Option<Kind> {
+    let types = || epub_type.split_whitespace();
     if classes.contains(&"epigraph") {
         Some(Kind::Epigraph)
     } else if classes.contains(&"text-author") {
         Some(Kind::TextAuthor)
     } else if classes.contains(&"subtitle") {
         Some(Kind::Subtitle)
-    } else if classes.iter().any(|c| VERSE.contains(c)) {
+    } else if classes.iter().any(|c| VERSE.contains(c)) || types().any(|t| VERSE_TYPES.contains(&t)) {
         Some(Kind::Verse)
+    } else if types().any(|t| DIARY_TYPES.contains(&t)) {
+        None // a diary is the book's own text, not a quotation in it
     } else if name == "blockquote" || classes.contains(&"cite") {
         Some(Kind::Cite)
     } else if name == "caption" {

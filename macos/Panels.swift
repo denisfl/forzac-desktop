@@ -1007,7 +1007,7 @@ final class NoteSheet: SheetView {
         guard height > 0 else { return nil }
         let p = view.palette
         let scale = NSScreen.main?.backingScaleFactor ?? 2
-        var pictures: [UnsafeRawPointer: CGImage] = [:]
+        var pictures: [UnsafeRawPointer: Picture] = [:]
         let image = bitmap(CGSize(width: width, height: CGFloat(height)), scale: scale, background: nil) { ctx in
             drawPage(page, in: ctx, height: CGFloat(height), palette: p, fonts: view.fonts, pictures: &pictures)
         }
