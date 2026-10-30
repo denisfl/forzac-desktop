@@ -763,7 +763,7 @@ pub fn find() -> Option<PathBuf> {
 /// replacing an earlier copy of that name; a temporary file is renamed into place. Returns the written file.
 pub fn send(path: &Path, edits: &Edits, kindle: &Path) -> Result<PathBuf, crate::Error> {
     let book = crate::open(path)?;
-    if book.pdf.is_some() {
+    if book.page_count().is_some() {
         return Err(crate::Error::NotABook);
     }
     let title = edits.title.clone().unwrap_or_else(|| book.title.clone());

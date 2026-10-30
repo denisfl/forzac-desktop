@@ -374,6 +374,41 @@ pub unsafe extern "C" fn forzac_is_pdf(doc: *const Document) -> bool {
     unsafe { &*doc }.book.pdf.is_some()
 }
 
+/// How many picture pages the document has: 0 when it is not a book of picture pages (`fixed-layout`).
+///
+/// # Safety
+/// `doc` from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_pictures(doc: *const Document) -> u32 {
+    unsafe { &*doc }.book.pictures.as_ref().map_or(0, |p| p.pages.len() as u32)
+}
+
+/// Whether the document's picture pages turn right to left.
+///
+/// # Safety
+/// `doc` from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_pictures_rtl(doc: *const Document) -> bool {
+    unsafe { &*doc }.book.pictures.as_ref().is_some_and(|p| p.rtl)
+}
+
+/// The bytes of picture page `i`, owned by the document, and its size in `w`, `h`; null for an empty page (or a size
+/// that cannot be read: then `w` and `h` stay).
+///
+/// # Safety
+/// `doc` from [`forzac_open`]; `len`, `w` and `h` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_picture(doc: *const Document, i: u32, len: *mut usize, w: *mut f32, h: *mut f32) -> *const u8 {
+    let book = &unsafe { &*doc }.book;
+    let page = book.pictures.as_ref().and_then(|p| p.pages.get(i as usize)).and_then(|id| id.as_ref());
+    let Some(image) = page.and_then(|id| book.images.get(id)) else { return std::ptr::null() };
+    if let Some((width, height)) = crate::images::size(&image.bytes) {
+        unsafe { (*w, *h) = (width, height) };
+    }
+    unsafe { *len = image.bytes.len() };
+    image.bytes.as_ptr()
+}
+
 /// Tells the document of a PDF what its shell read from the file: the page count and, when not empty, the title.
 ///
 /// # Safety

@@ -447,8 +447,8 @@ impl Reading {
     pub fn event(&mut self, book: &Book, event: Event, at: Locator, now: u64, offset: i64) {
         match event {
             Event::Active => self.tally.active(now, offset),
-            Event::Moved if book.pdf.is_some() => self.tally.turned(now, offset, at.block as u64),
-            Event::Jumped if book.pdf.is_some() => self.tally.jumped(at.block as u64),
+            Event::Moved if book.page_count().is_some() => self.tally.turned(now, offset, at.block as u64),
+            Event::Jumped if book.page_count().is_some() => self.tally.jumped(at.block as u64),
             Event::Moved => {
                 let chars = self.chars(book, at);
                 self.tally.moved(now, offset, chars);

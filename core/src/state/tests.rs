@@ -386,3 +386,13 @@ fn a_pdfs_place_is_its_page() {
     assert!((progress(&book, page(320)) - 0.5).abs() < 1e-6);
     assert_eq!(progress_of(&book, &[page(0), page(640)]), [0.0, 1.0]);
 }
+
+#[test]
+fn a_picture_books_progress_ends_at_its_last_page() {
+    let pictures = crate::model::Pictures { pages: vec![None; 24], rtl: true };
+    let book = crate::model::Book { pictures: Some(pictures), ..crate::model::Book::default() };
+    let page = |block| Locator { chapter: 0, block, offset: 0 };
+    assert!((progress(&book, page(11)) - 0.5).abs() < 1e-6, "12 / 24");
+    assert_eq!(progress(&book, page(23)), 1.0);
+    assert_eq!(clamp(&book, page(99)), page(23));
+}

@@ -1,4 +1,4 @@
-//! Ported from the Android app's `EpubParserTest` (MathML and fixed layout are not goals here).
+//! Ported from the Android app's `EpubParserTest` (MathML is not a goal here).
 
 use crate::archive::zip;
 use crate::model::{Block, Book, Kind, LinkTarget, Locator, Style, StyledText};
@@ -789,3 +789,79 @@ fn plain_bold_stays_bold() {
 }
 
 // endregion
+
+/// A pre-paginated EPUB: `spine` is (path under OPS, content) in order; `.xhtml` files are XHTML bodies.
+fn picture_book(spine: &[(&str, &str)], options: &str, rtl: bool) -> Book {
+    let kind = |path: &str| if path.ends_with(".jpg") { "image/jpeg" } else { "application/xhtml+xml" };
+    let items: String =
+        spine.iter().enumerate().map(|(i, (p, _))| format!(r#"<item id="i{i}" href="{p}" media-type="{}"/>"#, kind(p))).collect();
+    let refs: String = (0..spine.len()).map(|i| format!(r#"<itemref idref="i{i}"/>"#)).collect();
+    let direction = if rtl { r#" page-progression-direction="rtl""# } else { "" };
+    let opf = format!(
+        r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+        <dc:title>Манга</dc:title>{options}</metadata><manifest>{items}<item id="pic" href="p.jpg" media-type="image/jpeg"/></manifest><spine{direction}>{refs}</spine></package>"#
+    );
+    let docs: Vec<(String, Vec<u8>)> = spine
+        .iter()
+        .map(|(p, body)| (format!("OPS/{p}"), if p.ends_with(".jpg") { b"\xFF\xD8\xFFx".to_vec() } else { xhtml(body).into_bytes() }))
+        .collect();
+    let mut entries: Vec<(&str, &[u8])> = vec![
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", CONTAINER_XML.as_bytes()),
+        ("OPS/content.opf", opf.as_bytes()),
+        ("OPS/p.jpg", b"\xFF\xD8\xFFp"),
+    ];
+    entries.extend(docs.iter().map(|(n, b)| (n.as_str(), b.as_slice())));
+    parse(&zip(&entries)).unwrap()
+}
+
+const FIXED: &str = r#"<meta property="rendition:layout">pre-paginated</meta>"#;
+const PAGE: &str = r#"<div><img src="p.jpg"/></div>"#;
+
+#[test]
+fn a_spine_of_pictures_is_a_book_of_pages() {
+    let book = picture_book(&[("1.jpg", ""), ("2.jpg", ""), ("3.xhtml", PAGE), ("4.xhtml", "")], FIXED, true);
+    let pictures = book.pictures.as_ref().unwrap();
+    assert!(pictures.rtl && book.chapters.is_empty());
+    assert_eq!(pictures.pages, [Some("OPS/1.jpg".into()), Some("OPS/2.jpg".into()), Some("OPS/p.jpg".into()), None], "the last page empty");
+    assert_eq!(book.cover.as_deref(), Some("OPS/1.jpg"), "the first page when the package names none");
+    assert_eq!(book.page_count(), Some(4));
+}
+
+#[test]
+fn a_page_of_text_at_the_end_of_a_manga_is_left_out() {
+    let mut spine: Vec<(String, &str)> = (0..12).map(|i| (format!("{i}.jpg"), "")).collect();
+    spine.push(("about.xhtml".to_owned(), "<p>Об этом документе</p>"));
+    let spine: Vec<(&str, &str)> = spine.iter().map(|(p, b)| (p.as_str(), *b)).collect();
+    assert_eq!(picture_book(&spine, FIXED, false).page_count(), Some(12));
+}
+
+#[test]
+fn pictures_with_text_between_them_read_as_a_book() {
+    let book = picture_book(&[("1.jpg", ""), ("2.xhtml", "<p>Текст</p>"), ("3.jpg", ""), ("4.xhtml", "<p>Ещё</p>")], FIXED, false);
+    assert!(book.pictures.is_none() && !book.chapters.is_empty());
+}
+
+#[test]
+fn only_a_fixed_layout_makes_pictures_pages() {
+    assert!(picture_book(&[("1.jpg", ""), ("2.xhtml", "<p>Текст</p>")], "", false).pictures.is_none(), "flowing");
+}
+
+#[test]
+fn a_fixed_book_with_no_picture_is_no_book_of_pages() {
+    let book = parse_empty_pages();
+    assert_eq!(book.err(), Some(Error::NoText));
+}
+
+fn parse_empty_pages() -> Result<Book, Error> {
+    let opf = format!(
+        r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata>{FIXED}</metadata>
+        <manifest><item id="a" href="a.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="a"/></spine></package>"#
+    );
+    let page = xhtml("");
+    parse(&zip(&[
+        ("META-INF/container.xml", CONTAINER_XML.as_bytes()),
+        ("OPS/content.opf", opf.as_bytes()),
+        ("OPS/a.xhtml", page.as_bytes()),
+    ]))
+}

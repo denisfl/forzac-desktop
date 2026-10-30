@@ -35,6 +35,17 @@ pub struct Book {
     pub images: HashMap<String, Image>,
     /// A PDF (`pdf-reading`): no chapters, its shell renders it; its page count once the shell has told it, 0 before.
     pub pdf: Option<usize>,
+    /// A book of picture pages (fixed-layout EPUB): no chapters, its shell draws the pages.
+    pub pictures: Option<Pictures>,
+}
+
+/// The pages of a book of picture pages, in reading order.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Pictures {
+    /// Each page's image in [`Book::images`]; `None`: an empty page.
+    pub pages: Vec<Option<String>>,
+    /// Turned right to left (`page-progression-direction`).
+    pub rtl: bool,
 }
 
 /// A series and the book's number in it.
@@ -72,6 +83,11 @@ pub fn year_in(text: &str) -> Option<u32> {
 impl Book {
     /// The entries of the contents: the book's own, else every chapter, an untitled one as "Chapter N" in the interface
     /// language (as on Android).
+    /// How many pages the shell draws, for a book not typeset here: a PDF, or a book of picture pages.
+    pub fn page_count(&self) -> Option<usize> {
+        self.pdf.or_else(|| self.pictures.as_ref().map(|p| p.pages.len()))
+    }
+
     pub fn contents(&self) -> Vec<TocEntry> {
         if !self.toc.is_empty() {
             return self.toc.clone();

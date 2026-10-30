@@ -519,7 +519,7 @@ const RUSSIAN: &[(&str, &str)] = &[
         "формат не поддерживается — нужен FB2, FB3, EPUB, TXT, Markdown или PDF",
     ),
     ("the file is protected with a password", "файл защищён паролем"),
-    ("This PDF has no contents", "В этом PDF нет содержания"),
+    ("No contents", "Нет содержания"),
     ("The pages of this PDF are scanned: there is no text to search", "Страницы этого PDF отсканированы: искать не в чем"),
     ("the file is damaged", "файл повреждён"),
     ("the book is DRM-protected and can't be opened", "книга защищена (DRM) — такие файлы открыть нельзя"),

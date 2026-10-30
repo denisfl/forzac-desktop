@@ -25,7 +25,7 @@ modules (`core/typesetting/src/main/kotlin/app/truenrth/forzac/typesetting/…` 
 | F3 | EPUB 2/3: package, spine, split chapters joined, nav/NCX, notes, links, DRM rejected, ruby dropped, images in the spine, the cover page skipped (`epub/EpubReader.kt`, `epub/XhtmlReader.kt`, A spec epub-parsing) | The same rules (`core/src/epub/`, spec epub-parsing); also explicit CJK line breaking, which Android gets from `LineBreaker` | same |
 | F4 | Format decided by content (`data/BookParser.kt`) | `core/src/lib.rs` (`parse_format`) | same |
 | F5 | PDF as pages with text layer, search, quotes (`PdfBook.kt`, `PdfReaderScreen.kt`) | Pages on PDFKit (macOS) and PDFium (GTK), outline, search, links; no selection or quotes | `pdf`, as on paper, without themes; margin cropping, spreads split and quotes not in the first version |
-| F6 | Fixed-layout EPUB of picture pages: fit to screen, manga right to left, spreads (`FixedLayoutScreen.kt`, A spec fixed-layout) | Read as ordinary content; a book of images only fails as "no text" (`core/src/epub/mod.rs`) | intended (Not planned for 1.0, confirmed) |
+| F6 | Fixed-layout EPUB of picture pages: fit to screen, manga right to left, spreads (`FixedLayoutScreen.kt`, A spec fixed-layout) | Pages fitted to the window on the theme's paper, right to left, spreads (`core/src/epub/mod.rs`, `macos/Paged.swift`, `gtk/src/pdf.rs`) | `fixed-layout`, reopened 2026-10-30; the theme by `t`, no "Aa" |
 | F7 | MathML formulas typeset by its own engine, inline and display, shrunk to the column, viewer (`model/Math.kt`, `typesetting/MathLayout.kt`, `FormulaViewer.kt`, A spec math) | MathML read as plain text, annotations dropped (`core/src/epub/xhtml.rs`, skip list) | intended (Not planned for 1.0, confirmed) |
 | F8 | A book is imported into the library (copied, id = content hash) from the file picker, "Open with" and "Share", then opened (`MainActivity.kt` `handleIntent`, `LibraryViewModel.kt`, A spec library) | Opened in place: command line, `xdg-open` and file managers (`gtk/src/main.rs`, `HANDLES_OPEN`), Finder, the Dock, `⌘O` (`macos/main.swift`, `AppDelegate.open`), the library's "Open a book" and a file dropped on it (`gtk/src/library.rs`, `macos/Library.swift`); the library lists the books read, without copying them | intended (no import) |
 | F9 | TXT and Markdown, told apart by content; encodings; paragraphs, chapters, lists, tables, anchors (`text/TextParser.kt`, `text/PlainTextReader.kt`, `text/MarkdownReader.kt`, `text/MarkdownInline.kt`, A change markdown-txt) | A port rule for rule (`core/src/text.rs`, `core/src/markdown.rs`, change markdown-txt), checked block for block against the Android reader on 700 files; list items with a hanging indent, task boxes drawn as on Android, a done task in the secondary ink (60 % against 55 %) | same |
@@ -177,7 +177,7 @@ From [roadmap.md](roadmap.md):
 | NP3 | A library screen with import and covers; recent books are enough — reversed 2026-10-17: the library without import | F8, P4, N3, X1 |
 | NP4 | Dictionaries | (Android: draft change `dictionary`, not decided) |
 | NP5 | Formulas (MathML) | F7 |
-| NP6 | Fixed-layout EPUB | F6 |
+| NP6 | Fixed-layout EPUB — reopened 2026-10-30 (`fixed-layout`) | F6 |
 | NP7 | Flatpak (AUR and the `.deb` first) | — |
 | NP8 | A Developer ID, notarisation, Homebrew and the App Store | — |
 | NP9 | Following the Omarchy theme colours | — |

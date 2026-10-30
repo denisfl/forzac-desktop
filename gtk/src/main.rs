@@ -384,7 +384,7 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             return false;
         }
     };
-    if book.pdf.is_some() {
+    if book.page_count().is_some() {
         return match pdf::open_window(app, path, book, options, store) {
             Ok(window) => {
                 WINDOWS.with(|w| w.borrow_mut().push((canonical, window.downgrade())));

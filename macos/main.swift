@@ -55,6 +55,8 @@ final class Reader: NSObject, NSWindowDelegate {
 
     /// Why the last `init` failed: the core's reason (`forzac_open`), 0 when it did not.
     static var openError: UInt32 = 0
+    /// `openError`: not a failure, a book of picture pages.
+    static let pictureBook: UInt32 = 100
     /// Keeps the display awake while reading; ended 10 minutes after the last input or when the window resigns.
     private var activity: NSObjectProtocol?
     private var awakeTimer: Timer?
@@ -63,6 +65,12 @@ final class Reader: NSObject, NSWindowDelegate {
     init?(path: String, state: OpaquePointer?, chapter: UInt32? = nil) {
         Reader.openError = 0
         guard let doc = forzac_open(path, &Reader.openError) else { return nil }
+        // Its window is another's: `AppDelegate.open` goes there.
+        if forzac_pictures(doc) > 0 {
+            forzac_close(doc)
+            Reader.openError = Reader.pictureBook
+            return nil
+        }
         self.path = path
         self.state = state
         var at = ForzacLocator(chapter: min(chapter ?? 0, max(forzac_chapter_count(doc), 1) - 1), block: 0, offset: 0)
@@ -446,9 +454,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var importing: Set<String> = []
     private var showingLibrary = false
     var readers: [Reader] = []
-    var pdfs: [PdfReader] = []
+    var paged: [PagedReader] = []
     /// No book or PDF window is open.
-    private var nothingOpen: Bool { readers.isEmpty && pdfs.isEmpty }
+    private var nothingOpen: Bool { readers.isEmpty && paged.isEmpty }
     var library: LibraryWindow?
     private var settings: SettingsWindow?
     private var checkingUpdate = false
@@ -487,9 +495,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Values of the flags that take one are not books.
         let values = Set(["--png", "--turns", "--chapter", "--page", "--panel", "--theme", "--keys", "--mouse", "--state", "--size", "--picture", "--query", "--click", "-AppleLanguages"].compactMap { value(after: $0) })
         if let path = args.dropFirst().first(where: { !$0.hasPrefix("-") && !values.contains($0) && UInt32($0) == nil }) {
-            if measuring, forzac_path_is_pdf(path) {
+            if measuring, forzac_path_is_pdf(path) || isPictureBook(path) {
                 let opening = Date()
-                guard let reader = openPdf(path, page: value(after: "--page").flatMap { Int($0) }) else {
+                guard let reader = openPaged(path, page: value(after: "--page").flatMap { Int($0) }) else {
                     fputs("\(path): not a readable book\n", stderr)
                     exit(2)
                 }
@@ -508,6 +516,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         appearance = NSApp.observe(\.effectiveAppearance) { [weak self] _, _ in
             let dark = systemIsDark()
             self?.readers.forEach { $0.view.setSystemDark(dark) }
+            self?.paged.forEach { $0.systemAppearanceChanged() }
         }
         if args.contains("--library"), let state {
             showLibrary(state) { [weak self] library in
@@ -557,26 +566,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// Opens a PDF in a window of its own, or brings its open window forward.
+    /// Opens a PDF or a book of picture pages in a window of its own, or brings its open window forward.
     @discardableResult
-    func openPdf(_ path: String, page: Int? = nil) -> PdfReader? {
-        if let reader = pdfs.first(where: { $0.path == path }) {
+    func openPaged(_ path: String, page: Int? = nil) -> PagedReader? {
+        if let reader = paged.first(where: { $0.path == path }) {
             reader.window.makeKeyAndOrderFront(nil)
             return reader
         }
-        guard let reader = PdfReader(path: path, state: state, page: page) else {
-            cannotOpen(path, PdfReader.openError)
+        guard let reader = PagedReader(path: path, state: state, page: page) else {
+            cannotOpen(path, PagedReader.openError)
             return nil
         }
         reader.onClose = { [weak self] r in
-            self?.pdfs.removeAll { $0 === r }
+            self?.paged.removeAll { $0 === r }
             if self?.nothingOpen == true, let state = self?.state { DispatchQueue.main.async { self?.showLibrary(state) } }
         }
         reader.onLibrary = { [weak self] in
             guard let self, !self.nothingOpen, let state = self.state else { return }
             self.showLibrary(state)
         }
-        pdfs.append(reader)
+        paged.append(reader)
         reader.show()
         library?.window.close()
         return reader
@@ -585,7 +594,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @discardableResult
     func open(_ path: String, chapter: UInt32? = nil) -> Reader? {
         if forzac_path_is_pdf(path) {
-            openPdf(path)
+            openPaged(path)
             return nil
         }
         if let reader = readers.first(where: { $0.path == path }) {
@@ -593,6 +602,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return reader
         }
         guard let reader = Reader(path: path, state: state, chapter: chapter) else {
+            if Reader.openError == Reader.pictureBook {
+                openPaged(path)
+                return nil
+            }
             cannotOpen(path, Reader.openError)
             return nil
         }
@@ -609,6 +622,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         reader.show()
         library?.window.close()
         return reader
+    }
+
+    private func isPictureBook(_ path: String) -> Bool {
+        guard let doc = forzac_open(path, nil) else { return false }
+        defer { forzac_close(doc) }
+        return forzac_pictures(doc) > 0
     }
 
     /// Says why `path` cannot be opened (`code` as `forzac_open` gives it); then, when no book is open, the library.
@@ -905,7 +924,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             $0.savePosition()
             $0.leave()
         }
-        pdfs.forEach {
+        paged.forEach {
             $0.savePosition()
             $0.leave()
         }
@@ -917,7 +936,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func sync() {
         guard worker != nil else { return }
         readers.forEach { $0.savePendingPosition() }
-        pdfs.forEach { $0.savePendingPosition() }
+        paged.forEach { $0.savePendingPosition() }
         let starts = readers.map { ($0, $0.view.locator) }
         importQueue.async { [weak self] in
             guard let worker = self?.worker else { return }
@@ -1016,7 +1035,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func showSettings(_ sender: Any?) {
         if let reader = readers.first(where: { $0.window.isKeyWindow }) { reader.run(.settings) } else { openSettings() }
     }
-    @objc func showContents(_ sender: Any?) { (pdfs.first { $0.window.isKeyWindow })?.run(.contents) ?? key?.run(.contents) }
+    @objc func showContents(_ sender: Any?) { (paged.first { $0.window.isKeyWindow })?.run(.contents) ?? key?.run(.contents) }
     @objc func showBookmarks(_ sender: Any?) { key?.run(.bookmarks) }
     @objc func showHighlights(_ sender: Any?) { key?.run(.highlights) }
     @objc func toggleBookmark(_ sender: Any?) { key?.view.toggleBookmark() }
@@ -1024,7 +1043,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func find(_ sender: Any?) {
         if let library, library.window.isKeyWindow {
             library.beginSearch()
-        } else if let pdf = pdfs.first(where: { $0.window.isKeyWindow }) {
+        } else if let pdf = paged.first(where: { $0.window.isKeyWindow }) {
             pdf.run(.search)
         } else {
             key?.run(.search)

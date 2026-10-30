@@ -112,6 +112,11 @@ typedef bool (*ForzacFallback)(uint32_t ch, char *path, size_t capacity, uint32_
 bool forzac_path_is_pdf(const char *path);
 // Whether the document is a PDF: no chapters, and the shell renders it (`pdf-reading`).
 bool forzac_is_pdf(const ForzacDocument *doc);
+// How many picture pages the document has: 0 when it is not a book of picture pages (`fixed-layout`); whether they
+// turn right to left; the bytes of page `i`, owned by the document, and its size in w, h: NULL for an empty page.
+uint32_t forzac_pictures(const ForzacDocument *doc);
+bool forzac_pictures_rtl(const ForzacDocument *doc);
+const uint8_t *forzac_picture(const ForzacDocument *doc, uint32_t i, size_t *len, float *w, float *h);
 // Tells the document of a PDF its page count and, when not empty, its title, as the shell read them from the file.
 void forzac_pdf_set(ForzacDocument *doc, uint32_t pages, const char *title);
 // The matches of `query` in a PDF page's text, by the book search's rules: the snippet and the match's bytes in it.

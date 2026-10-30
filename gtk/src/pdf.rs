@@ -1,6 +1,7 @@
-//! A PDF's window (`pdf-reading`): pages as on paper, drawn by PDFium off the main thread, one at a time with the
-//! neighbours ahead; the same keys, clicks and "Slide" as a book's. Its menu and panels use the Light theme, whatever the
-//! reader's theme is. The core only recognises the type and keeps the place: `Locator(0, page, 0)`.
+//! A window for books made of pages, not typeset here (`pdf-reading`, `fixed-layout`): a PDF drawn by PDFium, or a book
+//! of picture pages. Pages are drawn off the main thread, one at a time with the neighbours ahead; the keys, clicks and
+//! "Slide" are a book's. Over a PDF the menu and panels use the Light theme, whatever the reader's theme is. The core
+//! keeps the place: `Locator(0, page, 0)`.
 //!
 //! PDFium makes no promise about threads, so one thread owns it and everything else asks that thread ([`call`]).
 
@@ -204,30 +205,84 @@ fn render(engine: &Engine, doc: u32, part: &Part) -> Option<(Vec<u8>, i32)> {
     Some((bytes, stride))
 }
 
-fn texture(bytes: Vec<u8>, size: (i32, i32), stride: i32) -> gdk::Texture {
-    gdk::MemoryTexture::new(size.0, size.1, gdk::MemoryFormat::B8g8r8a8Premultiplied, &glib::Bytes::from_owned(bytes), stride as usize)
-        .upcast()
+/// A page's pixels, made off the main thread.
+struct Pixels {
+    bytes: glib::Bytes,
+    format: gdk::MemoryFormat,
+    size: (i32, i32),
+    stride: usize,
+}
+
+impl Pixels {
+    fn texture(&self) -> gdk::Texture {
+        gdk::MemoryTexture::new(self.size.0, self.size.1, self.format, &self.bytes, self.stride).upcast()
+    }
+}
+
+/// Picture page `page` of `book` at `size` pixels; `None` for an empty page or a picture that does not decode.
+fn decode(book: &Book, page: usize, size: (i32, i32)) -> Option<Pixels> {
+    let id = book.pictures.as_ref()?.pages.get(page)?.as_ref()?;
+    let bytes = &book.images.get(id)?.bytes;
+    let drawn = forzac_core::images::is_svg(bytes).then(|| forzac_core::images::png(bytes, size.0 as u32, size.1 as u32)).flatten();
+    let loader = gtk::gdk_pixbuf::PixbufLoader::new();
+    loader.set_size(size.0, size.1);
+    loader.write(drawn.as_deref().unwrap_or(bytes)).ok()?;
+    loader.close().ok()?;
+    let pixbuf = loader.pixbuf()?;
+    let format = if pixbuf.has_alpha() { gdk::MemoryFormat::R8g8b8a8 } else { gdk::MemoryFormat::R8g8b8 };
+    Some(Pixels { bytes: pixbuf.read_pixel_bytes(), format, size: (pixbuf.width(), pixbuf.height()), stride: pixbuf.rowstride() as usize })
+}
+
+/// Part of a page from where the book's pages come from: PDFium's thread, or a worker decoding its picture.
+async fn pixels(doc: u32, pictures: Option<Arc<Book>>, near: Option<Arc<AtomicUsize>>, part: Part) -> Option<Pixels> {
+    let page = part.page;
+    if let Some(book) = pictures {
+        return gio::spawn_blocking(move || {
+            // Flipped past meanwhile.
+            if near.is_some_and(|n| n.load(Ordering::Relaxed).abs_diff(page) > 4) {
+                return None;
+            }
+            decode(&book, page, part.size)
+        })
+        .await
+        .ok()
+        .flatten();
+    }
+    let size = part.size;
+    let (bytes, stride) = ask(move |engine| {
+        if near.is_some_and(|n| n.load(Ordering::Relaxed).abs_diff(page) > 4) {
+            return None;
+        }
+        render(engine, doc, &part)
+    })
+    .await
+    .flatten()?;
+    Some(Pixels { bytes: glib::Bytes::from_owned(bytes), format: gdk::MemoryFormat::B8g8r8a8Premultiplied, size, stride: stride as usize })
 }
 
 // endregion
 
 // region the pages
 
-/// The pages from `first` (two in a spread) fitted to `area` at one scale.
-fn placed(sizes: &[(f32, f32)], first: usize, spread: bool, area: (f32, f32)) -> Vec<(usize, graphene::Rect)> {
-    let count = if spread && first + 1 < sizes.len() { 2 } else { 1 };
-    let shown = &sizes[first..first + count];
-    let width: f32 = shown.iter().map(|s| s.0).sum();
-    let height = shown.iter().map(|s| s.1).fold(1.0, f32::max);
+/// The pages from `first` (two in a spread) fitted to `area` at one scale; the first page of a pair on the right in a
+/// book turned right to left.
+fn placed(sizes: &[(f32, f32)], first: usize, two: bool, rtl: bool, area: (f32, f32)) -> Vec<(usize, graphene::Rect)> {
+    let indices = match (two && first + 1 < sizes.len(), rtl) {
+        (false, _) => vec![first],
+        (true, false) => vec![first, first + 1],
+        (true, true) => vec![first + 1, first],
+    };
+    let width: f32 = indices.iter().map(|&i| sizes[i].0).sum();
+    let height = indices.iter().map(|&i| sizes[i].1).fold(1.0, f32::max);
     let scale = (area.0 / width.max(1.0)).min(area.1 / height);
     let mut x = (area.0 - width * scale) / 2.0;
-    shown
-        .iter()
-        .enumerate()
-        .map(|(i, s)| {
+    indices
+        .into_iter()
+        .map(|i| {
+            let s = sizes[i];
             let rect = graphene::Rect::new(x, (area.1 - s.1 * scale) / 2.0, s.0 * scale, s.1 * scale);
             x += s.0 * scale;
-            (first + i, rect)
+            (i, rect)
         })
         .collect()
 }
@@ -242,6 +297,10 @@ struct Slide {
 #[derive(Default)]
 pub struct State {
     doc: u32,
+    /// A book of picture pages; `None`: a PDF, on PDFium's thread as `doc`.
+    pictures: Option<Arc<Book>>,
+    /// The theme of the pill and, in a book of picture pages, of the paper and the foot.
+    theme: usize,
     sizes: Vec<(f32, f32)>,
     page: usize,
     zoom: f32,
@@ -259,6 +318,40 @@ pub struct State {
     swipe: f64,
     swiped: bool,
     jumped: bool,
+}
+
+impl State {
+    fn rtl(&self) -> bool {
+        self.pictures.as_ref().and_then(|b| b.pictures.as_ref()).is_some_and(|p| p.rtl)
+    }
+
+    /// The first page of the screen with `page`: in a picture book's spreads the first page is alone, then pairs.
+    fn screen_of(&self, page: usize, spread: bool) -> usize {
+        if self.pictures.is_some() && spread && page > 0 { page - (page + 1) % 2 } else { page }
+    }
+
+    fn placed(&self, first: usize, spread: bool, area: (f32, f32)) -> Vec<(usize, graphene::Rect)> {
+        let two = spread && !(self.pictures.is_some() && first == 0);
+        placed(&self.sizes, first, two, self.rtl(), area)
+    }
+
+    fn last_shown(&self, spread: bool, area: (f32, f32)) -> usize {
+        self.placed(self.page, spread, area).iter().map(|p| p.0).max().unwrap_or(self.page)
+    }
+
+    fn next_screen(&self, spread: bool, area: (f32, f32)) -> Option<usize> {
+        Some(self.last_shown(spread, area) + 1).filter(|&p| p < self.sizes.len())
+    }
+
+    fn previous_screen(&self, spread: bool) -> Option<usize> {
+        if self.page == 0 {
+            None
+        } else if self.pictures.is_some() {
+            Some(self.screen_of(self.page - 1, spread))
+        } else {
+            Some(self.page.saturating_sub(if spread { 2 } else { 1 }))
+        }
+    }
 }
 
 type FirstFrame = Box<dyn FnOnce(&PdfView)>;
@@ -300,6 +393,8 @@ mod imp {
                     s.sharp.clear();
                     s.zoom = 1.0;
                     s.pan = (0.0, 0.0);
+                    let spread = self.obj().spread();
+                    s.page = s.screen_of(s.page, spread);
                 }
                 self.obj().prepare();
             }
@@ -308,8 +403,9 @@ mod imp {
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             let view = self.obj();
             let (w, h) = (view.width() as f32, view.height() as f32);
-            snapshot.append_color(&gdk::RGBA::WHITE, &graphene::Rect::new(0.0, 0.0, w, h));
             let s = self.s.borrow();
+            let page_paper = if s.pictures.is_some() { rgba(THEMES[s.theme].paper) } else { gdk::RGBA::WHITE };
+            snapshot.append_color(&page_paper, &graphene::Rect::new(0.0, 0.0, w, h));
             if s.sizes.is_empty() {
                 return;
             }
@@ -320,13 +416,15 @@ mod imp {
                 snapshot.save();
                 snapshot.translate(&graphene::Point::new(dx + s.pan.0, s.pan.1));
                 snapshot.scale(s.zoom, s.zoom);
-                for (page, rect) in placed(&s.sizes, first, spread, area) {
+                for (page, rect) in s.placed(first, spread, area) {
                     if let Some(t) = s.textures.get(&page) {
                         snapshot.append_scaled_texture(t, gsk::ScalingFilter::Linear, &rect);
                     }
                 }
-                for (rect, t) in &s.sharp {
-                    snapshot.append_scaled_texture(t, gsk::ScalingFilter::Linear, rect);
+                if first == s.page {
+                    for (rect, t) in &s.sharp {
+                        snapshot.append_scaled_texture(t, gsk::ScalingFilter::Linear, rect);
+                    }
                 }
                 snapshot.restore();
             };
@@ -341,9 +439,11 @@ mod imp {
                 None => draw(s.page, 0.0),
             }
             snapshot.pop();
-            let ink = rgba(THEMES[0].ink);
-            let paper = rgba(THEMES[0].paper);
-            if s.back.is_empty() {
+            let ink = rgba(THEMES[s.theme].ink);
+            let paper = rgba(THEMES[s.theme].paper);
+            if s.back.is_empty() && s.pictures.is_some() {
+                // The whole window is the page.
+            } else if s.back.is_empty() {
                 let layout = view.create_pango_layout(Some(&format!("{} / {}", s.page + 1, s.sizes.len())));
                 let mut font = gtk::pango::FontDescription::from_string("Golos Text 9");
                 font.set_absolute_size(12.0 * f64::from(gtk::pango::SCALE));
@@ -351,7 +451,7 @@ mod imp {
                 let (tw, _) = layout.pixel_size();
                 snapshot.save();
                 snapshot.translate(&graphene::Point::new((w - tw as f32) / 2.0, h - FOOT + 5.0));
-                snapshot.append_layout(&layout, &rgba(THEMES[0].muted));
+                snapshot.append_layout(&layout, &rgba(THEMES[s.theme].muted));
                 snapshot.restore();
             } else {
                 let layout = view.create_pango_layout(Some(tr("← Back · Ctrl+O")));
@@ -376,11 +476,13 @@ glib::wrapper! {
 }
 
 impl PdfView {
-    fn new(info: &Info, page: usize, settings: forzac_core::settings::Settings) -> Self {
+    fn new(info: &Info, pictures: Option<Arc<Book>>, theme: usize, page: usize, settings: forzac_core::settings::Settings) -> Self {
         let view: Self = glib::Object::new();
         {
             let mut s = view.imp().s.borrow_mut();
             s.doc = info.doc;
+            s.pictures = pictures;
+            s.theme = theme;
             s.sizes = info.sizes.clone();
             s.page = page.min(info.sizes.len() - 1);
             s.zoom = 1.0;
@@ -394,7 +496,8 @@ impl PdfView {
     }
 
     fn area(&self) -> (f32, f32) {
-        (self.width() as f32, (self.height() as f32 - FOOT).max(1.0))
+        let foot = if self.imp().s.borrow().pictures.is_some() { 0.0 } else { FOOT };
+        (self.width() as f32, (self.height() as f32 - foot).max(1.0))
     }
 
     /// The window holds two pages, by the rule for books; a PDF slides whichever mode books are read in.
@@ -404,8 +507,10 @@ impl PdfView {
         s.spread(self.width() as f32, self.height() as f32)
     }
 
-    fn step(&self) -> usize {
-        if self.spread() { 2 } else { 1 }
+    /// The window's theme changed, for a book of picture pages: the same textures on another paper.
+    fn set_theme(&self, theme: usize) {
+        self.imp().s.borrow_mut().theme = theme;
+        self.queue_draw();
     }
 
     pub fn page(&self) -> usize {
@@ -417,7 +522,7 @@ impl PdfView {
     }
 
     fn finished(&self) -> bool {
-        self.page() + self.step() >= self.pages()
+        self.imp().s.borrow().last_shown(self.spread(), self.area()) + 1 >= self.pages()
     }
 
     fn locator(&self) -> Locator {
@@ -435,13 +540,13 @@ impl PdfView {
 
     /// The page and its neighbours rendered on the engine's thread, the page first; those no longer near are dropped.
     fn prepare(&self) {
-        let (step, spread, area, scale) = (self.step(), self.spread(), self.area(), self.scale_factor() as f32);
-        let (doc, here, key, near) = {
+        let (spread, area, scale) = (self.spread(), self.area(), self.scale_factor() as f32);
+        let (doc, pictures, here, key, near) = {
             let s = self.imp().s.borrow();
-            let screens = [Some(s.page), s.page.checked_add(step).filter(|&p| p < s.sizes.len()), s.page.checked_sub(step)];
+            let screens = [Some(s.page), s.next_screen(spread, area), s.previous_screen(spread)];
             let near: Vec<(usize, graphene::Rect)> =
-                screens.into_iter().flatten().flat_map(|first| placed(&s.sizes, first, spread, area)).collect();
-            (s.doc, s.page, s.cached_for, near)
+                screens.into_iter().flatten().flat_map(|first| s.placed(first, spread, area)).collect();
+            (s.doc, s.pictures.clone(), s.page, s.cached_for, near)
         };
         self.imp().near.store(here, Ordering::Relaxed);
         {
@@ -462,26 +567,18 @@ impl PdfView {
             }
             let full = (((rect.width() * scale).round() as i32).max(1), ((rect.height() * scale).round() as i32).max(1));
             let part = Part { page, full, origin: (0, 0), size: full };
-            let reader = self.imp().near.clone();
+            let (reader, book) = (self.imp().near.clone(), pictures.clone());
             let weak = self.downgrade();
             glib::spawn_future_local(async move {
-                let pixels = ask(move |engine| {
-                    // Flipped past meanwhile.
-                    if reader.load(Ordering::Relaxed).abs_diff(page) > 4 {
-                        return None;
-                    }
-                    render(engine, doc, &part)
-                })
-                .await
-                .flatten();
+                let made = pixels(doc, book, Some(reader), part).await;
                 let Some(view) = weak.upgrade() else { return };
                 {
                     let mut s = view.imp().s.borrow_mut();
                     if s.cached_for != key || !s.waiting.remove(&page) {
                         return;
                     }
-                    if let Some((bytes, stride)) = pixels {
-                        s.textures.insert(page, texture(bytes, full, stride));
+                    if let Some(made) = made {
+                        s.textures.insert(page, made.texture());
                     }
                 }
                 view.notify_first();
@@ -494,20 +591,22 @@ impl PdfView {
     fn notify_first(&self) {
         let ready = {
             let s = self.imp().s.borrow();
-            s.textures.contains_key(&s.page)
+            // An empty page of a picture book has nothing to wait for.
+            s.textures.contains_key(&s.page) || (s.pictures.is_some() && !s.waiting.contains(&s.page) && s.cached_for != (0, 0, 0))
         };
         if ready && let Some(f) = self.imp().on_first.borrow_mut().take() {
             f(self);
         }
     }
 
+    /// A turn forward or back in reading order: the slide goes the way the book turns.
     pub fn turn(&self, delta: i32) {
-        let step = self.step() as i64;
-        let (here, count) = (self.page() as i64, self.pages() as i64);
-        let target = here + i64::from(delta) * step;
-        if target < 0 && here == 0 || target >= count {
-            return;
-        }
+        let (spread, area) = (self.spread(), self.area());
+        let (to, rtl) = {
+            let s = self.imp().s.borrow();
+            (if delta > 0 { s.next_screen(spread, area) } else { s.previous_screen(spread) }, s.rtl())
+        };
+        let Some(to) = to else { return };
         {
             let mut s = self.imp().s.borrow_mut();
             s.pill_turns += delta;
@@ -515,11 +614,19 @@ impl PdfView {
                 s.back.clear();
             }
         }
-        self.move_to(target.max(0) as usize, if delta > 0 { 1.0 } else { -1.0 }, false);
+        self.move_to(to, if (delta > 0) != rtl { 1.0 } else { -1.0 }, false);
+    }
+
+    /// A turn towards the right of the window (`towards` 1) or the left (−1).
+    fn turn_side(&self, towards: i32) {
+        let rtl = self.imp().s.borrow().rtl();
+        self.turn(if rtl { -towards } else { towards });
     }
 
     /// Goes to `page` as a jump: the pill brings the reader back.
     pub fn go_to(&self, page: usize) {
+        let spread = self.spread();
+        let page = self.imp().s.borrow().screen_of(page, spread);
         if page >= self.pages() || page == self.page() {
             return;
         }
@@ -637,10 +744,10 @@ impl PdfView {
 
     fn make_sharp(&self) {
         let (area, spread, scale) = (self.area(), self.spread(), self.scale_factor() as f32);
-        let (doc, zoom, pan, ticket, pages) = {
+        let (doc, pictures, zoom, pan, ticket, pages, natural) = {
             let mut s = self.imp().s.borrow_mut();
             s.sharp_ticket += 1;
-            (s.doc, s.zoom, s.pan, s.sharp_ticket, placed(&s.sizes, s.page, spread, area))
+            (s.doc, s.pictures.clone(), s.zoom, s.pan, s.sharp_ticket, s.placed(s.page, spread, area), s.sizes.clone())
         };
         if zoom <= 1.0 {
             return;
@@ -650,16 +757,22 @@ impl PdfView {
         for (page, rect) in pages {
             let Some(part) = rect.intersection(&visible) else { continue };
             let full = ((rect.width() * px).round() as i32, (rect.height() * px).round() as i32);
-            let origin = (((part.x() - rect.x()) * px).round() as i32, ((part.y() - rect.y()) * px).round() as i32);
-            let size = (((part.width() * px).round() as i32).max(1), ((part.height() * px).round() as i32).max(1));
-            let job = Part { page, full, origin, size };
-            let weak = self.downgrade();
+            // A picture is drawn whole, at up to its own size; of a PDF, the part in view.
+            let (shown, job) = if pictures.is_some() {
+                let size = (full.0.min(natural[page].0 as i32).max(1), full.1.min(natural[page].1 as i32).max(1));
+                (rect, Part { page, full: size, origin: (0, 0), size })
+            } else {
+                let origin = (((part.x() - rect.x()) * px).round() as i32, ((part.y() - rect.y()) * px).round() as i32);
+                let size = (((part.width() * px).round() as i32).max(1), ((part.height() * px).round() as i32).max(1));
+                (part, Part { page, full, origin, size })
+            };
+            let (weak, book) = (self.downgrade(), pictures.clone());
             glib::spawn_future_local(async move {
-                let pixels = ask(move |engine| render(engine, doc, &job)).await.flatten();
-                let (Some(view), Some((bytes, stride))) = (weak.upgrade(), pixels) else { return };
+                let made = pixels(doc, book, None, job).await;
+                let (Some(view), Some(made)) = (weak.upgrade(), made) else { return };
                 let mut s = view.imp().s.borrow_mut();
                 if s.sharp_ticket == ticket {
-                    s.sharp.push((part, texture(bytes, size, stride)));
+                    s.sharp.push((shown, made.texture()));
                     drop(s);
                     view.queue_draw();
                 }
@@ -671,7 +784,10 @@ impl PdfView {
     async fn link_at(&self, x: f32, y: f32) -> Option<Link> {
         let (doc, zoom, pan, pages) = {
             let s = self.imp().s.borrow();
-            (s.doc, s.zoom, s.pan, placed(&s.sizes, s.page, self.spread(), self.area()))
+            if s.pictures.is_some() {
+                return None;
+            }
+            (s.doc, s.zoom, s.pan, s.placed(s.page, self.spread(), self.area()))
         };
         let (ax, ay) = ((x - pan.0) / zoom, (y - pan.1) / zoom);
         let (page, rect) = pages.into_iter().find(|(_, r)| r.contains_point(&graphene::Point::new(ax, ay)))?;
@@ -734,21 +850,21 @@ impl PdfView {
                 if zoomed {
                     self.pan_by(-BY, 0.0)
                 } else {
-                    self.turn(1)
+                    self.turn_side(1)
                 }
             }
             Key::h | Key::Left | Key::KP_Left => {
                 if zoomed {
                     self.pan_by(BY, 0.0)
                 } else {
-                    self.turn(-1)
+                    self.turn_side(-1)
                 }
             }
             Key::space | Key::Page_Down | Key::KP_Page_Down => self.turn(1),
             Key::Page_Up | Key::KP_Page_Up | Key::BackSpace => self.turn(-1),
             Key::bracketright => section(true),
             Key::bracketleft => section(false),
-            Key::G | Key::End | Key::KP_End => self.go_to(self.pages().saturating_sub(self.step())),
+            Key::G | Key::End | Key::KP_End => self.go_to(self.pages().saturating_sub(1)),
             Key::g | Key::Home | Key::KP_Home => self.go_to(0),
             Key::plus | Key::equal | Key::KP_Add => self.zoom_by(1.25, middle),
             Key::minus | Key::KP_Subtract => self.zoom_by(0.8, middle),
@@ -756,6 +872,8 @@ impl PdfView {
                 self.reset_zoom();
                 self.queue_draw();
             }
+            Key::t if self.imp().s.borrow().pictures.is_some() => win.step_theme(1),
+            Key::T if self.imp().s.borrow().pictures.is_some() => win.step_theme(-1),
             Key::o => win.show_contents(),
             Key::slash => win.show_search(),
             Key::question => win.help.show(),
@@ -849,7 +967,7 @@ impl PdfView {
                     turn.then_some(s.swipe)
                 };
                 if let Some(d) = turn {
-                    v.turn(if d > 0.0 { 1 } else { -1 });
+                    v.turn_side(if d > 0.0 { 1 } else { -1 });
                 }
             }
             glib::Propagation::Stop
@@ -883,6 +1001,7 @@ struct PdfMenu {
     scrub: Cell<Option<usize>>,
     view: glib::WeakRef<PdfView>,
     open: Cell<bool>,
+    theme: Cell<usize>,
 }
 
 impl PdfMenu {
@@ -924,7 +1043,16 @@ impl PdfMenu {
             bar.set_visible(false);
             overlay.add_overlay(bar);
         }
-        let menu = Rc::new(PdfMenu { top, bottom, slider, page, scrub: Cell::new(None), view: view.downgrade(), open: Cell::new(false) });
+        let menu = Rc::new(PdfMenu {
+            top,
+            bottom,
+            slider,
+            page,
+            scrub: Cell::new(None),
+            view: view.downgrade(),
+            open: Cell::new(false),
+            theme: Cell::new(view.imp().s.borrow().theme),
+        });
         let drag = gtk::GestureDrag::new();
         let m = Rc::downgrade(&menu);
         drag.connect_drag_begin(move |_, x, _| {
@@ -1019,7 +1147,7 @@ impl PdfMenu {
         let Some(view) = self.view.upgrade() else { return };
         let shown = self.scrub.get().unwrap_or_else(|| view.page());
         self.page.set_text(&fill(tr("Page {n} of {m}"), &[("n", &(shown + 1).to_string()), ("m", &view.pages().to_string())]));
-        self.slider.set(view.pages(), shown, &[], 0);
+        self.slider.set(view.pages(), shown, &[], self.theme.get());
     }
 }
 
@@ -1136,9 +1264,34 @@ struct Window {
     search_ticket: Cell<u64>,
     doc: u32,
     count: usize,
+    /// A book of picture pages follows the reader's theme: its settings, where they are saved, whether to save.
+    settings: Cell<forzac_core::settings::Settings>,
+    store: SharedStore,
+    saves: bool,
 }
 
 impl Window {
+    /// `t` and `T` in a book of picture pages: the next or previous theme, saved as a book's.
+    fn step_theme(&self, delta: i32) {
+        let mut settings = self.settings.get();
+        let dark = crate::appearance::dark();
+        settings.step(forzac_core::settings::Setting::Theme, delta, dark);
+        self.settings.set(settings);
+        if self.saves
+            && let Err(e) = settings.save(&mut self.store.borrow_mut())
+        {
+            eprintln!("cannot save the reading state: {e}");
+        }
+        self.show_theme(settings.theme_index(dark));
+    }
+
+    fn show_theme(&self, theme: usize) {
+        crate::panels::set_theme(theme);
+        pictures_chrome(theme);
+        self.menu.theme.set(theme);
+        self.view.set_theme(theme);
+    }
+
     /// A click on the page: closes what is over it, else the pill, a link, then the side thirds turn and the middle
     /// opens the menu.
     fn click(self: &Rc<Self>, x: f32, y: f32) {
@@ -1159,7 +1312,7 @@ impl Window {
                         win.menu.toggle();
                     }
                 }
-                None if view.imp().s.borrow().zoom == 1.0 => view.turn(if x < view.width() as f32 / 3.0 { -1 } else { 1 }),
+                None if view.imp().s.borrow().zoom == 1.0 => view.turn_side(if x < view.width() as f32 / 3.0 { -1 } else { 1 }),
                 None => {}
             }
         });
@@ -1237,7 +1390,7 @@ impl Window {
                     panel.add(&glib::markup_escape_text(title), *depth, *page);
                 }
                 if self.outline.is_empty() {
-                    panel.say(Some(tr("This PDF has no contents")));
+                    panel.say(Some(tr("No contents")));
                 }
                 self.connect_panel(&panel);
                 panel
@@ -1259,6 +1412,9 @@ impl Window {
     }
 
     fn show_search(self: &Rc<Self>) {
+        if self.doc == 0 {
+            return; // a book of picture pages has no text
+        }
         let open = self.search.borrow().as_ref().is_some_and(|p| p.root.is_visible());
         self.close_panels();
         if open {
@@ -1424,36 +1580,58 @@ fn remember(view: &PdfView, window: &gtk::ApplicationWindow, book: Arc<Book>, pa
     });
 }
 
-/// The Light theme over a PDF, whatever the reader's theme is: rules for this window's panels after the theme's.
-fn light_chrome() {
-    thread_local!(static DONE: Cell<bool> = const { Cell::new(false) });
-    if DONE.replace(true) {
-        return;
-    }
+/// The rules for a window's bars and panels in `theme`, after the theme's.
+fn chrome_css(class: &str, theme: usize) -> String {
     let hex = |c: u32| format!("#{c:06x}");
-    let p = THEMES[0];
+    let p = THEMES[theme];
     let (paper, ink, muted, line, sheet) = (hex(p.paper), hex(p.ink), hex(p.muted), hex(p.line), hex(p.sheet));
+    format!(
+        ".{class} .forzac-panel {{ color: {ink}; }}
+         .{class} .forzac-panel .muted {{ color: {muted}; }}
+         .{class} .reader-bar {{ background-color: {paper}; }}
+         .{class} .bar-top {{ box-shadow: inset 0 -1px {line}; }}
+         .{class} .bar-bottom {{ box-shadow: inset 0 1px {line}; padding-top: 12px; }}
+         .{class} .pdf-panel {{ background-color: {sheet}; padding: 20px 14px 0 14px; box-shadow: 0 0 16px alpha(black, 0.16); }}
+         .{class} .pdf-panel list {{ background: none; color: {ink}; }}
+         .{class} .pdf-panel row {{ padding: 6px; }}
+         .{class} .pdf-panel row:selected {{ background-color: alpha({ink}, 0.07); color: {ink}; }}
+         .{class} .pdf-panel .title {{ font-size: 17px; font-weight: 500; }}
+         .{class} .pdf-panel scrolledwindow {{ background: none; }}
+         .{class} .help-card {{ background-color: {sheet}; box-shadow: 0 0 0 1px {line}, 0 12px 32px alpha(black, 0.16); color: {ink}; }}"
+    )
+}
+
+fn add_provider(css: &str) -> gtk::CssProvider {
     let provider = gtk::CssProvider::new();
-    provider.load_from_string(&format!(
-        ".pdf-chrome .forzac-panel {{ color: {ink}; }}
-         .pdf-chrome .forzac-panel .muted {{ color: {muted}; }}
-         .pdf-chrome .reader-bar {{ background-color: {paper}; }}
-         .pdf-chrome .bar-top {{ box-shadow: inset 0 -1px {line}; }}
-         .pdf-chrome .bar-bottom {{ box-shadow: inset 0 1px {line}; padding-top: 12px; }}
-         .pdf-chrome .pdf-panel {{ background-color: {sheet}; padding: 20px 14px 0 14px; box-shadow: 0 0 16px alpha(black, 0.16); }}
-         .pdf-chrome .pdf-panel list {{ background: none; color: {ink}; }}
-         .pdf-chrome .pdf-panel row {{ padding: 6px; }}
-         .pdf-chrome .pdf-panel row:selected {{ background-color: alpha({ink}, 0.07); color: {ink}; }}
-         .pdf-chrome .pdf-panel .title {{ font-size: 17px; font-weight: 500; }}
-         .pdf-chrome .pdf-panel scrolledwindow {{ background: none; }}
-         .pdf-chrome .help-card {{ background-color: {sheet}; box-shadow: 0 0 0 1px {line}, 0 12px 32px alpha(black, 0.16); color: {ink}; }}"
-    ));
+    provider.load_from_string(css);
     if let Some(display) = gdk::Display::default() {
         gtk::style_context_add_provider_for_display(&display, &provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
     }
+    provider
 }
 
-/// Opens the PDF at `path` (`book`, as the core parsed it) in a window of its own.
+/// The Light theme over a PDF, whatever the reader's theme is.
+fn light_chrome() {
+    thread_local!(static DONE: Cell<bool> = const { Cell::new(false) });
+    if !DONE.replace(true) {
+        add_provider(&chrome_css("pdf-chrome", 0));
+    }
+}
+
+/// The reader's theme over a book of picture pages.
+fn pictures_chrome(theme: usize) {
+    thread_local!(static PROVIDER: RefCell<Option<gtk::CssProvider>> = const { RefCell::new(None) });
+    let css = chrome_css("pictures-chrome", theme);
+    PROVIDER.with(|p| {
+        let mut p = p.borrow_mut();
+        match p.as_ref() {
+            Some(provider) => provider.load_from_string(&css),
+            None => *p = Some(add_provider(&css)),
+        }
+    });
+}
+
+/// Opens the PDF or the book of picture pages at `path` (`book`, as the core parsed it) in a window of its own.
 pub fn open_window(
     app: &gtk::Application,
     path: &Path,
@@ -1461,24 +1639,36 @@ pub fn open_window(
     options: &Options,
     store: &SharedStore,
 ) -> Result<gtk::ApplicationWindow, Error> {
-    let file = path.to_owned();
-    // Opening a window waits for this, as parsing a book does.
-    let info = call(move |engine| open_doc(engine, &file)).ok_or(Error::Unavailable)??;
     let stateless = options.stateless();
-    book.pdf = Some(info.sizes.len());
-    if let Some(title) = forzac_core::library::pdf_title(&info.title) {
-        book.title = title.to_owned();
-    }
+    let is_pdf = book.pdf.is_some();
+    let info = if is_pdf {
+        let file = path.to_owned();
+        // Opening a window waits for this, as parsing a book does.
+        let info = call(move |engine| open_doc(engine, &file)).ok_or(Error::Unavailable)??;
+        book.pdf = Some(info.sizes.len());
+        if let Some(title) = forzac_core::library::pdf_title(&info.title) {
+            book.title = title.to_owned();
+        }
+        info
+    } else {
+        picture_info(&book)
+    };
     let (at, settings) = if stateless {
         (Locator { block: options.page, ..Locator::default() }, Default::default())
     } else {
         let s = store.borrow();
         (s.position(&book, path).unwrap_or_default(), forzac_core::settings::Settings::load(&s))
     };
-    crate::panels::set_theme(settings.theme_index(crate::appearance::dark()));
-    light_chrome();
+    let theme = settings.theme_index(crate::appearance::dark());
+    crate::panels::set_theme(theme);
+    if is_pdf {
+        light_chrome();
+    } else {
+        pictures_chrome(theme);
+    }
     crate::fonts::add_interface_fonts();
-    let view = PdfView::new(&info, at.block, settings);
+    let book = Arc::new(book);
+    let view = PdfView::new(&info, (!is_pdf).then(|| book.clone()), if is_pdf { 0 } else { theme }, at.block, settings);
     let overlay = gtk::Overlay::new();
     overlay.set_child(Some(&view));
     let help = crate::help::Help::new(false);
@@ -1493,7 +1683,7 @@ pub fn open_window(
     let title = if book.title.is_empty() { tr("Forzac").to_owned() } else { fill(tr("{title} — Forzac"), &[("title", &book.title)]) };
     let window =
         gtk::ApplicationWindow::builder().application(app).title(&title).default_width(width).default_height(height).child(&outer).build();
-    window.add_css_class("pdf-chrome");
+    window.add_css_class(if is_pdf { "pdf-chrome" } else { "pictures-chrome" });
     if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
         window.set_decorated(false);
     }
@@ -1510,8 +1700,20 @@ pub fn open_window(
         contents: RefCell::default(),
         search: RefCell::default(),
         search_ticket: Cell::new(0),
+        settings: Cell::new(settings),
+        store: store.clone(),
+        saves: !stateless,
     });
     view.connect_input(&win);
+    if !is_pdf && !stateless {
+        let w = Rc::downgrade(&win);
+        let watch = Cell::new(crate::appearance::watch(move |dark| {
+            if let Some(w) = w.upgrade() {
+                w.show_theme(w.settings.get().theme_index(dark));
+            }
+        }));
+        window.connect_destroy(move |_| drop(watch.take()));
+    }
     let w = Rc::downgrade(&win);
     contents_button.connect_clicked(move |_| {
         if let Some(w) = w.upgrade() {
@@ -1527,24 +1729,46 @@ pub fn open_window(
             crate::library_window(&app, &options2, &store2, |_| {});
         }
     });
-    let book = Arc::new(book);
     measure(&view, &window, options, &win);
     // The window keeps its panels; the document goes with it.
     let held = RefCell::new(Some(win));
     let doc = info.doc;
     window.connect_destroy(move |_| {
         held.borrow_mut().take();
-        drop(gio::spawn_blocking(move || call(move |engine| engine.docs.remove(&doc).is_some())));
+        if is_pdf {
+            drop(gio::spawn_blocking(move || call(move |engine| engine.docs.remove(&doc).is_some())));
+        }
     });
     if !stateless {
         remember(&view, &window, book.clone(), path, store);
-        remember_cover(&book, path);
+        if is_pdf {
+            remember_cover(&book, path);
+        } else {
+            crate::library::cache_cover(&book);
+        }
         crate::remember_size(&window, store, "window-book");
         crate::keep_awake(app, &window);
     }
     window.present();
     view.grab_focus();
     Ok(window)
+}
+
+/// What a book of picture pages holds, in the terms of a PDF: an empty page takes its neighbour's size.
+fn picture_info(book: &Book) -> Info {
+    let mut last = (2.0, 3.0);
+    let pages = book.pictures.as_ref().map_or(&[][..], |p| p.pages.as_slice());
+    let sizes = pages
+        .iter()
+        .map(|id| {
+            if let Some(size) = id.as_ref().and_then(|id| book.images.get(id)).and_then(|i| forzac_core::images::size(&i.bytes)) {
+                last = size;
+            }
+            last
+        })
+        .collect();
+    let outline = book.toc.iter().map(|e| (e.title.clone(), e.level.saturating_sub(1) as usize, e.target.block)).collect();
+    Info { doc: 0, sizes, title: String::new(), outline }
 }
 
 /// The library's cover, when it has none yet: the first page.

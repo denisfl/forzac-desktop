@@ -12,7 +12,7 @@ use xhtml::{Anchor, Css, Doc, without_rare_signs};
 
 use crate::Error;
 use crate::archive::{normalize_path, percent_decode};
-use crate::model::{Block, Book, Chapter, Image, LinkTarget, Locator, Note, Style, TocEntry};
+use crate::model::{Block, Book, Chapter, Image, LinkTarget, Locator, Note, Pictures, Style, TocEntry};
 use crate::xml::{Ev, Xml, attr, collapse};
 
 pub(crate) const CONTAINER: &str = "META-INF/container.xml";
@@ -42,6 +42,10 @@ struct Opf {
     spine: Vec<(String, bool)>,
     ncx: Option<String>,
     cover: Option<String>,
+    /// `rendition:layout` is `pre-paginated`.
+    fixed: bool,
+    /// `page-progression-direction` is `rtl`.
+    rtl: bool,
 }
 
 /// The part of a document from block `doc_start` on lies in `chapter` from block `offset`.
@@ -88,6 +92,33 @@ pub(crate) fn read(archive: &HashMap<String, Vec<u8>>) -> Result<Book, Error> {
     let anchor = |path: &str, fragment: &str| by_path.get(path).and_then(|d| d.anchors.get(fragment)).copied();
 
     let raw_toc = read_nav(&files, &opf).or_else(|| read_ncx(&files, &opf)).unwrap_or_default();
+    if opf.fixed
+        && let Some((pages, kept)) = picture_pages(&docs, &linear)
+    {
+        let toc = raw_toc
+            .iter()
+            .filter_map(|e| {
+                let block = kept.iter().position(|path| *path == e.path)?;
+                Some(TocEntry { title: e.title.clone(), level: e.level, target: Locator { chapter: 0, block, offset: 0 } })
+            })
+            .collect();
+        let images = book_images(&opf, &files);
+        let first = pages.iter().flatten().next().cloned();
+        return Ok(Book {
+            title: opf.title,
+            authors: opf.authors,
+            language: opf.language,
+            annotation: opf.description,
+            series: opf.series,
+            genres: opf.genres,
+            year: opf.year,
+            cover: opf.cover.filter(|c| files.contains_key(c.as_str())).or(first),
+            toc,
+            images,
+            pictures: Some(Pictures { pages, rtl: opf.rtl }),
+            ..Book::default()
+        });
+    }
     let (notes, note_ranges) = collect_notes(&docs, &by_path);
     let notes_docs: HashSet<&str> = docs.iter().filter(|d| is_notes_doc(d, &note_ranges)).map(|d| d.path.as_str()).collect();
 
@@ -180,14 +211,7 @@ pub(crate) fn read(archive: &HashMap<String, Vec<u8>>) -> Result<Book, Error> {
         })
         .collect();
 
-    let images = opf
-        .items
-        .iter()
-        .filter_map(|i| {
-            let bytes = files.get(i.path.as_str()).filter(|b| !b.is_empty())?;
-            Some((i.path.clone(), Image { content_type: image_type(i, &files, &opf.spine)?, bytes: bytes.to_vec() }))
-        })
-        .collect();
+    let images = book_images(&opf, &files);
 
     let mut book = Book {
         title: opf.title,
@@ -218,6 +242,38 @@ pub(crate) fn read(archive: &HashMap<String, Vec<u8>>) -> Result<Book, Error> {
         Some(LinkTarget::Place { start, end })
     });
     Ok(book)
+}
+
+/// The images of the manifest, by path.
+fn book_images(opf: &Opf, files: &HashMap<&str, &[u8]>) -> HashMap<String, Image> {
+    opf.items
+        .iter()
+        .filter_map(|i| {
+            let bytes = files.get(i.path.as_str()).filter(|b| !b.is_empty())?;
+            Some((i.path.clone(), Image { content_type: image_type(i, files, &opf.spine)?, bytes: bytes.to_vec() }))
+        })
+        .collect()
+}
+
+/// The pages of a fixed-layout book, when it is one of picture pages, and each page's document: a page is one image or
+/// empty; other pages are left out when they are at most a tenth, and otherwise the book is an ordinary one.
+fn picture_pages<'a>(docs: &'a [Doc], linear: &HashSet<&str>) -> Option<(Vec<Option<String>>, Vec<&'a str>)> {
+    let pages: Vec<&Doc> = docs.iter().filter(|d| linear.contains(d.path.as_str())).collect();
+    let kept: Vec<(Option<String>, &str)> = pages
+        .iter()
+        .filter_map(|doc| {
+            let blocks: Vec<&Block> = doc.main.blocks.iter().filter(|b| !matches!(b, Block::EmptyLine)).collect();
+            match blocks.as_slice() {
+                [Block::Image { id }] => Some((Some(id.clone()), doc.path.as_str())),
+                [] if !doc.path.to_lowercase().ends_with(".svg") => Some((None, doc.path.as_str())),
+                _ => None,
+            }
+        })
+        .collect();
+    if kept.iter().all(|(id, _)| id.is_none()) || pages.len() - kept.len() > pages.len() / 10 {
+        return None;
+    }
+    Some(kept.into_iter().unzip())
 }
 
 fn heading_level(block: &Block) -> Option<u32> {
@@ -269,6 +325,7 @@ fn read_opf(files: &HashMap<&str, &[u8]>) -> Result<Opf, Error> {
     let mut collections: Vec<(Option<String>, String)> = Vec::new();
     let mut positions: HashMap<String, String> = HashMap::new();
     let (mut genres, mut year) = (Vec::<String>::new(), None);
+    let (mut pre_paginated, mut fixed_items, mut rtl) = (false, 0, false);
     walk(bytes, |xml, name, attrs| match name {
         "title" if title.is_empty() => title = xml.text().unwrap_or_default(),
         "creator" => {
@@ -287,6 +344,11 @@ fn read_opf(files: &HashMap<&str, &[u8]>) -> Result<Opf, Error> {
             }
         }
         "date" if year.is_none() => year = crate::model::year_in(&xml.text().unwrap_or_default()),
+        "meta" if attr(attrs, "property") == Some("rendition:layout") => {
+            if attr(attrs, "refines").is_none() && xml.text().is_ok_and(|t| t.trim() == "pre-paginated") {
+                pre_paginated = true;
+            }
+        }
         "meta" => {
             match attr(attrs, "name") {
                 Some("cover") => cover_id = attr(attrs, "content").map(str::to_owned),
@@ -317,10 +379,14 @@ fn read_opf(files: &HashMap<&str, &[u8]>) -> Result<Opf, Error> {
                 });
             }
         }
-        "spine" => ncx_id = attr(attrs, "toc").map(str::to_owned),
+        "spine" => {
+            ncx_id = attr(attrs, "toc").map(str::to_owned);
+            rtl = attr(attrs, "page-progression-direction") == Some("rtl");
+        }
         "itemref" => {
             if let Some(item) = items.iter().find(|i| Some(i.id.as_str()) == attr(attrs, "idref")) {
                 spine.push((item.path.clone(), attr(attrs, "linear") != Some("no")));
+                fixed_items += usize::from(attr(attrs, "properties").is_some_and(|p| p.contains("rendition:layout-pre-paginated")));
             }
         }
         "reference" if attr(attrs, "type") == Some("cover") => guide_cover = attr(attrs, "href").map(|h| resolve_path(&path, h)),
@@ -362,7 +428,8 @@ fn read_opf(files: &HashMap<&str, &[u8]>) -> Result<Opf, Error> {
             .find_map(|(id, name)| crate::model::Series::parse(&name, id.and_then(|id| positions.get(&id)).map(String::as_str))),
     };
     let language = language.map(|l| l.trim().to_owned());
-    Ok(Opf { title: collapse(&title), authors, language, description, series, genres, year, items, spine, ncx, cover })
+    let fixed = pre_paginated || (!spine.is_empty() && fixed_items == spine.len());
+    Ok(Opf { title: collapse(&title), authors, language, description, series, genres, year, items, spine, ncx, cover, fixed, rtl })
 }
 
 /// The image type of a manifest item: its declared `image/*` type, or, when the manifest labels it otherwise

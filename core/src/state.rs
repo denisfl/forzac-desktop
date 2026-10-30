@@ -705,7 +705,7 @@ pub fn legacy_id(bytes: &[u8]) -> String {
 
 /// `at` moved inside the book: a position from a changed file must not point past its end.
 pub fn clamp(book: &Book, at: Locator) -> Locator {
-    if let Some(pages) = book.pdf {
+    if let Some(pages) = book.page_count() {
         return Locator { chapter: 0, block: at.block.min(pages.saturating_sub(1)), offset: 0 };
     }
     let Some(last) = book.chapters.len().checked_sub(1) else { return Locator::default() };
@@ -719,7 +719,7 @@ pub fn clamp(book: &Book, at: Locator) -> Locator {
 
 /// The share of the book's text before each of `places`, in one pass over the book (for the contents).
 pub fn progress_of(book: &Book, places: &[Locator]) -> Vec<f32> {
-    if book.pdf.is_some() {
+    if book.page_count().is_some() {
         return places.iter().map(|&at| progress(book, at)).collect();
     }
     // Text before each block: block starts per chapter, then the total.
@@ -750,6 +750,9 @@ pub fn progress_of(book: &Book, places: &[Locator]) -> Vec<f32> {
 
 /// The share of the book's text before `at`.
 pub fn progress(book: &Book, at: Locator) -> f32 {
+    if let Some(pictures) = &book.pictures {
+        return (at.block + 1).min(pictures.pages.len()) as f32 / pictures.pages.len().max(1) as f32;
+    }
     if let Some(pages) = book.pdf {
         return if pages > 1 { at.block.min(pages - 1) as f32 / (pages - 1) as f32 } else { 0.0 };
     }

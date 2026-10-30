@@ -500,7 +500,7 @@ fn local_changes(store: &Store, own: &mut HashMap<(u8, String, String), Record>,
         };
         if changed
             && !books.pdf_named(&e.id)
-            && let Some(book) = books.get(&e.id).filter(|b| b.pdf.is_none())
+            && let Some(book) = books.get(&e.id).filter(|b| b.page_count().is_none())
         {
             let time = after(own, &key, read);
             let item = Item::Position { place: place_of(book, e.position), progress: e.progress };
@@ -627,7 +627,7 @@ fn apply(
             Item::Position { place, progress } => {
                 // A later reading here has already been recorded as a local change, which this item is newer than.
                 let path = books.paths.get(&id).cloned();
-                let Some(book) = books.get(&id).filter(|b| b.pdf.is_none()) else { continue };
+                let Some(book) = books.get(&id).filter(|b| b.page_count().is_none()) else { continue };
                 let at = locate(book, place);
                 // Only over the place the sync started from: a page turned meanwhile wins, and goes out next time.
                 if let Some(path) = path
