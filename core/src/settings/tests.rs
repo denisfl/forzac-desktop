@@ -92,6 +92,9 @@ fn a_wide_window_shows_a_spread() {
     let s = Settings::default();
     assert!(!s.spread(900.0, 1440.0), "taller than wide");
     assert!(!Settings { turning: Turning::Scroll, ..s }.spread(1920.0, 1080.0), "Scroll is one column");
+    for turning in [Turning::Cover, Turning::Curl] {
+        assert!(Settings { turning, ..s }.spread(1920.0, 1080.0), "pages as in Slide");
+    }
     assert_eq!(s.note_style(1440.0).width, 1440.0);
     assert_eq!(s.spread_inset(1440.0, 900.0), 0.0, "the least margins: nothing to move");
     let margin = s.page_style(1920.0, 1080.0).margin_h;
@@ -99,4 +102,22 @@ fn a_wide_window_shows_a_spread() {
     assert!((2.0 * (margin - inset) - (margin + inset)).abs() < 0.01, "the gutter as wide as an outer margin");
     assert_eq!(s.spread_inset(1080.0, 1920.0), 0.0);
     assert_eq!(s.table_style(1.0).width, 100_000.0);
+}
+
+#[test]
+fn a_computer_steps_over_the_turnings_it_does_not_have() {
+    let mut s = Settings::default();
+    s.step(Setting::Turning, 1, false);
+    assert_eq!(s.turning, Turning::Scroll);
+    s.step(Setting::Turning, 1, false);
+    assert_eq!(s.turning, Turning::Slide);
+}
+
+#[test]
+fn cover_and_curl_are_kept() {
+    let mut store = store();
+    for turning in [Turning::Cover, Turning::Curl] {
+        Settings { turning, ..Settings::default() }.save(&mut store).unwrap();
+        assert_eq!(Settings::load(&store).turning, turning);
+    }
 }

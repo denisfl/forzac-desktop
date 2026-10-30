@@ -72,7 +72,7 @@ typedef struct {
     uint32_t spacing;       // compact, normal, loose
     uint32_t align;         // justified, left
     uint32_t margins;       // narrow, medium, wide
-    uint32_t turning;       // slide, scroll
+    uint32_t turning;       // slide, scroll, cover, curl (the last two: the phone and tablet shells)
 } ForzacSettings;
 
 typedef struct {

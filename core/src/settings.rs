@@ -104,15 +104,24 @@ pub enum Turning {
     #[default]
     Slide,
     Scroll,
+    /// The top page leaves over the still one under it. Pages as in "Slide"; only the phone and tablet shells have it.
+    Cover,
+    /// The page curls away. Pages as in "Slide"; only the phone and tablet shells have it.
+    Curl,
 }
 
 impl Turning {
-    pub const ALL: [Turning; 2] = [Turning::Slide, Turning::Scroll];
+    /// The order of `ForzacSettings.turning`.
+    pub const ALL: [Turning; 4] = [Turning::Slide, Turning::Scroll, Turning::Cover, Turning::Curl];
+    /// What the settings panel goes through on a computer.
+    const ON_COMPUTER: [Turning; 2] = [Turning::Slide, Turning::Scroll];
 
     fn key(self) -> &'static str {
         match self {
             Turning::Slide => "slide",
             Turning::Scroll => "scroll",
+            Turning::Cover => "cover",
+            Turning::Curl => "curl",
         }
     }
 }
@@ -202,12 +211,12 @@ impl Settings {
         TEXT_SIZES[self.size.min(TEXT_SIZES.len() - 1)]
     }
 
-    /// Whether a window of `width` × `height` logical pixels shows two pages side by side: "Slide", wider than tall,
+    /// Whether a window of `width` × `height` logical pixels shows two pages side by side: pages, not "Scroll", wider than tall,
     /// and each half holds a column of `MIN_SPREAD_COLUMN` with the least side margins.
     pub fn spread(&self, width: f32, height: f32) -> bool {
         let (_, share) = self.margins.column();
         let half = width / 2.0;
-        self.turning == Turning::Slide && width > height && half - 2.0 * share * half >= MIN_SPREAD_COLUMN * self.text_size()
+        self.turning != Turning::Scroll && width > height && half - 2.0 * share * half >= MIN_SPREAD_COLUMN * self.text_size()
     }
 
     /// How far a spread's pages are drawn towards the gutter (the left page right, the right page left), so the gutter
@@ -272,7 +281,7 @@ impl Settings {
             Setting::Spacing => self.spacing = round(&Spacing::ALL, self.spacing, delta),
             Setting::Align => self.align = round(&Align::ALL, self.align, delta),
             Setting::Margins => self.margins = round(&Margins::ALL, self.margins, delta),
-            Setting::Turning => self.turning = round(&Turning::ALL, self.turning, delta),
+            Setting::Turning => self.turning = round(&Turning::ON_COMPUTER, self.turning, delta),
         }
     }
 }
