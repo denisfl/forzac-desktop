@@ -2364,7 +2364,7 @@ impl Library {
     fn choose_file(self: &Rc<Self>) {
         let filter = gtk::FileFilter::new();
         filter.set_name(Some(tr("Books")));
-        for suffix in ["fb2", "zip", "fb3", "epub", "txt", "md", "markdown"] {
+        for suffix in ["fb2", "zip", "fb3", "epub", "pdf", "txt", "md", "markdown"] {
             filter.add_suffix(suffix);
         }
         let filters = gio::ListStore::new::<gtk::FileFilter>();

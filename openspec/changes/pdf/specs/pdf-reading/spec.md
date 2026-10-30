@@ -23,11 +23,11 @@ A PDF page SHALL be shown in its original colours on white (#FFFFFF), without re
 - **THEN** the FB2 shows in the Dark theme
 
 ### Requirement: Pages in the window
-A page SHALL fit the window whole. When the window is wider than tall and holds two pages by the existing spread rule, two neighbouring pages SHALL show side by side at one scale. Resizing SHALL keep the page.
+A page SHALL fit the window whole. When the window is wider than tall and holds two pages by the existing spread rule, pages SHALL show side by side at one scale as in a paper book: the first page alone on the right, then pairs (2, 3), (4, 5). Resizing SHALL keep the page.
 
 #### Scenario: Wide window
 - **WHEN** a book-format PDF is open in a full-screen landscape window
-- **THEN** two pages show side by side and a turn moves by two
+- **THEN** facing pages show side by side, as in the printed book, and a turn moves by two
 
 ### Requirement: Turning and place
 A PDF SHALL turn with the same keys, clicks, wheel and swipe as a book, with the "Slide" animation in either page mode. The foot SHALL show "N / M". The page SHALL be remembered as `Locator(0, page, 0)` and restored on reopening. It MUST NOT be written to the sync file; reading time and pages SHALL go into the reading log.

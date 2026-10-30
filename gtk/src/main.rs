@@ -11,7 +11,7 @@
 //! every page shows the ribbon and highlights; `--toggles N` sets and removes a bookmark N times (the ribbon drops and
 //! rises), `--strokes N` highlights N paragraphs one after another (the marker's stroke), each printing the same
 //! statistics; `--mouse "down X Y; drag X Y; up X Y; click X Y N"` sends those mouse events to the page's handlers after
-//! the first frame, 0.15 s apart, and leaves the window open; `--show-help` opens the help (with `--png`: the whole
+//! the first frame, 0.15 s apart, and leaves the window open; `--show-menu` the menu and `--show-help` the help (with `--png`: the whole
 //! window is saved once it has faded in); `--size WxH` makes the window W × H instead of 760 × 980 (`1920x1080`: a
 //! two-page spread).
 //! With any of them the reading state is neither read nor written.
@@ -731,7 +731,11 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
     if options.measure || options.png.is_some() || options.turns > 0 || options.scrolls > 0 || options.toggles > 0 || options.strokes > 0 {
         let options = options.clone();
         let window = window.clone();
+        let menu = menu.clone();
         view.connect_first_frame(move |view| {
+            if std::env::args().any(|a| a == "--show-menu") {
+                menu.open();
+            }
             if options.measure {
                 println!(
                     "startup: parsed {parsed:?}, first page presented {:?}, pages in chapter {}",
@@ -742,7 +746,7 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             if options.page > 0 {
                 view.go_to_page(options.page);
             }
-            if let Some(png) = options.png.clone().filter(|_| std::env::args().any(|a| a == "--show-help")) {
+            if let Some(png) = options.png.clone().filter(|_| std::env::args().any(|a| a == "--show-help" || a == "--show-menu")) {
                 // The whole window once the help has faded in.
                 let window = window.clone();
                 glib::timeout_add_local_once(Duration::from_millis(400), move || {

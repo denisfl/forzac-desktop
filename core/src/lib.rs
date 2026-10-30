@@ -36,7 +36,7 @@ pub use layout::{
     Area, BookPages, ChapterLayout, CountControl, EndLines, GlyphRun, Ink, PageContent, PageImage, PageStyle, Rect, Rule, Shape, Stroke,
     TableView, Target, Typesetter, Word, end_page, layout_note, layout_preview, layout_table, paginate,
 };
-pub use model::{Block, Book, Chapter, Locator};
+pub use model::{Block, Book, Chapter, Locator, time_left};
 
 /// Why a file is not a readable book.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

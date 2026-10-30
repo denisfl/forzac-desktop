@@ -1,6 +1,6 @@
 //! The reading menu over the page, as the web reader's (`#bar-top`, `#bar-bottom`) and Android's `ReaderMenu`: at the
 //! top back to the library, the section and the book, the contents; at the bottom a slider over the whole book with
-//! the chapters' ticks, "Page N of M", the time left in the chapter and "Aa". A click in the middle third of the page or
+//! the chapters' ticks, "Page N of M", the time left in the chapter and in the book, and "Aa". A click in the middle third of the page or
 //! `Enter` opens it; a click on the page or `Esc` closes it; `←`/`→`/`h`/`l` move the slider and `Enter` goes there.
 //! The bars fade and slide in (CSS transitions); the page under them is not drawn again.
 
@@ -38,6 +38,7 @@ pub struct Menu {
     slider: Slider,
     page: gtk::Label,
     hint: gtk::Label,
+    book_left: gtk::Label,
     /// The book page the slider shows while the reader moves it; `None`: the reading position's.
     scrub: Cell<Option<usize>>,
     open: Rc<Cell<bool>>,
@@ -107,8 +108,11 @@ impl Menu {
         let hint = label(&["bar-hint", "muted"]);
         page.set_xalign(0.0);
         hint.set_xalign(0.0);
+        let book_left = label(&["bar-hint", "muted"]);
+        book_left.set_xalign(0.0);
         info.append(&page);
         info.append(&hint);
+        info.append(&book_left);
         let aa = gtk::Button::with_label("Aa");
         aa.add_css_class("bar-aa");
         aa.set_tooltip_text(Some(tr("Text settings")));
@@ -133,6 +137,7 @@ impl Menu {
             slider,
             page,
             hint,
+            book_left,
             scrub: Cell::new(None),
             open: Rc::new(Cell::new(false)),
             hide: Rc::default(),
@@ -330,12 +335,12 @@ impl Menu {
         }
         let hint = match (self.scrub.get(), &pages) {
             (Some(page), Some(pages)) => book.section_at(pages.start(page)),
-            _ => match book.minutes_left(here) {
-                0 => tr("Less than a minute left in chapter").to_owned(),
-                n => fill(tr("{n} min left in chapter"), &[("n", &n.to_string())]),
-            },
+            _ => forzac_core::time_left(book.minutes_left(here), false),
         };
         self.hint.set_text(&hint);
+        // Not while the slider moves, as on Android.
+        self.book_left.set_visible(self.scrub.get().is_none());
+        self.book_left.set_text(&forzac_core::time_left(book.book_minutes_left(here), true));
     }
 }
 

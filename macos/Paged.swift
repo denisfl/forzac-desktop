@@ -14,8 +14,8 @@ private let maxZoom: CGFloat = 4
 private protocol PageSource: AnyObject {
     var count: Int { get }
     var rtl: Bool { get }
-    /// In a spread the first page shows alone, then pairs.
-    var firstAlone: Bool { get }
+    /// A page alone in a spread takes its side of the window, as in a paper book, not the middle.
+    var alonePageOnItsSide: Bool { get }
     func size(_ i: Int) -> CGSize
     /// Draws page `i` into `size` points at the context's origin, for `pixels` device pixels a point.
     func draw(_ i: Int, in ctx: CGContext, size: CGSize, pixels: CGFloat)
@@ -30,7 +30,7 @@ private func shownSize(_ page: PDFPage) -> CGSize {
 private final class PdfSource: PageSource {
     private let doc: PDFDocument
     private let sizes: [CGSize]
-    let rtl = false, firstAlone = false
+    let rtl = false, alonePageOnItsSide = true
 
     init(_ doc: PDFDocument, sizedBy main: PDFDocument) {
         self.doc = doc
@@ -57,7 +57,7 @@ private final class HeldDocument {
 private final class PictureSource: PageSource {
     private let held: HeldDocument
     private let sizes: [CGSize]
-    let rtl: Bool, firstAlone = true
+    let rtl: Bool, alonePageOnItsSide = false
 
     init(_ held: HeldDocument) {
         self.held = held
@@ -87,11 +87,18 @@ private final class PictureSource: PageSource {
     }
 }
 
-/// The pages from `first` (two in a spread) fitted to `area` at one scale: their rectangles, y up; the first page of
-/// a pair on the right in a book turned right to left.
+/// The pages from `first` fitted to `area` at one scale: their rectangles, y up. In a spread the first page is alone,
+/// then pairs, the first of a pair on the right in a book turned right to left.
 private func placed(_ source: PageSource, first: Int, spread: Bool, area: CGSize) -> [(index: Int, rect: CGRect)] {
     guard first < source.count, area.width > 0, area.height > 0 else { return [] }
-    let alone = !spread || first + 1 >= source.count || (source.firstAlone && first == 0)
+    let alone = !spread || first + 1 >= source.count || first == 0
+    if alone && spread && source.alonePageOnItsSide && source.count > 1 {
+        // Page 1 on the right, a last page on the left.
+        let s = source.size(first), half = area.width / 2
+        let scale = min(half / max(s.width, 1), area.height / max(s.height, 1))
+        let (w, h) = (s.width * scale, s.height * scale)
+        return [(first, CGRect(x: first == 0 ? half : half - w, y: (area.height - h) / 2, width: w, height: h))]
+    }
     let indices = alone ? [first] : (source.rtl ? [first + 1, first] : [first, first + 1])
     let sizes = indices.map(source.size)
     let (width, height) = (sizes.map(\.width).reduce(0, +), sizes.map(\.height).max() ?? 1)
@@ -191,12 +198,11 @@ final class PagedView: NSView {
     private var area: CGSize { CGSize(width: bounds.width, height: max(bounds.height - footHeight, 1)) }
     var finished: Bool { lastShown + 1 >= pageCount }
     /// The first page of the screen with page `p`.
-    private func screen(of p: Int) -> Int { source.firstAlone && spread ? (p == 0 ? 0 : p - (p + 1) % 2) : p }
+    private func screen(of p: Int) -> Int { spread ? (p == 0 ? 0 : p - (p + 1) % 2) : p }
     private var lastShown: Int { placed(source, first: page, spread: spread, area: area).map(\.index).max() ?? page }
     private var nextScreen: Int? { lastShown + 1 < pageCount ? lastShown + 1 : nil }
     private var previousScreen: Int? {
-        guard page > 0 else { return nil }
-        return source.firstAlone ? screen(of: page - 1) : max(page - (spread ? 2 : 1), 0)
+        page > 0 ? screen(of: page - 1) : nil
     }
 
     fileprivate init(source: PageSource, pdf: PDFDocument?, page: Int, settings: ForzacSettings, paper: UInt32, palette: Palette) {
@@ -894,6 +900,10 @@ final class PagedReader: NSObject, NSWindowDelegate {
     private var searchTicket = 0
     private var hits: [Int] = []
     private var inputMonitor: Any?
+    /// Keeps the display awake while reading, as a book's window: ended 10 minutes after the last input or when the
+    /// window resigns.
+    private var activity: NSObjectProtocol?
+    private var awakeTimer: Timer?
     var onClose: ((PagedReader) -> Void)?
     var onLibrary: (() -> Void)?
 
@@ -978,7 +988,10 @@ final class PagedReader: NSObject, NSWindowDelegate {
                 DispatchQueue.global(qos: .utility).async { writeThumbnail(id: id, data: pdfCover(path)?.data) }
             }
             inputMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .scrollWheel, .swipe]) { [weak self] e in
-                if let self, e.window === self.window { self.logEvent(0) }
+                if let self, e.window === self.window {
+                    self.touch()
+                    self.logEvent(0)
+                }
                 return e
             }
         }
@@ -1171,12 +1184,36 @@ final class PagedReader: NSObject, NSWindowDelegate {
         if !forzac_state_log(state, doc, true, false) { fputs("cannot write the reading log\n", stderr) }
     }
 
-    func windowDidResignKey(_ notification: Notification) { leave() }
-    func windowDidBecomeKey(_ notification: Notification) { logEvent(0) }
+    private func touch() {
+        guard window.isKeyWindow else { return }
+        if activity == nil {
+            activity = ProcessInfo.processInfo.beginActivity(options: [.idleDisplaySleepDisabled], reason: tr("Reading a book"))
+        }
+        awakeTimer?.invalidate()
+        awakeTimer = Timer.scheduledTimer(withTimeInterval: 10 * 60, repeats: false) { [weak self] _ in self?.sleepAllowed() }
+    }
+
+    private func sleepAllowed() {
+        awakeTimer?.invalidate()
+        awakeTimer = nil
+        if let activity { ProcessInfo.processInfo.endActivity(activity) }
+        activity = nil
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        sleepAllowed()
+        leave()
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        if state != nil { touch() }
+        logEvent(0)
+    }
 
     func windowWillClose(_ notification: Notification) {
         savePosition()
         leave()
+        sleepAllowed()
         if state != nil { window.saveFrame(usingName: "Book") }
         if let inputMonitor { NSEvent.removeMonitor(inputMonitor) }
         inputMonitor = nil

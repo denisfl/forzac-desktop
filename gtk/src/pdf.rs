@@ -325,13 +325,21 @@ impl State {
         self.pictures.as_ref().and_then(|b| b.pictures.as_ref()).is_some_and(|p| p.rtl)
     }
 
-    /// The first page of the screen with `page`: in a picture book's spreads the first page is alone, then pairs.
+    /// The first page of the screen with `page`: in a spread the first page is alone, then pairs.
     fn screen_of(&self, page: usize, spread: bool) -> usize {
-        if self.pictures.is_some() && spread && page > 0 { page - (page + 1) % 2 } else { page }
+        if spread && page > 0 { page - (page + 1) % 2 } else { page }
     }
 
     fn placed(&self, first: usize, spread: bool, area: (f32, f32)) -> Vec<(usize, graphene::Rect)> {
-        let two = spread && !(self.pictures.is_some() && first == 0);
+        let two = spread && first > 0 && first + 1 < self.sizes.len();
+        if spread && !two && self.pictures.is_none() && self.sizes.len() > 1 {
+            // A PDF as a paper book: page 1 on the right, a last page on the left.
+            let (w, h) = self.sizes[first];
+            let half = area.0 / 2.0;
+            let scale = (half / w.max(1.0)).min(area.1 / h.max(1.0));
+            let x = if first == 0 { half } else { half - w * scale };
+            return vec![(first, graphene::Rect::new(x, (area.1 - h * scale) / 2.0, w * scale, h * scale))];
+        }
         placed(&self.sizes, first, two, self.rtl(), area)
     }
 
@@ -344,13 +352,7 @@ impl State {
     }
 
     fn previous_screen(&self, spread: bool) -> Option<usize> {
-        if self.page == 0 {
-            None
-        } else if self.pictures.is_some() {
-            Some(self.screen_of(self.page - 1, spread))
-        } else {
-            Some(self.page.saturating_sub(if spread { 2 } else { 1 }))
-        }
+        (self.page > 0).then(|| self.screen_of(self.page - 1, spread))
     }
 }
 

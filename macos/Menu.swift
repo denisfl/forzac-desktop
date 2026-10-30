@@ -1,7 +1,7 @@
 // The reading menu over the page, as the web reader's (`#bar-top`, `#bar-bottom`) and Android's `ReaderMenu`: at the
 // top the window's reading bar (`Bar.swift`: back to the library, the section and the book, the contents), held while
 // the menu is open; at the bottom a slider over the whole book with the chapters' ticks, "Page N of M", the time left
-// in the chapter and "Aa". A click in the middle third of the page or Return opens it; a click on the page or Esc
+// in the chapter and in the book, and "Aa". A click in the middle third of the page or Return opens it; a click on the page or Esc
 // closes it; ←/→/h/l move the slider and Return goes there.
 
 import AppKit
@@ -144,6 +144,7 @@ final class ReaderMenu {
     private let slider = Slider()
     private let pageLine = label("", interfaceFont(14, .medium), 0)
     private let hint = label("", interfaceFont(12), 0)
+    private let bookLeft = label("", interfaceFont(12), 0)
     /// The book page the slider shows while the reader moves it; nil: the reading position's.
     private var scrub: UInt32?
     private(set) var isOpen = false
@@ -152,12 +153,12 @@ final class ReaderMenu {
     var onClose: (() -> Void)?
     var onSettings: (() -> Void)?
 
-    /// 16 above the slider (28), 12, the row (44), 18 below: the web reader's `.bar-bottom`.
-    private static let bottomHeight: CGFloat = 118
+    /// 16 above the slider (28), 12, the row (54, with the book's line), 18 below: the web reader's `.bar-bottom`.
+    private static let bottomHeight: CGFloat = 128
 
     init(view: PageView, in container: NSView, below sibling: NSView) {
         self.view = view
-        for l in [pageLine, hint] {
+        for l in [pageLine, hint, bookLeft] {
             l.lineBreakMode = .byTruncatingTail
             l.maximumNumberOfLines = 1
         }
@@ -166,7 +167,7 @@ final class ReaderMenu {
             [.featureSettings: [[NSFontDescriptor.FeatureKey.typeIdentifier: kNumberSpacingType, NSFontDescriptor.FeatureKey.selectorIdentifier: kMonospacedNumbersSelector]]]), size: 14)
         aa.layer!.cornerRadius = 22
         aa.layer!.borderWidth = 1
-        [slider, pageLine, hint, aa].forEach(bottom.addSubview)
+        [slider, pageLine, hint, bookLeft, aa].forEach(bottom.addSubview)
         bottom.place = { [unowned self] bar in
             let x = max(20, (bar.bounds.width - 640) / 2), width = bar.bounds.width - 2 * x
             slider.frame = CGRect(x: x, y: 16, width: width, height: 28)
@@ -175,9 +176,10 @@ final class ReaderMenu {
             if pageLine.isHidden {
                 hint.frame = CGRect(x: x, y: 56 + 14, width: text, height: 16)
             } else {
-                pageLine.frame = CGRect(x: x, y: 56 + 3, width: text, height: 19)
-                hint.frame = CGRect(x: x, y: 56 + 25, width: text, height: 16)
+                pageLine.frame = CGRect(x: x, y: 56 + 1, width: text, height: 19)
+                hint.frame = CGRect(x: x, y: 56 + 21, width: text, height: 16)
             }
+            bookLeft.frame = CGRect(x: x, y: 56 + 37, width: text, height: 16)
         }
         bottom.autoresizingMask = [.width, .maxYMargin]
         bottom.isHidden = true
@@ -208,6 +210,7 @@ final class ReaderMenu {
         aa.layer!.borderColor = color(p.line)
         pageLine.textColor = nsColor(p.ink)
         hint.textColor = nsColor(p.muted)
+        bookLeft.textColor = nsColor(p.muted)
         showPlace()
         bottom.frame = frame(open: false)
         bottom.alphaValue = 0
@@ -293,9 +296,11 @@ final class ReaderMenu {
         if let page = scrub, total > 0 {
             hint.stringValue = String(cString: forzac_section(doc, forzac_book_page_start(doc, page)))
         } else {
-            let minutes = forzac_minutes_left(doc, view.locator)
-            hint.stringValue = minutes == 0 ? tr("Less than a minute left in chapter") : fill(tr("{n} min left in chapter"), ["n": "\(minutes)"])
+            hint.stringValue = String(cString: forzac_time_left(doc, view.locator, false))
         }
+        // Not while the slider moves, as on Android.
+        bookLeft.isHidden = scrub != nil
+        bookLeft.stringValue = String(cString: forzac_time_left(doc, view.locator, true))
         bottom.needsLayout = true
     }
 }
