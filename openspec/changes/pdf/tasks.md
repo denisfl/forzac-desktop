@@ -18,7 +18,7 @@
 ## 4. Linux
 
 - [x] 4.1 The same on PDFium in the GTK shell — check: `cargo clippy`, under headless Weston
-- [ ] 4.2 `libpdfium` in the `.deb`, tarballs and PKGBUILD — check: installs and opens a PDF in `ci/` containers. Debian arm64: the `.deb` and the tarball install and open one. Arch x86_64: both AUR packages build and install with the library; opening a PDF there remains
+- [x] 4.2 `libpdfium` in the `.deb`, tarballs and PKGBUILD — check: installs and opens a PDF in `ci/` containers. Debian arm64: the `.deb` and the tarball; Arch x86_64: both AUR packages build and install, `forzac-bin` opens one under headless sway at four scales (`ci/arch-check.sh book file.pdf`)
 
 ## 5. Check
 

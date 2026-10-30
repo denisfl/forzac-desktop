@@ -4,7 +4,8 @@
 # sway at fractional scales and take screenshots with grim.
 # Hyprland needs a DRM render node even when headless; containers without /dev/dri can only run sway (pixman).
 set -euo pipefail
-book=${1:?usage: ci/arch-check.sh book.fb2.zip}
+book=${1:?usage: ci/arch-check.sh book.fb2.zip [file.pdf]}
+pdf=${2:-}
 out=${OUT:-/src/target-png}
 # perl-file-mimeinfo's mimetype is in /usr/bin/vendor_perl, which login shells (and so desktop sessions) put in PATH.
 export PATH=$PATH:/usr/bin/vendor_perl
@@ -55,6 +56,9 @@ for scale in 1 1.25 1.6 2; do
   sleep 2
   export WAYLAND_DISPLAY=$(ls $XDG_RUNTIME_DIR | grep -m1 '^wayland-[0-9]*$') SWAYSOCK=$(ls $XDG_RUNTIME_DIR/sway-ipc.* | head -1)
   forzac ~/book.fb2.zip --chapter 93 --measure 2>/dev/null | sed "s/^/scale $scale: /"
+  if [ -n "$pdf" ]; then
+    forzac "$pdf" --png "$out/pdf-$scale.png" 2>/dev/null | sed "s/^/scale $scale: /"
+  fi
   forzac ~/book.fb2.zip --chapter 93 >/dev/null 2>&1 & app=$!
   sleep 3
   grim "$out/sway-$scale.png"
