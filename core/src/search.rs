@@ -1,4 +1,4 @@
-//! Search in a book: the Android app's rules (`Search.kt`) without the PDF ones. Case and "ё"/"е" do not matter, a
+//! Search in a book: the Android app's rules (`Search.kt`). Case and "ё"/"е" do not matter, a
 //! soft hyphen in the text does not interrupt a match, a non-breaking space equals a space and a space in the query
 //! matches any run of white space. Paragraphs, headings and table cells are searched (a match stays in its cell); notes
 //! are not.
@@ -81,6 +81,27 @@ pub fn search(book: &Book, q: &str) -> Vec<Hit> {
                 }
             }
             before += block.text_len();
+        }
+    }
+    hits
+}
+
+/// The matches of `q` in a PDF page's text, each as a snippet and the match in it: a hyphen at a line's end joins the
+/// word, and line breaks are spaces.
+pub fn search_page(text: &str, q: &str) -> Vec<(String, Range<usize>)> {
+    let Some(q) = query(q) else { return Vec::new() };
+    // PDFium marks a hyphen it took for a line's end with U+FFFE or U+0002.
+    let text =
+        text.replace("\r\n", "\n").replace(['\u{FFFE}', '\u{2}'], "-\n").replace("-\n\n", "").replace("-\n", "").replace(['\n', '\r'], " ");
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let (mut hits, mut i) = (Vec::new(), 0);
+    while i < chars.len() {
+        match match_at(&chars, i, &q) {
+            Some(end) => {
+                hits.push(snippet(&chars, i, end));
+                i = end.max(i + 1);
+            }
+            None => i += 1,
         }
     }
     hits

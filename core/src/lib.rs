@@ -51,9 +51,11 @@ pub enum Error {
     Damaged,
     /// The file cannot be read: missing, no permission.
     Unavailable,
+    /// A PDF that needs a password; its shell's engine tells, the core does not read PDFs.
+    Password,
 }
 
-/// Reads and parses a book file: FB2 (`.fb2`, `.fb2.zip`), FB3, EPUB, plain text or Markdown, whatever its name says.
+/// Reads and parses a book file: FB2 (`.fb2`, `.fb2.zip`), FB3, EPUB, plain text, Markdown or PDF, whatever its name says.
 /// A book without a title is titled by the file's name ([`library::file_title`]).
 pub fn open(path: &std::path::Path) -> Result<Book, Error> {
     let bytes = std::fs::read(path).map_err(|_| Error::Unavailable)?;
@@ -76,7 +78,22 @@ pub fn parse(bytes: &[u8]) -> Result<Book, Error> {
     Ok(book)
 }
 
+/// Whether `bytes` are a PDF: `%PDF-1.x` at the start, or on a line of its own within the first KiB of a file that
+/// ends as a PDF does, as readers accept. A text that merely names the signature is not one.
+pub fn is_pdf(bytes: &[u8]) -> bool {
+    let signature = |b: &[u8]| matches!(b, [b'%', b'P', b'D', b'F', b'-', major, b'.', ..] if major.is_ascii_digit());
+    if signature(bytes) {
+        return true;
+    }
+    let head = &bytes[..bytes.len().min(1024)];
+    let tail = &bytes[bytes.len().saturating_sub(1024)..];
+    tail.windows(5).any(|w| w == b"%%EOF") && (1..head.len()).any(|i| matches!(head[i - 1], b'\n' | b'\r') && signature(&bytes[i..]))
+}
+
 fn parse_format(bytes: &[u8]) -> Result<Book, Error> {
+    if is_pdf(bytes) {
+        return Ok(Book { pdf: Some(0), ..Book::default() });
+    }
     // A zip archive is a package (EPUB, FB3) or holds an FB2; one that cannot be read as an archive is damaged.
     if bytes.starts_with(b"PK") {
         let files = archive::unzip(bytes, archive::MAX_UNPACKED)?;
@@ -101,5 +118,26 @@ mod tests {
         assert_eq!(crate::open(std::path::Path::new("/nonexistent/book.fb2")).err(), Some(Error::Unavailable));
         assert_eq!(crate::parse(b"PK\x03\x04 broken archive").err(), Some(Error::Damaged));
         assert_eq!(crate::parse(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR not a book").err(), Some(Error::NotABook));
+    }
+
+    #[test]
+    fn a_pdf_is_known_by_its_signature() {
+        let book = crate::parse(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n").unwrap();
+        assert_eq!(book.pdf, Some(0));
+        assert!(book.chapters.is_empty() && !book.id.is_empty());
+        assert_eq!(
+            crate::parse(b"junk from a mail gateway\r\n%PDF-1.4\n1 0 obj\n%%EOF\n").unwrap().pdf,
+            Some(0),
+            "after junk, as readers accept"
+        );
+    }
+
+    #[test]
+    fn a_text_naming_pdf_is_a_text() {
+        for text in ["A PDF starts with %PDF-1.7 and ends with %%EOF.\n", "# Formats\n\n%PDF-1.7 is a signature.\n\nThe end.\n"] {
+            let book = crate::parse(text.as_bytes()).unwrap();
+            assert_eq!(book.pdf, None, "{text}");
+            assert!(!book.chapters.is_empty());
+        }
     }
 }

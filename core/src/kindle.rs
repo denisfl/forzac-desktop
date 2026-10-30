@@ -763,6 +763,9 @@ pub fn find() -> Option<PathBuf> {
 /// replacing an earlier copy of that name; a temporary file is renamed into place. Returns the written file.
 pub fn send(path: &Path, edits: &Edits, kindle: &Path) -> Result<PathBuf, crate::Error> {
     let book = crate::open(path)?;
+    if book.pdf.is_some() {
+        return Err(crate::Error::NotABook);
+    }
     let title = edits.title.clone().unwrap_or_else(|| book.title.clone());
     let authors: Vec<String> = edits.authors.as_ref().map_or_else(|| book.authors.clone(), |a| a.split(", ").map(str::to_owned).collect());
     let bytes = mobi(&book, edits);

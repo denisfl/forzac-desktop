@@ -231,3 +231,12 @@ fn editing_a_books_details() {
     edits.apply(&mut entry);
     assert_eq!(entry.title, "Mort");
 }
+
+#[test]
+fn a_pdf_title_that_looks_like_a_file_is_not_one() {
+    assert_eq!(pdf_title(" Высоконагруженные приложения "), Some("Высоконагруженные приложения"));
+    assert_eq!(pdf_title("Dr. Who"), Some("Dr. Who"));
+    for junk in ["", "  ", "Perelman_I._Zanimatelnaia_mehanika-or.pdf", "Book.indd", "C:\\work\\book", "/tmp/x"] {
+        assert_eq!(pdf_title(junk), None, "{junk}");
+    }
+}

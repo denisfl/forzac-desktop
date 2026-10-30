@@ -397,14 +397,14 @@ glib::wrapper! {
 }
 
 impl Slider {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let slider: Self = glib::Object::new();
         slider.set_hexpand(true);
         slider.set_cursor_from_name(Some("pointer"));
         slider
     }
 
-    fn set(&self, count: usize, page: usize, ticks: &[usize], theme: usize) {
+    pub(crate) fn set(&self, count: usize, page: usize, ticks: &[usize], theme: usize) {
         let imp = self.imp();
         imp.count.set(count);
         imp.page.set(page);
@@ -416,7 +416,7 @@ impl Slider {
     }
 
     /// The book page under `x`.
-    fn page_at(&self, x: f32) -> usize {
+    pub(crate) fn page_at(&self, x: f32) -> usize {
         let count = self.imp().count.get();
         if count <= 1 {
             return 0;

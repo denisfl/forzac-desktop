@@ -81,3 +81,15 @@ fn table_cells() {
     assert_eq!(matched(&hits[0]), "Реляционная");
     assert!(search(&b, "свойство реляционная").is_empty(), "a match stays in its cell");
 }
+
+#[test]
+fn a_pdf_pages_text_is_searched_across_its_lines() {
+    let text = "Первая стро-\r\nка Ёлки и ель\nвторая";
+    assert_eq!(search_page(text, "строка").len(), 1, "a hyphen at a line's end");
+    assert_eq!(search_page(text, "елки").len(), 1, "ё as е, any case");
+    assert_eq!(search_page(text, "ель вторая").len(), 1, "a line break as a space");
+    assert!(search_page(text, "е").is_empty(), "from two characters");
+    assert_eq!(search_page("опти\u{FFFE}мизированными и ана\u{2}\r\nлитики", "оптимизированными и аналитики").len(), 1, "PDFium's marks");
+    let (snippet, matched) = &search_page(text, "елки")[0];
+    assert_eq!(&snippet[matched.clone()], "Ёлки");
+}

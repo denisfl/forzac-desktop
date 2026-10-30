@@ -66,11 +66,11 @@ fn the_folder_is_named_by_the_language_and_remembered() {
 fn an_existing_folder_is_kept_and_a_deleted_one_made_again() {
     let home = home();
     let dune = write(&home.join("Books/dune.fb2"), &fb2("Dune", "Frank Herbert", "spice"));
-    write(&home.join("Books/notes.pdf"), b"%PDF-1.4");
+    write(&home.join("Books/notes.docx"), b"%PDF-1.4");
     write(&home.join("Books/Comics/x.fb2"), &fb2("X", "", "x"));
     let mut s = store(&home);
     let folder = books_folder(&home, Language::English, &mut s).unwrap();
-    assert_eq!(names(&folder), ["Comics", "dune.fb2", "notes.pdf"], "nothing renamed or moved");
+    assert_eq!(names(&folder), ["Comics", "dune.fb2", "notes.docx"], "nothing renamed or moved");
     let books = scan(&folder, &mut s);
     assert_eq!(titles(&books), ["Dune"]);
     assert_eq!(books[0].path, dune);
@@ -119,9 +119,9 @@ fn the_scan_follows_the_folder() {
     let mut s = store(&home);
     write(&folder.join("a.fb2"), &fb2("A", "", "a"));
     write(&folder.join("broken.epub"), b"PK\x03\x04 not really");
-    write(&folder.join("notes.pdf"), b"%PDF");
+    write(&folder.join("notes.docx"), b"%PDF");
     write(&folder.join(".hidden.fb2"), &fb2("H", "", "h"));
-    assert_eq!(titles(&scan(&folder, &mut s)), ["A"], "a PDF, a damaged EPUB and a dotfile ignored");
+    assert_eq!(titles(&scan(&folder, &mut s)), ["A"], "another format, a damaged EPUB and a dotfile ignored");
     assert_eq!(store(&home).files().len(), 2, "the damaged file is cached too");
 
     std::thread::sleep(std::time::Duration::from_millis(5));
@@ -362,7 +362,7 @@ fn a_folder_with_subfolders_is_added() {
     write(&old.join("Known again.fb2"), &fb2("Known", "", "known"));
     write(&old.join("War copy.fb2"), &fb2("War", "Leo", "war"));
     write(&old.join("broken.epub"), b"PK not a zip");
-    write(&old.join("notes.pdf"), b"%PDF-1.4");
+    write(&old.join("notes.docx"), b"%PDF-1.4");
     write(&old.join(".hidden/Secret.fb2"), &fb2("Secret", "", "secret"));
     let before = names(&old);
 
@@ -445,7 +445,7 @@ fn the_books_move_to_a_new_folder() {
     let old = books_folder(&home, Language::English, &mut s).unwrap();
     let a = write(&old.join("A.fb2"), &fb2("A", "", "a"));
     write(&old.join("B.fb2"), &fb2("B", "", "b"));
-    write(&old.join("notes.pdf"), b"%PDF");
+    write(&old.join("notes.docx"), b"%PDF");
     let book = crate::parse(&std::fs::read(&a).unwrap()).unwrap();
     let at = Locator { chapter: 0, block: 0, offset: 2 };
     s.save_position(&book, &a, at, false).unwrap();
@@ -456,7 +456,7 @@ fn the_books_move_to_a_new_folder() {
 
     let moved = change_folder(&new, &mut s, true).unwrap();
     assert_eq!(moved, Moved { moved: 1, skipped: 1, failed: 0 });
-    assert_eq!(names(&old), ["A.fb2", "notes.pdf"], "the book already there and other files stay");
+    assert_eq!(names(&old), ["A.fb2", "notes.docx"], "the book already there and other files stay");
     assert_eq!(names(&new), ["B (2).fb2", "B.fb2", "Same A.fb2"]);
     let mut s = store(&home);
     assert_eq!(books_folder(&home, Language::English, &mut s).unwrap(), new, "remembered");
@@ -490,4 +490,35 @@ fn the_moved_message() {
     crate::i18n::set_language(Language::English);
     assert_eq!(Moved { moved: 3, skipped: 0, failed: 0 }.message(), None);
     assert_eq!(Moved { moved: 0, skipped: 0, failed: 2 }.message().unwrap(), "Couldn't move 2 books.");
+}
+
+// region PDF
+
+#[test]
+fn a_pdf_is_a_book_of_the_folder() {
+    let home = home();
+    let folder = home.join("Books");
+    let mut s = store(&home);
+    std::fs::create_dir_all(&folder).unwrap();
+    let src = home.join("Клеппман.PDF");
+    write(&src, b"%PDF-1.7\nbody");
+    let copy = import(&src, &folder, &mut s).unwrap();
+    assert_eq!(copy.file_name().unwrap(), "Клеппман.PDF");
+    let books = scan(&folder, &mut s);
+    assert_eq!(titles(&books), ["Клеппман"], "titled by the file until the shell reads its metadata");
+    s.set_title(&books[0].id, "Высоконагруженные приложения").unwrap();
+    assert_eq!(titles(&scan(&folder, &mut store(&home))), ["Высоконагруженные приложения"], "kept in the cache");
+    let unnamed = home.join("download");
+    write(&unnamed, b"%PDF-1.4\nother");
+    assert_eq!(import(&unnamed, &folder, &mut s).unwrap().extension().unwrap(), "pdf", "named by its content");
+}
+
+#[test]
+fn a_folder_being_added_brings_its_pdfs() {
+    let home = home();
+    let (src, folder) = (home.join("src"), home.join("Books"));
+    std::fs::create_dir_all(&folder).unwrap();
+    write(&src.join("sub/a.pdf"), b"%PDF-1.7\nbody");
+    let added = import_folder(&src, &folder, &mut store(&home), |_, _| {});
+    assert_eq!((added.added, added.failed), (1, 0));
 }

@@ -138,7 +138,7 @@ file of them (H1, H2).
 
 Confirmed with the maintainer in `android-parity` (2026-10-16). Text selection and quotes left the list on 2026-10-17,
 when the maintainer asked for them (`selection-quotes`), and so did the library screen (`library`); importing books
-left it on 2026-10-19 (`books-folder`).
+left it on 2026-10-19 (`books-folder`), and PDF on 2026-10-30 (`pdf`: as on paper, without themes).
 
-PDF; dictionaries; formulas (MathML); fixed-layout EPUB; Flatpak (AUR and
+Dictionaries; formulas (MathML); fixed-layout EPUB; Flatpak (AUR and
 the `.deb` first); a Developer ID, notarisation, Homebrew and the App Store; following the Omarchy theme colours (a possible later change).

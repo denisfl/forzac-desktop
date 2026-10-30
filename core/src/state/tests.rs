@@ -376,3 +376,13 @@ fn a_book_is_pointed_at_its_copy() {
     assert_eq!(store.position(&b, Path::new("/books/a.fb2")), Some(at(0, 3, 1)));
     assert_eq!(store.bookmarks(&b), [at(0, 2, 0)]);
 }
+
+#[test]
+fn a_pdfs_place_is_its_page() {
+    let book = crate::model::Book { pdf: Some(641), ..crate::model::Book::default() };
+    let page = |block| Locator { chapter: 0, block, offset: 0 };
+    assert_eq!(clamp(&book, page(300)), page(300));
+    assert_eq!(clamp(&book, page(900)), page(640), "from a changed file");
+    assert!((progress(&book, page(320)) - 0.5).abs() < 1e-6);
+    assert_eq!(progress_of(&book, &[page(0), page(640)]), [0.0, 1.0]);
+}

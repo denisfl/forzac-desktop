@@ -28,6 +28,8 @@ const HEADER: &str = "forzac-log 1";
 const MAX_GAP: u64 = 5 * 60_000;
 /// Three times an average reader's speed: faster is flipping through.
 const CHARS_PER_MINUTE: u64 = 3000;
+/// The longest forward step between two pages of a PDF that counts as reading: a spread, not a jump.
+const MAX_PAGE_STEP: u64 = 2;
 /// A book finished again within this is the same reading.
 pub const SAME_READING: u64 = 30 * 86_400_000;
 /// The log is appended at most this often while reading.
@@ -335,6 +337,7 @@ pub struct Sum {
 struct Sums {
     millis: u64,
     chars: u64,
+    pages: u64,
 }
 
 /// Counts the reading of an open book from the reader's events, each with its time (milliseconds) and the local time
@@ -382,6 +385,14 @@ impl Tally {
         self.credit = 0;
     }
 
+    /// A page of a PDF was turned to: a step forward of at most [`MAX_PAGE_STEP`] counts, as on Android.
+    pub fn turned(&mut self, now: u64, offset: i64, page: u64) {
+        self.active(now, offset);
+        let from = self.anchor.replace(page);
+        let Some(step) = from.and_then(|f| page.checked_sub(f)).filter(|s| (1..=MAX_PAGE_STEP).contains(s)) else { return };
+        self.days.entry(day_number(now, offset)).or_default().pages += step;
+    }
+
     /// A jump (contents, link, search, bookmark, highlight, chapter keys, back, slider): counting goes on from `chars`.
     pub fn jumped(&mut self, chars: u64) {
         self.anchor = Some(chars);
@@ -398,11 +409,11 @@ impl Tally {
         let rest = self.days.last_key_value().map(|(&day, s)| (day, s.millis % 1000));
         let sums = std::mem::take(&mut self.days)
             .into_iter()
-            .map(|(day, s)| Sum { day: date_string(day), seconds: s.millis / 1000, chars: s.chars, pages: 0 })
-            .filter(|s| s.seconds > 0 || s.chars > 0)
+            .map(|(day, s)| Sum { day: date_string(day), seconds: s.millis / 1000, chars: s.chars, pages: s.pages })
+            .filter(|s| s.seconds > 0 || s.chars > 0 || s.pages > 0)
             .collect();
         if let Some((day, millis)) = rest.filter(|r| r.1 > 0) {
-            self.days.insert(day, Sums { millis, chars: 0 });
+            self.days.insert(day, Sums { millis, ..Sums::default() });
         }
         sums
     }
@@ -436,6 +447,8 @@ impl Reading {
     pub fn event(&mut self, book: &Book, event: Event, at: Locator, now: u64, offset: i64) {
         match event {
             Event::Active => self.tally.active(now, offset),
+            Event::Moved if book.pdf.is_some() => self.tally.turned(now, offset, at.block as u64),
+            Event::Jumped if book.pdf.is_some() => self.tally.jumped(at.block as u64),
             Event::Moved => {
                 let chars = self.chars(book, at);
                 self.tally.moved(now, offset, chars);

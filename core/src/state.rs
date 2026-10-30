@@ -403,6 +403,19 @@ impl Store {
         self.write(|saved| saved.files = files)
     }
 
+    /// Gives the book `id` the title its shell read from its file (a PDF's metadata; the core does not read PDFs).
+    pub fn set_title(&mut self, id: &str, title: &str) -> io::Result<()> {
+        if self.saved.files.iter().all(|f| f.id != id || f.title == title)
+            && self.saved.books.iter().all(|e| e.id != id || e.title == title)
+        {
+            return Ok(());
+        }
+        self.write(|saved| {
+            saved.files.iter_mut().filter(|f| f.id == id).for_each(|f| f.title = title.to_owned());
+            saved.books.iter_mut().filter(|e| e.id == id).for_each(|e| e.title = title.to_owned());
+        })
+    }
+
     /// Forgets the book `id` (removed from the library): its entry and reading position. Its bookmarks and highlights
     /// stay, so opening the file again brings them back.
     pub fn forget(&mut self, id: &str) -> io::Result<()> {
@@ -692,6 +705,9 @@ pub fn legacy_id(bytes: &[u8]) -> String {
 
 /// `at` moved inside the book: a position from a changed file must not point past its end.
 pub fn clamp(book: &Book, at: Locator) -> Locator {
+    if let Some(pages) = book.pdf {
+        return Locator { chapter: 0, block: at.block.min(pages.saturating_sub(1)), offset: 0 };
+    }
     let Some(last) = book.chapters.len().checked_sub(1) else { return Locator::default() };
     let chapter = at.chapter.min(last);
     let blocks = book.chapters[chapter].blocks.len();
@@ -703,6 +719,9 @@ pub fn clamp(book: &Book, at: Locator) -> Locator {
 
 /// The share of the book's text before each of `places`, in one pass over the book (for the contents).
 pub fn progress_of(book: &Book, places: &[Locator]) -> Vec<f32> {
+    if book.pdf.is_some() {
+        return places.iter().map(|&at| progress(book, at)).collect();
+    }
     // Text before each block: block starts per chapter, then the total.
     let mut starts: Vec<Vec<usize>> = Vec::with_capacity(book.chapters.len());
     let mut total = 0;
@@ -731,6 +750,9 @@ pub fn progress_of(book: &Book, places: &[Locator]) -> Vec<f32> {
 
 /// The share of the book's text before `at`.
 pub fn progress(book: &Book, at: Locator) -> f32 {
+    if let Some(pages) = book.pdf {
+        return if pages > 1 { at.block.min(pages - 1) as f32 / (pages - 1) as f32 } else { 0.0 };
+    }
     let length = Block::text_len;
     let mut before = 0;
     let mut total = 0;

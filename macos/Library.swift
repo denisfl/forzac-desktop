@@ -759,14 +759,21 @@ final class LibraryWindow: NSObject, NSSearchFieldDelegate, NSWindowDelegate, NS
             queue.async { [weak self] in
                 guard self != nil else { return }
                 var data: Data?
+                var pdfTitle: String?
                 if let doc = forzac_open(b.path, nil) {
-                    var len = 0
-                    data = forzac_cover(doc, &len).map { Data(bytes: $0, count: len) }
+                    if forzac_is_pdf(doc) {
+                        let cover = pdfCover(b.path)
+                        (data, pdfTitle) = (cover?.data, cover?.title)
+                    } else {
+                        var len = 0
+                        data = forzac_cover(doc, &len).map { Data(bytes: $0, count: len) }
+                    }
                     forzac_close(doc)
                 }
                 writeThumbnail(id: b.id, data: data)
                 DispatchQueue.main.async {
                     guard let self else { return }
+                    if let pdfTitle { _ = forzac_state_set_title(self.state, b.id, pdfTitle) }
                     self.pending -= 1
                     let size = (try? FileManager.default.attributesOfItem(atPath: thumbnailURL(b.id).path))?[.size] as? Int ?? 0
                     if size > 0 { self.loadThumbnail(b.id) } else { self.setThumb(b.id, .generated) }
@@ -1184,7 +1191,7 @@ final class LibraryWindow: NSObject, NSSearchFieldDelegate, NSWindowDelegate, NS
         show.isHidden = folder == nil
         let rule = LayerView()
         rule.layer!.backgroundColor = color(palette.line)
-        let formats = wrapping(tr("FB2, FB2.ZIP, FB3, EPUB, TXT and Markdown are supported."), interfaceFont(14), palette.muted)
+        let formats = wrapping(tr("FB2, FB2.ZIP, FB3, EPUB, TXT, Markdown and PDF are supported."), interfaceFont(14), palette.muted)
         let page = SamplePageView(palette: palette)
         body = [heading, lead, button, hint, show, rule, formats, page]
         body.forEach { $0.translatesAutoresizingMaskIntoConstraints = true; content.addSubview($0) }

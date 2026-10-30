@@ -7,7 +7,7 @@ pkgrel=1
 pkgdesc="Offline FB2 and EPUB reader with book-quality typesetting (release build)"
 arch=(x86_64 aarch64)
 url="https://forzac.app"
-license=(MPL-2.0 OFL-1.1 LPPL-1.2)
+license=(MPL-2.0 OFL-1.1 LPPL-1.2 BSD-3-Clause Apache-2.0)
 # perl-file-mimeinfo: see the forzac package.
 depends=(gtk4 fontconfig perl-file-mimeinfo)
 provides=(forzac)
@@ -23,7 +23,7 @@ sha256sums_aarch64=('ee5df104ef0053dad4bf37845b9da4e1406e35104f122fc41de106eadb7
 
 package() {
   install -d "$pkgdir/usr"
-  cp -r "forzac-$pkgver-linux-$CARCH"/{bin,share} "$pkgdir/usr/"
+  cp -r "forzac-$pkgver-linux-$CARCH"/{bin,lib,share} "$pkgdir/usr/"
   # pacman updates it: the app does not check GitHub for a newer release.
   install -Dm644 /dev/null "$pkgdir/usr/share/forzac/packaged"
   # The licences under the package's own name, where pacman looks for them.

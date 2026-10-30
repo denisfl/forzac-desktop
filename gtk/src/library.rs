@@ -46,8 +46,13 @@ fn thumbnail(id: &str) -> PathBuf {
     cache_dir().join(id)
 }
 
+/// Whether the book `id` has a thumbnail or the marker for none.
+pub fn has_thumbnail(id: &str) -> bool {
+    thumbnail(id).exists()
+}
+
 /// Writes the thumbnail of a cover (`bytes`), or the empty marker for none; on a worker thread.
-fn write_thumbnail(id: &str, bytes: Option<&[u8]>) {
+pub fn write_thumbnail(id: &str, bytes: Option<&[u8]>) {
     use gtk::gdk_pixbuf::PixbufLoader;
     // An SVG cover (Standard Ebooks) drawn by the core: the pixbuf loaders may have no SVG.
     let drawn = bytes.and_then(|b| forzac_core::images::png(b, THUMB.0 as u32, THUMB.1 as u32));
@@ -1249,13 +1254,24 @@ impl Library {
                     return;
                 }
                 let made = id.clone();
-                let _ = gio::spawn_blocking(move || {
+                let pdf_title = gio::spawn_blocking(move || {
                     let book = forzac_core::open(&path).ok();
+                    if book.as_ref().is_some_and(|b| b.pdf.is_some()) {
+                        let cover = crate::pdf::cover(&path);
+                        write_thumbnail(&made, cover.as_ref().map(|c| c.0.as_slice()));
+                        return cover.map(|c| c.1);
+                    }
                     let bytes = book.as_ref().and_then(|b| b.cover.as_ref().and_then(|c| b.images.get(c)).map(|i| i.bytes.as_slice()));
                     write_thumbnail(&made, bytes);
+                    None
                 })
-                .await;
+                .await
+                .ok()
+                .flatten();
                 let Some(library) = weak.upgrade() else { return };
+                if let Some(title) = pdf_title.as_deref().and_then(forzac_core::library::pdf_title) {
+                    let _ = library.store.borrow_mut().set_title(&id, title);
+                }
                 library.pending.set(library.pending.get() - 1);
                 match std::fs::metadata(thumbnail(&id)) {
                     Ok(m) if m.len() > 0 => library.load_thumbnail(id),
@@ -2275,7 +2291,7 @@ impl Library {
             });
             text.append(&show);
         }
-        let formats = label(tr("FB2, FB2.ZIP, FB3, EPUB, TXT and Markdown are supported."), "privacy");
+        let formats = label(tr("FB2, FB2.ZIP, FB3, EPUB, TXT, Markdown and PDF are supported."), "privacy");
         formats.set_max_width_chars(48);
         formats.set_margin_top(42);
         text.append(&formats);

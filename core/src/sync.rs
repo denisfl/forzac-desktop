@@ -357,6 +357,11 @@ impl Books {
         Books { paths, last: None, failed: HashSet::new(), deadline: Instant::now() + BUDGET }
     }
 
+    /// Whether the book is a PDF by its file's name: a place in one does not sync, nor is it worth reading the file for.
+    fn pdf_named(&self, id: &str) -> bool {
+        self.paths.get(id).and_then(|p| p.extension()).is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+    }
+
     fn get(&mut self, id: &str) -> Option<&Book> {
         if self.last.as_ref().is_none_or(|(last, _)| last != id) {
             if self.failed.contains(id) || (self.last.is_some() && Instant::now() > self.deadline) {
@@ -493,7 +498,10 @@ fn local_changes(store: &Store, own: &mut HashMap<(u8, String, String), Record>,
             Some(o) if o.local.is_none() => read > o.time,
             Some(o) => o.local.as_deref() != Some(local(e.position).as_str()),
         };
-        if changed && let Some(book) = books.get(&e.id) {
+        if changed
+            && !books.pdf_named(&e.id)
+            && let Some(book) = books.get(&e.id).filter(|b| b.pdf.is_none())
+        {
             let time = after(own, &key, read);
             let item = Item::Position { place: place_of(book, e.position), progress: e.progress };
             own.insert(key, Record { book: e.id.clone(), time, deleted: false, item, local: Some(local(e.position)) });
@@ -619,7 +627,7 @@ fn apply(
             Item::Position { place, progress } => {
                 // A later reading here has already been recorded as a local change, which this item is newer than.
                 let path = books.paths.get(&id).cloned();
-                let Some(book) = books.get(&id) else { continue };
+                let Some(book) = books.get(&id).filter(|b| b.pdf.is_none()) else { continue };
                 let at = locate(book, place);
                 // Only over the place the sync started from: a page turned meanwhile wins, and goes out next time.
                 if let Some(path) = path

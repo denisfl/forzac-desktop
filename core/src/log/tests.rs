@@ -242,3 +242,20 @@ fn the_end_page_counts_its_book_before_the_finish_is_written() {
     // Finished last week: not again.
     assert_eq!(log.clone().as_if_finished(&book, DAY0 + 7 * 86_400_000).finishes.len(), 1);
 }
+
+#[test]
+fn turning_a_pdf_counts_pages_as_android() {
+    let mut r = Reading::new(DAY0);
+    let book = Book { pdf: Some(100), ..Book::default() };
+    let page = |block| Locator { chapter: 0, block, offset: 0 };
+    r.event(&book, Event::Moved, page(10), DAY0, 0);
+    r.event(&book, Event::Moved, page(11), DAY0 + 30_000, 0);
+    r.event(&book, Event::Moved, page(13), DAY0 + 60_000, 0); // a spread
+    r.event(&book, Event::Moved, page(12), DAY0 + 90_000, 0); // back
+    r.event(&book, Event::Moved, page(50), DAY0 + 95_000, 0); // not a turn
+    r.event(&book, Event::Jumped, page(70), DAY0 + 96_000, 0);
+    r.event(&book, Event::Moved, page(71), DAY0 + 97_000, 0);
+    let sums = r.due(DAY0 + 200_000, true);
+    assert_eq!(sums.iter().map(|s| s.pages).sum::<u64>(), 4);
+    assert_eq!(sums.iter().map(|s| s.chars).sum::<u64>(), 0);
+}

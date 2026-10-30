@@ -108,6 +108,25 @@ typedef struct {
 // Finds a font file with character `ch`: writes its path into `path` and the face index into `*index`.
 typedef bool (*ForzacFallback)(uint32_t ch, char *path, size_t capacity, uint32_t *index);
 
+// Whether the file is a PDF by its content; false when it cannot be read.
+bool forzac_path_is_pdf(const char *path);
+// Whether the document is a PDF: no chapters, and the shell renders it (`pdf-reading`).
+bool forzac_is_pdf(const ForzacDocument *doc);
+// Tells the document of a PDF its page count and, when not empty, its title, as the shell read them from the file.
+void forzac_pdf_set(ForzacDocument *doc, uint32_t pages, const char *title);
+// The matches of `query` in a PDF page's text, by the book search's rules: the snippet and the match's bytes in it.
+typedef struct ForzacPdfHits ForzacPdfHits;
+typedef struct {
+    const char *snippet;
+    uint32_t start;
+    uint32_t end;
+} ForzacPdfHit;
+ForzacPdfHits *forzac_pdf_search(const char *text, const char *query, uint32_t *count);
+ForzacPdfHit forzac_pdf_hit(const ForzacPdfHits *hits, uint32_t i);
+void forzac_pdf_hits_free(ForzacPdfHits *hits);
+// Gives the book `id` the title its shell read from its file, in the library's cache and the remembered book.
+bool forzac_state_set_title(ForzacState *state, const char *id, const char *title);
+
 // NULL when the file is not a readable book; *error (if not NULL): 1 not a book, 2 no text, 3 DRM-protected,
 // 4 a damaged archive, 5 the file cannot be read.
 ForzacDocument *forzac_open(const char *path, uint32_t *error);

@@ -446,6 +446,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var importing: Set<String> = []
     private var showingLibrary = false
     var readers: [Reader] = []
+    var pdfs: [PdfReader] = []
+    /// No book or PDF window is open.
+    private var nothingOpen: Bool { readers.isEmpty && pdfs.isEmpty }
     var library: LibraryWindow?
     private var settings: SettingsWindow?
     private var checkingUpdate = false
@@ -482,9 +485,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let png = value(after: "--png")
         // Values of the flags that take one are not books.
-        let values = Set(["--png", "--turns", "--chapter", "--page", "--panel", "--theme", "--keys", "--mouse", "--state", "--size", "--picture", "-AppleLanguages"].compactMap { value(after: $0) })
+        let values = Set(["--png", "--turns", "--chapter", "--page", "--panel", "--theme", "--keys", "--mouse", "--state", "--size", "--picture", "--query", "--click", "-AppleLanguages"].compactMap { value(after: $0) })
         if let path = args.dropFirst().first(where: { !$0.hasPrefix("-") && !values.contains($0) && UInt32($0) == nil }) {
-            if measuring {
+            if measuring, forzac_path_is_pdf(path) {
+                let opening = Date()
+                guard let reader = openPdf(path, page: value(after: "--page").flatMap { Int($0) }) else {
+                    fputs("\(path): not a readable book\n", stderr)
+                    exit(2)
+                }
+                reader.measure(png: png, keys: Array(value(after: "--keys").map(unescape) ?? ""), turns: value(after: "--turns").flatMap { Int($0) } ?? 0, opening: opening)
+            } else if measuring {
                 let opening = Date()
                 guard let reader = open(path, chapter: value(after: "--chapter").flatMap { UInt32($0) }) else {
                     fputs("\(path): not a readable book\n", stderr)
@@ -512,7 +522,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         // Books from Finder arrive through `application(_:open:)`; without any, the library.
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.readers.isEmpty, self.importing.isEmpty, self.library == nil, let state = self.state else { return }
+            guard let self, self.nothingOpen, self.importing.isEmpty, self.library == nil, let state = self.state else { return }
             self.showLibrary(state)
         }
         NSApp.activate(ignoringOtherApps: true)
@@ -533,7 +543,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let worker = self?.worker else { return }
             var error: UInt32 = 5
             var copy: String?
-            if forzac_books_folder(worker, home) != nil, let p = forzac_import(worker, path, &error) { copy = String(cString: p) }
+            // A PDF the shell's engine refuses is not copied in: only the shell can tell.
+            let problem = forzac_path_is_pdf(path) ? pdfProblem(path) : 0
+            if problem != 0 {
+                error = problem
+            } else if forzac_books_folder(worker, home) != nil, let p = forzac_import(worker, path, &error) { copy = String(cString: p) }
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.importing.remove(path)
@@ -543,8 +557,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    /// Opens a PDF in a window of its own, or brings its open window forward.
+    @discardableResult
+    func openPdf(_ path: String, page: Int? = nil) -> PdfReader? {
+        if let reader = pdfs.first(where: { $0.path == path }) {
+            reader.window.makeKeyAndOrderFront(nil)
+            return reader
+        }
+        guard let reader = PdfReader(path: path, state: state, page: page) else {
+            cannotOpen(path, PdfReader.openError)
+            return nil
+        }
+        reader.onClose = { [weak self] r in
+            self?.pdfs.removeAll { $0 === r }
+            if self?.nothingOpen == true, let state = self?.state { DispatchQueue.main.async { self?.showLibrary(state) } }
+        }
+        reader.onLibrary = { [weak self] in
+            guard let self, !self.nothingOpen, let state = self.state else { return }
+            self.showLibrary(state)
+        }
+        pdfs.append(reader)
+        reader.show()
+        library?.window.close()
+        return reader
+    }
+
     @discardableResult
     func open(_ path: String, chapter: UInt32? = nil) -> Reader? {
+        if forzac_path_is_pdf(path) {
+            openPdf(path)
+            return nil
+        }
         if let reader = readers.first(where: { $0.path == path }) {
             reader.window.makeKeyAndOrderFront(nil)
             return reader
@@ -555,11 +598,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         reader.onClose = { [weak self] r in
             self?.readers.removeAll { $0 === r }
-            if self?.readers.isEmpty == true, let state = self?.state { DispatchQueue.main.async { self?.showLibrary(state) } }
+            if self?.nothingOpen == true, let state = self?.state { DispatchQueue.main.async { self?.showLibrary(state) } }
         }
         reader.onLibrary = { [weak self] in
             // With no book left, `onClose` shows them.
-            guard let self, !self.readers.isEmpty, let state = self.state else { return }
+            guard let self, !self.nothingOpen, let state = self.state else { return }
             self.showLibrary(state)
         }
         readers.append(reader)
@@ -570,9 +613,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Says why `path` cannot be opened (`code` as `forzac_open` gives it); then, when no book is open, the library.
     private func cannotOpen(_ path: String, _ code: UInt32) {
-        // In the Android app's words, without PDF.
-        let reason = [1: tr("unsupported format — FB2, FB3, EPUB, TXT or Markdown needed"), 2: tr("the book has no text"),
-                      3: tr("the book is DRM-protected and can't be opened"), 4: tr("the file is damaged"), 5: tr("the file is unavailable")][code] ?? tr("the file is damaged")
+        // In the Android app's words.
+        let reason = [1: tr("unsupported format — FB2, FB3, EPUB, TXT, Markdown or PDF needed"), 2: tr("the book has no text"),
+                      3: tr("the book is DRM-protected and can't be opened"), 4: tr("the file is damaged"), 5: tr("the file is unavailable"), 6: tr("the file is protected with a password")][code] ?? tr("the file is damaged")
         let message = fill(tr("Couldn't open “{name}”: {reason}"), ["name": URL(fileURLWithPath: path).lastPathComponent, "reason": reason])
         fputs(message + "\n", stderr)
         // Also for a book that arrives with the launch (Finder, the Dock): after it, so the alert has an app to show in.
@@ -581,7 +624,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let alert = NSAlert()
                 alert.messageText = message
                 alert.runModal()
-                if let self, self.readers.isEmpty, let state = self.state { self.showLibrary(state) }
+                if let self, self.nothingOpen, let state = self.state { self.showLibrary(state) }
             }
         }
     }
@@ -617,7 +660,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // Closing the library with no book open quits (the app stays after its last book window: the library follows).
                 NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: library.window, queue: .main) { [weak self] _ in
                     if self?.library === library { self?.library = nil }
-                    if self?.readers.isEmpty == true { NSApp.terminate(nil) }
+                    if self?.nothingOpen == true { NSApp.terminate(nil) }
                 }
                 shown?(library)
             }
@@ -862,6 +905,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             $0.savePosition()
             $0.leave()
         }
+        pdfs.forEach {
+            $0.savePosition()
+            $0.leave()
+        }
         if !measuring, let worker { importQueue.sync { _ = forzac_sync(worker) } }
     }
 
@@ -870,6 +917,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func sync() {
         guard worker != nil else { return }
         readers.forEach { $0.savePendingPosition() }
+        pdfs.forEach { $0.savePendingPosition() }
         let starts = readers.map { ($0, $0.view.locator) }
         importQueue.async { [weak self] in
             guard let worker = self?.worker else { return }
@@ -968,13 +1016,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func showSettings(_ sender: Any?) {
         if let reader = readers.first(where: { $0.window.isKeyWindow }) { reader.run(.settings) } else { openSettings() }
     }
-    @objc func showContents(_ sender: Any?) { key?.run(.contents) }
+    @objc func showContents(_ sender: Any?) { (pdfs.first { $0.window.isKeyWindow })?.run(.contents) ?? key?.run(.contents) }
     @objc func showBookmarks(_ sender: Any?) { key?.run(.bookmarks) }
     @objc func showHighlights(_ sender: Any?) { key?.run(.highlights) }
     @objc func toggleBookmark(_ sender: Any?) { key?.view.toggleBookmark() }
     /// Edit › Find: the book's search in a book window, the library's search field in the library.
     @objc func find(_ sender: Any?) {
-        if let library, library.window.isKeyWindow { library.beginSearch() } else { key?.run(.search) }
+        if let library, library.window.isKeyWindow {
+            library.beginSearch()
+        } else if let pdf = pdfs.first(where: { $0.window.isKeyWindow }) {
+            pdf.run(.search)
+        } else {
+            key?.run(.search)
+        }
     }
     @objc func findNext(_ sender: Any?) { key?.view.nextMatch(1) }
     @objc func findPrevious(_ sender: Any?) { key?.view.nextMatch(-1) }

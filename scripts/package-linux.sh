@@ -1,6 +1,6 @@
 #!/bin/bash
 # Lays out a release build as an archive that runs where it is unpacked:
-#   bin/forzac, share/forzac/fonts, share/applications, share/mime/packages, share/icons/hicolor, share/licenses/forzac
+#   bin/forzac, lib/forzac/libpdfium.so, share/forzac/fonts, share/applications, share/mime/packages, share/icons/hicolor, share/licenses/forzac
 #   scripts/package-linux.sh forzac-0.2.0-linux-x86_64   (after cargo build --release -p forzac-gtk)
 set -euo pipefail
 name=${1:?usage: scripts/package-linux.sh <archive-name>}
@@ -8,6 +8,9 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 target=${CARGO_TARGET_DIR:-$root/target}
 stage=$(mktemp -d)/$name
 install -Dm755 "$target/release/forzac" "$stage/bin/forzac"
+pdfium=$("$root/scripts/pdfium.sh")
+install -Dm644 "$pdfium/lib/libpdfium.so" "$stage/lib/forzac/libpdfium.so"
+mkdir -p "$stage/share/licenses/forzac" && cp -r "$pdfium/licenses" "$stage/share/licenses/forzac/pdfium"
 mkdir -p "$stage/share/forzac" && cp -r "$root/assets/fonts" "$stage/share/forzac/"
 install -Dm644 "$root/data/app.truenrth.forzac.desktop" -t "$stage/share/applications/"
 install -Dm644 "$root/data/forzac-mime.xml" "$stage/share/mime/packages/forzac.xml"

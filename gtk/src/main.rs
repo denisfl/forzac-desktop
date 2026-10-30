@@ -29,6 +29,7 @@ mod library;
 mod menu;
 mod page_view;
 mod panels;
+mod pdf;
 mod settings_sheet;
 mod stats;
 mod viewer;
@@ -187,6 +188,9 @@ fn main() -> glib::ExitCode {
                 && a.parse::<usize>().is_err()
                 && Some(PathBuf::from(a.as_str())) != options.png
                 && Some(*a) != options.mouse.as_ref()
+                && !["--keys", "--query", "--click"]
+                    .iter()
+                    .any(|f| args.iter().position(|k| k == f).and_then(|i| args.get(i + 1)) == Some(*a))
                 && Some(*a) != size_arg
                 && Some(PathBuf::from(a.as_str())) != stats_dir
         })
@@ -280,11 +284,12 @@ fn main() -> glib::ExitCode {
 /// Why a file cannot be read, in the Android app's words (without PDF).
 fn reason(e: forzac_core::Error) -> &'static str {
     match e {
-        forzac_core::Error::NotABook => tr("unsupported format — FB2, FB3, EPUB, TXT or Markdown needed"),
+        forzac_core::Error::NotABook => tr("unsupported format — FB2, FB3, EPUB, TXT, Markdown or PDF needed"),
         forzac_core::Error::Damaged => tr("the file is damaged"),
         forzac_core::Error::Protected => tr("the book is DRM-protected and can't be opened"),
         forzac_core::Error::NoText => tr("the book has no text"),
         forzac_core::Error::Unavailable => tr("the file is unavailable"),
+        forzac_core::Error::Password => tr("the file is protected with a password"),
     }
 }
 
@@ -335,6 +340,12 @@ fn open_book(app: &gtk::Application, path: &Path, options: &Options, store: &Sha
     glib::spawn_future_local(async move {
         let copied = gio::spawn_blocking(move || {
             let mut s = Store::open(state);
+            // A PDF the engine refuses is not copied in: only the shell can tell.
+            if std::fs::read(&src).is_ok_and(|bytes| forzac_core::is_pdf(&bytes))
+                && let Some(e) = pdf::problem(&src)
+            {
+                return Err(e);
+            }
             let folder = forzac_core::library::books_folder(&home, language(), &mut s).map_err(|_| forzac_core::Error::Unavailable)?;
             forzac_core::library::import(&src, &folder, &mut s)
         })
@@ -373,6 +384,18 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             return false;
         }
     };
+    if book.pdf.is_some() {
+        return match pdf::open_window(app, path, book, options, store) {
+            Ok(window) => {
+                WINDOWS.with(|w| w.borrow_mut().push((canonical, window.downgrade())));
+                true
+            }
+            Err(e) => {
+                cannot_open(app, path, e, options, store);
+                false
+            }
+        };
+    }
     let parsed = options.start.elapsed();
     let title = if book.title.is_empty() { tr("Forzac").to_owned() } else { fill(tr("{title} — Forzac"), &[("title", &book.title)]) };
     let stateless = options.stateless();
@@ -829,7 +852,12 @@ fn keep_awake(app: &gtk::Application, window: &gtk::ApplicationWindow) {
 }
 
 fn report_turns(view: &PageView) {
-    let (refresh, mut intervals) = view.turn_stats();
+    let (refresh, intervals) = view.turn_stats();
+    report_frames(refresh, intervals, &view.turn_frames());
+}
+
+/// The frame intervals inside turns, and where in a turn the late ones are.
+fn report_frames(refresh: i64, mut intervals: Vec<i64>, frames: &[Vec<i64>]) {
     if intervals.is_empty() {
         println!("turns: no animation frames recorded");
         return;
@@ -843,8 +871,7 @@ fn report_turns(view: &PageView) {
     let missed = intervals.iter().filter(|&&i| i as f64 > budget as f64 * 1.5).count();
     let pct = |p: f64| intervals[((intervals.len() - 1) as f64 * p) as usize] as f64 / 1000.0;
     // Where in a turn the misses are: (frame index within the turn, interval ms).
-    let late: Vec<String> = view
-        .turn_frames()
+    let late: Vec<String> = frames
         .iter()
         .flat_map(|t| t.windows(2).enumerate().map(|(i, w)| (i + 1, w[1] - w[0])).collect::<Vec<_>>())
         .filter(|&(_, d)| d as f64 > budget as f64 * 1.5)

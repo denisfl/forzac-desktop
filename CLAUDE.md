@@ -8,7 +8,7 @@ artefacts; talk to the user in their language.
 ## Product principle
 
 Few settings, great defaults; presets instead of sliders. Keyboard first (Vim keys, arrows, space). Two page modes
-only: "Slide" and "Scroll". No PDF. Typography of a good printed book. Smoothness over features: no missed frames
+only: "Slide" and "Scroll". PDF as on paper, without themes (change `pdf`). Typography of a good printed book. Smoothness over features: no missed frames
 inside an animation at 120 Hz, nothing drawn while idle.
 
 ## Architecture
@@ -31,7 +31,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings      # needs GTK 4 dev files; on macOS: -p forzac-core
 cargo test -p forzac-core
 FORZAC_CORPUS=~/Books cargo test -p forzac-core --test corpus
-cargo run --release -p forzac-gtk -- book.fb2.zip          # Linux
+cargo run --release -p forzac-gtk -- book.fb2.zip          # Linux; a PDF needs FORZAC_PDFIUM=$(scripts/pdfium.sh)/lib/libpdfium.so
 macos/build.sh                                             # macOS: macos/build/Forzac and Forzac.app (signed ad hoc)
 scripts/package-macos.sh X.Y.Z                             # macOS: the DMG and its .sha256, after macos/build.sh
 cargo run --release -p forzac-core --example bench -- book.fb2.zip

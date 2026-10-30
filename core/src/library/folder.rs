@@ -16,7 +16,7 @@ const IDS: &str = "books.ids";
 /// The longest name of a copy, in characters, before ` (2)` and the extension.
 const NAME_CHARS: usize = 120;
 /// Extensions of the books the library reads, longest first: `.fb2.zip` is one extension.
-const EXTENSIONS: [&str; 7] = [".fb2.zip", ".markdown", ".fb2", ".fb3", ".epub", ".txt", ".md"];
+const EXTENSIONS: [&str; 8] = [".fb2.zip", ".markdown", ".epub", ".fb2", ".fb3", ".pdf", ".txt", ".md"];
 /// Extensions of text books (`markdown-txt`): read in the Books folder and when opened, but not gathered from a folder
 /// being added, where every README and log would come along.
 const TEXT_EXTENSIONS: [&str; 3] = [".markdown", ".txt", ".md"];
@@ -88,6 +88,14 @@ pub fn file_title(name: &str) -> String {
     }
 }
 
+/// A PDF's title from its metadata, when it looks like one: many hold a file name or a tool's path (Android's rule).
+pub fn pdf_title(raw: &str) -> Option<&str> {
+    let title = raw.trim();
+    let file_like = title.rsplit_once('.').is_some_and(|(_, e)| (2..=4).contains(&e.len()) && e.chars().all(|c| c.is_ascii_alphanumeric()));
+    let junk = title.chars().any(|c| c.is_control() || "_/\\<>@{}|".contains(c));
+    (!title.is_empty() && !file_like && !junk).then_some(title)
+}
+
 /// A copy's name: `Author — Title.ext` with the first author, the title alone without one, the original name's stem
 /// without a title; characters file systems refuse and a leading dot replaced, at most 120 characters, ` (2)`, ` (3)`…
 /// while `taken` says the name is in use. The extension is `original`'s, or `fallback` when it is not a book's.
@@ -119,6 +127,9 @@ pub fn file_name(title: &str, authors: &[String], original: &str, fallback: &str
 
 /// The extension for a book whose file name does not say its format: by its content.
 fn content_extension(bytes: &[u8]) -> &'static str {
+    if crate::is_pdf(bytes) {
+        return ".pdf";
+    }
     if !bytes.starts_with(b"PK") {
         return if crate::fb2::parse(bytes).is_ok() { ".fb2" } else { crate::text::extension(bytes) };
     }
@@ -154,7 +165,7 @@ pub fn folder_books(folder: &Path, store: &mut Store) -> HashMap<String, PathBuf
     folder_files(folder, store).into_iter().filter(|f| !f.id.is_empty()).map(|f| (f.id, folder.join(f.name))).collect()
 }
 
-/// Reads the folder's books (FB2, FB2.ZIP, FB3, EPUB, TXT, Markdown at its top level; not dotfiles, not subfolders), parsing only the
+/// Reads the folder's books (FB2, FB2.ZIP, FB3, EPUB, TXT, Markdown, PDF at its top level; not dotfiles, not subfolders), parsing only the
 /// files that are new or changed since the cache in `store`, which is written once when anything changed. Unreadable
 /// files are ignored; files with one id count once. Data a new file's old id still holds (a book put back from the
 /// Trash after the move to new ids) is renamed to its new id.
@@ -357,7 +368,8 @@ fn copy_in(src: &Path, bytes: &[u8], id: String, folder: &Path) -> Result<Cached
         return Err(crate::Error::Unavailable);
     }
     let (size, mtime) = std::fs::metadata(&path).map(|m| (m.len(), mtime(&m))).unwrap_or_default();
-    Ok(Cached { name, size, mtime, id, title: book.title, authors: book.authors.join(", "), series: book.series })
+    let title = if book.title.trim().is_empty() { file_title(&name) } else { book.title };
+    Ok(Cached { name, size, mtime, id, title, authors: book.authors.join(", "), series: book.series })
 }
 
 /// What adding a folder did ([`import_folder`]).
@@ -399,7 +411,7 @@ impl Added {
     }
 }
 
-/// The book files (FB2, FB2.ZIP, FB3, EPUB; not text) in `dir` and its subfolders at any depth, in path order: not
+/// The book files (FB2, FB2.ZIP, FB3, EPUB, PDF; not text) in `dir` and its subfolders at any depth, in path order: not
 /// dotfiles or dot-folders, not symbolic links to folders, nothing inside `skip` (the Books folder).
 pub fn book_files(dir: &Path, skip: &Path) -> Vec<PathBuf> {
     let skip = skip.canonicalize().unwrap_or_else(|_| skip.to_owned());

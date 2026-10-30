@@ -11,7 +11,7 @@ work=$(mktemp -d)
 tar -C "$work" -xzf "$(cd "$work" && "$root/scripts/package-linux.sh" "forzac-$version" | tail -1)"
 pkg=$work/pkg
 mkdir -p "$pkg/usr" "$pkg/DEBIAN"
-cp -r "$work/forzac-$version"/{bin,share} "$pkg/usr/"
+cp -r "$work/forzac-$version"/{bin,lib,share} "$pkg/usr/"
 # apt updates it: the app does not check GitHub for a newer release.
 : > "$pkg/usr/share/forzac/packaged"
 # Debian keeps licences in the copyright file and /usr/share/doc, not /usr/share/licenses.
@@ -23,6 +23,8 @@ Forzac, https://forzac.app
 
 The code: Mozilla Public License 2.0 (licenses/LICENSE).
 The bundled fonts in /usr/share/forzac/fonts: SIL Open Font License 1.1 (licenses/*-OFL.txt).
+PDFium in /usr/lib/forzac, by bblanchon/pdfium-binaries: BSD-3-Clause and Apache-2.0, with what it bundles under their
+own licences (licenses/pdfium).
 The hyphenation patterns built into the binary: Russian LPPL 1.2 or later, English free use with the notice kept
 (licenses/hyph-*.lic.txt).
 EOF
@@ -38,7 +40,7 @@ Priority: optional
 Homepage: https://forzac.app
 Description: Offline FB2 and EPUB reader with book-quality typesetting
  Reads FB2, FB3 and EPUB books with hyphenation, justification and no lone
- lines at page edges. Keyboard first, few settings.
+ lines at page edges, and PDF as on paper. Keyboard first, few settings.
 EOF
 # Printed after the first installation only, not on upgrades.
 cat > "$pkg/DEBIAN/postinst" <<'EOF'
@@ -46,7 +48,7 @@ cat > "$pkg/DEBIAN/postinst" <<'EOF'
 set -e
 if [ "$1" = configure ] && [ -z "$2" ]; then
   echo "To open FB2, FB3 and EPUB books with Forzac (xdg-open, file managers), run as your user:"
-  echo "  xdg-mime default app.truenrth.forzac.desktop application/x-fictionbook+xml application/x-zip-compressed-fb2 application/x-fb3 application/epub+zip"
+  echo "  xdg-mime default app.truenrth.forzac.desktop application/x-fictionbook+xml application/x-zip-compressed-fb2 application/x-fb3 application/epub+zip application/pdf"
 fi
 EOF
 chmod 755 "$pkg/DEBIAN/postinst"

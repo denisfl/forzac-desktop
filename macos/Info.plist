@@ -43,6 +43,13 @@
       <key>LSItemContentTypes</key><array><string>public.plain-text</string><string>net.daringfireball.markdown</string></array>
     </dict>
     <dict>
+      <!-- PDF (pdf-reading): offered in "Open With", never taking it over from Preview. -->
+      <key>CFBundleTypeName</key><string>PDF</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key><array><string>com.adobe.pdf</string></array>
+    </dict>
+    <dict>
       <!-- .fb2.zip is a zip to macOS: Forzac is offered in "Open With" without taking zips over. -->
       <key>CFBundleTypeName</key><string>Zipped FictionBook</string>
       <key>CFBundleTypeRole</key><string>Viewer</string>

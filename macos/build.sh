@@ -28,7 +28,7 @@ swiftc -O -target arm64-apple-macos$MACOSX_DEPLOYMENT_TARGET -import-objc-header
   -L "$root/target/aarch64-apple-darwin/release" -lforzac_core \
   -F "$root/macos/build/sparkle" -framework Sparkle \
   -Xlinker -rpath -Xlinker @executable_path/../Frameworks -Xlinker -rpath -Xlinker @executable_path \
-  -framework AppKit -framework CoreText -framework QuartzCore \
+  -framework AppKit -framework CoreText -framework QuartzCore -framework PDFKit \
   -o "$root/macos/build/Forzac"
 # The same binary as an app bundle, with the icon (scripts/icons.py).
 app="$root/macos/build/Forzac.app/Contents"

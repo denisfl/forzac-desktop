@@ -469,3 +469,32 @@ fn the_phones_lines_arrive_once() {
     assert!(own.contains("finish\tbook\t1792300000000\tКнига\tАвтор\t1791000000000\t0\n"), "{own}");
     assert!(own.contains("read\tbook\t1792300000000\tpppp\t2026-10-18\t1800\t25000\t0\n"));
 }
+
+#[test]
+fn a_pdfs_place_stays_on_this_device_and_its_reading_goes_out() {
+    let root = dir();
+    let folder = root.join("Books");
+    std::fs::create_dir_all(&folder).unwrap();
+    for name in ["kleppmann.pdf", "renamed-copy"] {
+        let path = folder.join(name);
+        std::fs::write(&path, format!("%PDF-1.7\n{name}")).unwrap();
+        let mut book = crate::open(&path).unwrap();
+        book.pdf = Some(640);
+        let mut a = Store::open(root.join("a.state"));
+        a.save_position(&book, &path, Locator { chapter: 0, block: 300, offset: 0 }, false).unwrap();
+        let sums = [crate::log::Sum { day: "2026-10-30".into(), seconds: 900, chars: 0, pages: 12 }];
+        crate::log::append(&mut a, &book.id, &sums, 1_793_000_000_000).unwrap();
+        sync(&folder, &mut a).unwrap();
+        let written = std::fs::read_to_string(
+            std::fs::read_dir(folder.join(DIR))
+                .unwrap()
+                .flatten()
+                .find(|e| e.path().extension().is_some_and(|x| x == "sync"))
+                .unwrap()
+                .path(),
+        )
+        .unwrap();
+        assert!(!written.lines().any(|l| l.contains("position") && l.contains(&book.id)), "{written}");
+        assert!(written.lines().any(|l| l.contains(&book.id) && l.contains("2026-10-30")), "{written}");
+    }
+}

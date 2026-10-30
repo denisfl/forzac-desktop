@@ -9,7 +9,7 @@ import CoreText
 import QuartzCore
 
 /// A button of the bars: a child view centred, an action on click, the ink at 6 % under the pointer.
-private final class BarButton: NSView {
+final class BarButton: NSView {
     let child: NSView
     var action: (() -> Void)?
     private var tint: UInt32 = 0
@@ -51,7 +51,7 @@ private final class BarButton: NSView {
 
 /// The slider over the book's pages, as Android's `ProgressSlider`: a 2 px track in the line colour, a 1 × 8 px tick at
 /// each chapter's first page, the part read in the ink, a 16 px thumb. Pressing or dragging scrubs, releasing goes.
-private final class Slider: NSView {
+final class Slider: NSView {
     private let track = CALayer(), ticks = CAShapeLayer(), done = CALayer(), thumb = CALayer()
     private var count: UInt32 = 0, page: UInt32 = 0, starts: [UInt32] = []
     var onScrub: ((UInt32) -> Void)?
@@ -110,7 +110,7 @@ private final class Slider: NSView {
 }
 
 /// A bar: the paper with a 1 px line on its edge towards the page; its children laid out by `place`.
-private final class Bar: NSView {
+final class Bar: NSView {
     let rule = CALayer()
     let lineAtTop: Bool
     var place: ((Bar) -> Void)?

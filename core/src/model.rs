@@ -33,6 +33,8 @@ pub struct Book {
     pub toc: Vec<TocEntry>,
     /// Images by id (in FB2 the `<binary>` id).
     pub images: HashMap<String, Image>,
+    /// A PDF (`pdf-reading`): no chapters, its shell renders it; its page count once the shell has told it, 0 before.
+    pub pdf: Option<usize>,
 }
 
 /// A series and the book's number in it.
