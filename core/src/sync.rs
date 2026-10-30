@@ -518,7 +518,10 @@ fn local_changes(store: &Store, own: &mut HashMap<(u8, String, String), Record>,
             own.values().filter(|r| r.key().0 == kind && r.book == *id && !r.deleted).filter_map(|r| r.local.clone()).collect()
         };
         let (have_marks, have_quotes) = (held(1, own), held(2, own));
-        for l in marks.iter().filter(|l| !have_marks.contains(l)) {
+        // A book of pages has no text to carry a place in another device's terms: its marks stay here, as its place does.
+        let paged =
+            !(marks.is_empty() && quotes.is_empty()) && (books.pdf_named(id) || books.get(id).is_some_and(|b| b.page_count().is_some()));
+        for l in marks.iter().filter(|l| !paged && !have_marks.contains(l)) {
             if let (Some(at), Some(book)) = (parse_local(l), books.get(id)) {
                 let r = Record {
                     book: id.clone(),
@@ -530,7 +533,7 @@ fn local_changes(store: &Store, own: &mut HashMap<(u8, String, String), Record>,
                 add(own, r, &marks);
             }
         }
-        for l in quotes.iter().filter(|l| !have_quotes.contains(l)) {
+        for l in quotes.iter().filter(|l| !paged && !have_quotes.contains(l)) {
             let pair = l.split_once('-').and_then(|(a, b)| Some((parse_local(a)?, parse_local(b)?)));
             if let (Some((a, b)), Some(book)) = (pair, books.get(id)) {
                 let item = Item::Highlight(place_of(book, a), place_of(book, b));

@@ -471,7 +471,7 @@ fn the_phones_lines_arrive_once() {
 }
 
 #[test]
-fn a_pdfs_place_stays_on_this_device_and_its_reading_goes_out() {
+fn a_pdfs_place_and_marks_stay_on_this_device_and_its_reading_goes_out() {
     let root = dir();
     let folder = root.join("Books");
     std::fs::create_dir_all(&folder).unwrap();
@@ -482,6 +482,9 @@ fn a_pdfs_place_stays_on_this_device_and_its_reading_goes_out() {
         book.pdf = Some(640);
         let mut a = Store::open(root.join("a.state"));
         a.save_position(&book, &path, Locator { chapter: 0, block: 300, offset: 0 }, false).unwrap();
+        let word = (Locator { chapter: 0, block: 300, offset: 4 }, Locator { chapter: 0, block: 300, offset: 9 });
+        a.change_quotes_of(&book.id, &[], &[word]).unwrap();
+        a.change_bookmarks_of(&book.id, &[], &[word.0]).unwrap();
         let sums = [crate::log::Sum { day: "2026-10-30".into(), seconds: 900, chars: 0, pages: 12 }];
         crate::log::append(&mut a, &book.id, &sums, 1_793_000_000_000).unwrap();
         sync(&folder, &mut a).unwrap();
@@ -494,7 +497,9 @@ fn a_pdfs_place_stays_on_this_device_and_its_reading_goes_out() {
                 .path(),
         )
         .unwrap();
-        assert!(!written.lines().any(|l| l.contains("position") && l.contains(&book.id)), "{written}");
+        for kind in ["position", "highlight", "bookmark"] {
+            assert!(!written.lines().any(|l| l.starts_with(kind) && l.contains(&book.id)), "{written}");
+        }
         assert!(written.lines().any(|l| l.contains(&book.id) && l.contains("2026-10-30")), "{written}");
     }
 }
