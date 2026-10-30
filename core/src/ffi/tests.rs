@@ -89,6 +89,8 @@ fn a_book_through_the_c_functions() {
         assert!(forzac_note(doc, c("n1").as_ptr(), 500.0, &settings, &mut note) > 20.0);
         assert!(note.run_count > 0);
         assert_eq!(string(forzac_note_title(doc, c("n1").as_ptr())).as_deref(), Some("1"));
+        assert_eq!(string(forzac_note_text(doc, c("n1").as_ptr())).as_deref(), Some("Верне — кондитерская на набережной."));
+        assert_eq!(string(forzac_note_text(doc, c("none").as_ptr())), None);
         assert!(forzac_note(doc, c("missing").as_ptr(), 500.0, &settings, &mut note) < 0.0);
 
         assert_eq!(forzac_progress(doc, ForzacLocator { chapter: 0, block: 0, offset: 0 }), 0.0);

@@ -981,6 +981,35 @@ pub unsafe extern "C" fn forzac_note_title(doc: *mut Document, id: *const c_char
     doc.text(title.as_deref())
 }
 
+/// The plain text of note `id`, for a screen reader; NULL when the book has no such note. Valid until the next string.
+///
+/// # Safety
+/// `doc` from [`forzac_open`]; `id` a valid NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_note_text(doc: *mut Document, id: *const c_char) -> *const c_char {
+    let doc = unsafe { &mut *doc };
+    let text = doc.book.notes.get(unsafe { str(id) }.as_ref()).map(|n| blocks_text(&n.blocks));
+    doc.text(text.as_deref())
+}
+
+/// The plain text of the short target of link `key` (`forzac_link_preview`), for a screen reader; NULL when it has none.
+/// Valid until the next string.
+///
+/// # Safety
+/// `doc` from [`forzac_open`]; `key` a valid NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_link_preview_text(doc: *mut Document, key: *const c_char) -> *const c_char {
+    let doc = unsafe { &mut *doc };
+    let text = doc.book.preview(unsafe { str(key) }.as_ref()).map(blocks_text);
+    doc.text(text.as_deref())
+}
+
+/// Blocks' texts joined by line breaks, as `Book::text`: without soft hyphens, no-break spaces as spaces.
+fn blocks_text(blocks: &[Block]) -> String {
+    let texts: Vec<&str> = blocks.iter().flat_map(|b| b.texts()).map(|t| t.text.as_str()).collect();
+    texts.join("\n").replace('\u{AD}', "").replace(['\u{A0}', '\u{202F}'], " ")
+}
+
 /// Where link `key` leads: 1 a place in the book (`*at`), 2 a note (`*text` its id), 3 an address outside the book
 /// (`*text`), 4 a short place to show in the note sheet (`forzac_link_preview`; `*at` its start); 0 for an unknown key. `*text` is valid until the next string from `doc`.
 ///

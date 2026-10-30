@@ -170,6 +170,10 @@ const uint8_t *forzac_cover(const ForzacDocument *doc, size_t *len);
 float forzac_note(ForzacDocument *doc, const char *id, float width, const ForzacSettings *settings, ForzacPage *out);
 // Strings below are valid until the next string from the document.
 const char *forzac_note_title(ForzacDocument *doc, const char *id);
+// Plain text for a screen reader: a note's, and the short target's of a link; NULL when there is none. Valid until the
+// next string from the document.
+const char *forzac_note_text(ForzacDocument *doc, const char *id);
+const char *forzac_link_preview_text(ForzacDocument *doc, const char *key);
 // 1 a place (*at), 2 a note (*text its id), 3 outside the book (*text the address), 4 a short place for the note
 // sheet (forzac_link_preview; *at its start); 0 unknown.
 uint8_t forzac_link(ForzacDocument *doc, const char *key, ForzacLocator *at, const char **text);
