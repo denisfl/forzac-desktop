@@ -10,6 +10,6 @@ Exec=forzac %F
 Icon=app.truenrth.forzac
 Terminal=false
 Categories=Office;Viewer;
-MimeType=application/x-fictionbook+xml;application/x-zip-compressed-fb2;application/x-fb3;application/epub+zip;application/pdf;text/markdown;
+MimeType=application/x-fictionbook+xml;application/x-zip-compressed-fb2;application/x-fb3;application/epub+zip;application/pdf;text/markdown;text/plain;application/zip;application/xml;text/xml;
 Keywords=book;reader;ebook;fb2;epub;txt;markdown;читалка;книга;
 StartupNotify=true

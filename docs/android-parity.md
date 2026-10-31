@@ -35,7 +35,7 @@ what was decided then. New since the table, and open:
 | A9 | A PDF's author from its metadata (`pdf-pages`) | The same, beside a title that looks like one (Android's rule) | same, fixed 2026-10-31 |
 | A10 | Double tap zooms a PDF 2× at the point (`pdf-original-zoom`) | A double click in the middle third zooms 2× at the point, and back; the menu waits up to 300 ms for the second click | same, fixed 2026-10-31 |
 | A11 | Selection and quotes in a PDF; margin cropping; splitting scanned spreads; screens by lines (`pdf-text`, `pdf-pages`) | None: `pdf` leaves them out of its first version | deferred (F5) |
-| A12 | Offered in "Open with" for plain text, a plain zip and XML (`open-with`, `markdown-txt`) | The Mac yes; Linux lists neither (`data/app.truenrth.forzac.desktop`) | gap, inferred from the file |
+| A12 | Offered in "Open with" for plain text, a plain zip and XML (`open-with`, `markdown-txt`) | The same (`data/app.truenrth.forzac.desktop`); the packages do not make Forzac their default | same, fixed 2026-10-31 |
 | A13 | The gesture on a first opening, the page's reveal on the next (`opening-gesture`, `page-reveal`) | None | to decide: X1 predates the 2026-10-30 goal |
 | A14 | Formulas (F7) | Read as plain text | gap under the 2026-10-30 goal; "Not planned" predates it |
 
