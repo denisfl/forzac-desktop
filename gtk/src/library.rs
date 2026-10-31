@@ -1254,12 +1254,12 @@ impl Library {
                     return;
                 }
                 let made = id.clone();
-                let pdf_title = gio::spawn_blocking(move || {
+                let pdf_info = gio::spawn_blocking(move || {
                     let book = forzac_core::open(&path).ok();
                     if book.as_ref().is_some_and(|b| b.pdf.is_some()) {
                         let cover = crate::pdf::cover(&path);
                         write_thumbnail(&made, cover.as_ref().map(|c| c.0.as_slice()));
-                        return cover.map(|c| c.1);
+                        return cover.map(|c| (c.1, c.2));
                     }
                     let bytes = book.as_ref().and_then(|b| b.cover.as_ref().and_then(|c| b.images.get(c)).map(|i| i.bytes.as_slice()));
                     write_thumbnail(&made, bytes);
@@ -1269,8 +1269,14 @@ impl Library {
                 .ok()
                 .flatten();
                 let Some(library) = weak.upgrade() else { return };
-                if let Some(title) = pdf_title.as_deref().and_then(forzac_core::library::pdf_title) {
-                    let _ = library.store.borrow_mut().set_title(&id, title);
+                if let Some((title, author)) = &pdf_info {
+                    let mut store = library.store.borrow_mut();
+                    if let Some(title) = forzac_core::library::pdf_title(title) {
+                        let _ = store.set_title(&id, title);
+                    }
+                    if let Some(author) = forzac_core::library::pdf_author(title, author) {
+                        let _ = store.set_author(&id, author);
+                    }
                 }
                 library.pending.set(library.pending.get() - 1);
                 match std::fs::metadata(thumbnail(&id)) {

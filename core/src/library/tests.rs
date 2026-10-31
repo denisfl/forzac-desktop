@@ -233,6 +233,14 @@ fn editing_a_books_details() {
 }
 
 #[test]
+fn a_pdf_author_counts_only_beside_a_real_title() {
+    assert_eq!(pdf_author("Искусственный интеллект", " Бутл Роджер "), Some("Бутл Роджер"));
+    assert_eq!(pdf_author("Perelman_I._Zanimatelnaia_mehanika-or.pdf", "head"), None);
+    assert_eq!(pdf_author("", "head"), None);
+    assert_eq!(pdf_author("Книга", "  "), None);
+}
+
+#[test]
 fn a_pdf_title_that_looks_like_a_file_is_not_one() {
     assert_eq!(pdf_title(" Высоконагруженные приложения "), Some("Высоконагруженные приложения"));
     assert_eq!(pdf_title("Dr. Who"), Some("Dr. Who"));

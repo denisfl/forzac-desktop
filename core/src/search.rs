@@ -86,19 +86,61 @@ pub fn search(book: &Book, q: &str) -> Vec<Hit> {
     hits
 }
 
-/// The matches of `q` in a PDF page's text, each as a snippet and the match in it: a hyphen at a line's end joins the
-/// word, and line breaks are spaces.
-pub fn search_page(text: &str, q: &str) -> Vec<(String, Range<usize>)> {
+/// A match in a PDF page's text: the snippet, the match in it, and where it is in the page's text in UTF-16 units.
+pub struct PageHit {
+    pub snippet: String,
+    pub matched: Range<usize>,
+    pub place: Range<usize>,
+}
+
+/// A PDF page's text as it is searched, with each character's UTF-16 offset in `text`: a hyphen at a line's end joins
+/// the word, and line breaks are spaces. PDFium marks a hyphen it took for a line's end with U+FFFE or U+0002.
+fn page_text(text: &str) -> (String, Vec<usize>) {
+    let mut at = 0;
+    let raw: Vec<(char, usize)> = text
+        .chars()
+        .map(|c| {
+            at += c.len_utf16();
+            (c, at - c.len_utf16())
+        })
+        .collect();
+    let line_break = |i: usize| match raw.get(i).map(|r| r.0) {
+        Some('\n') => 1,
+        Some('\r') if raw.get(i + 1).is_some_and(|r| r.0 == '\n') => 2,
+        _ => 0,
+    };
+    let (mut out, mut offsets) = (String::with_capacity(text.len()), Vec::with_capacity(raw.len()));
+    let mut i = 0;
+    while i < raw.len() {
+        let (c, at) = raw[i];
+        let marked = c == '\u{FFFE}' || c == '\u{2}';
+        if marked || (c == '-' && line_break(i + 1) > 0) {
+            i += 1;
+            for _ in 0..if marked { 1 } else { 2 } {
+                i += line_break(i);
+            }
+            continue;
+        }
+        let breaks = line_break(i);
+        out.push(if breaks > 0 || c == '\r' { ' ' } else { c });
+        offsets.push(at);
+        i += breaks.max(1);
+    }
+    (out, offsets)
+}
+
+/// The matches of `q` in a PDF page's text.
+pub fn search_page(text: &str, q: &str) -> Vec<PageHit> {
     let Some(q) = query(q) else { return Vec::new() };
-    // PDFium marks a hyphen it took for a line's end with U+FFFE or U+0002.
-    let text =
-        text.replace("\r\n", "\n").replace(['\u{FFFE}', '\u{2}'], "-\n").replace("-\n\n", "").replace("-\n", "").replace(['\n', '\r'], " ");
+    let (text, offsets) = page_text(text);
     let chars: Vec<(usize, char)> = text.char_indices().collect();
     let (mut hits, mut i) = (Vec::new(), 0);
     while i < chars.len() {
         match match_at(&chars, i, &q) {
             Some(end) => {
-                hits.push(snippet(&chars, i, end));
+                let (snippet, matched) = snippet(&chars, i, end);
+                let place = offsets[i]..offsets[end - 1] + chars[end - 1].1.len_utf16();
+                hits.push(PageHit { snippet, matched, place });
                 i = end.max(i + 1);
             }
             None => i += 1,

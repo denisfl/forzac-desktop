@@ -90,6 +90,16 @@ fn a_pdf_pages_text_is_searched_across_its_lines() {
     assert_eq!(search_page(text, "ель вторая").len(), 1, "a line break as a space");
     assert!(search_page(text, "е").is_empty(), "from two characters");
     assert_eq!(search_page("опти\u{FFFE}мизированными и ана\u{2}\r\nлитики", "оптимизированными и аналитики").len(), 1, "PDFium's marks");
-    let (snippet, matched) = &search_page(text, "елки")[0];
-    assert_eq!(&snippet[matched.clone()], "Ёлки");
+    let hit = &search_page(text, "елки")[0];
+    assert_eq!(&hit.snippet[hit.matched.clone()], "Ёлки");
+}
+
+#[test]
+fn a_pdf_pages_match_knows_its_place_in_the_text() {
+    let place = |text: &str, q: &str| search_page(text, q)[0].place.clone();
+    let text = "Первая стро-\r\nка Ёлки";
+    assert_eq!(place(text, "строка"), 7..16, "across the hyphen and the line break");
+    assert_eq!(place(text, "елки"), 17..21);
+    assert_eq!(place("😀 ель", "ель"), 3..6, "in UTF-16 units");
+    assert_eq!(place("опти\u{2}\r\nмизация", "оптимизация"), 0..14, "PDFium's mark");
 }

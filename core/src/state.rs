@@ -416,6 +416,19 @@ impl Store {
         })
     }
 
+    /// Gives the book `id` the author its shell read from its file, as [`Store::set_title`].
+    pub fn set_author(&mut self, id: &str, author: &str) -> io::Result<()> {
+        if self.saved.files.iter().all(|f| f.id != id || f.authors == author)
+            && self.saved.books.iter().all(|e| e.id != id || e.authors == author)
+        {
+            return Ok(());
+        }
+        self.write(|saved| {
+            saved.files.iter_mut().filter(|f| f.id == id).for_each(|f| f.authors = author.to_owned());
+            saved.books.iter_mut().filter(|e| e.id == id).for_each(|e| e.authors = author.to_owned());
+        })
+    }
+
     /// Forgets the book `id` (removed from the library): its entry and reading position. Its bookmarks and highlights
     /// stay, so opening the file again brings them back.
     pub fn forget(&mut self, id: &str) -> io::Result<()> {

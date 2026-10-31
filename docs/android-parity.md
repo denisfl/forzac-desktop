@@ -30,10 +30,10 @@ what was decided then. New since the table, and open:
 | A4 | Searching the device for books, with a list to tick (`find-books`) | The Books folder and "Add a Folder" | to decide: a computer has real file dialogs |
 | A5 | A new book opens at the text (F3) | At its first page: Standard Ebooks at "Imprint" (inferred from the code, not run) | gap; Android's change is still open |
 | A6 | A PDF's spreads as in a paper book: page 1 alone on the right, then (2, 3), (4, 5) (A spec pdf-reading) | The same; a last page alone on the left | same, fixed 2026-10-30 |
-| A7 | A word found in a PDF is marked on its page (`pdf-text`) | The result goes to the page, nothing is marked | gap |
-| A8 | A thin line under a PDF's links, often unmarked otherwise (`pdf-text`) | Links work, nothing is drawn | gap |
-| A9 | A PDF's author from its metadata (`pdf-pages`) | The title only | gap |
-| A10 | Double tap zooms a PDF 2× at the point (`pdf-original-zoom`) | Keys, pinch, `Ctrl`+wheel; a double click does nothing | gap, small |
+| A7 | A word found in a PDF is marked on its page (`pdf-text`) | The same, in the book search's bars, until the next click | same, fixed 2026-10-31 |
+| A8 | A thin line under a PDF's links, often unmarked otherwise (`pdf-text`) | The same, in the Light theme's link colour | same, fixed 2026-10-31 |
+| A9 | A PDF's author from its metadata (`pdf-pages`) | The same, beside a title that looks like one (Android's rule) | same, fixed 2026-10-31 |
+| A10 | Double tap zooms a PDF 2× at the point (`pdf-original-zoom`) | A double click in the middle third zooms 2× at the point, and back; the menu waits up to 300 ms for the second click | same, fixed 2026-10-31 |
 | A11 | Selection and quotes in a PDF; margin cropping; splitting scanned spreads; screens by lines (`pdf-text`, `pdf-pages`) | None: `pdf` leaves them out of its first version | deferred (F5) |
 | A12 | Offered in "Open with" for plain text, a plain zip and XML (`open-with`, `markdown-txt`) | The Mac yes; Linux lists neither (`data/app.truenrth.forzac.desktop`) | gap, inferred from the file |
 | A13 | The gesture on a first opening, the page's reveal on the next (`opening-gesture`, `page-reveal`) | None | to decide: X1 predates the 2026-10-30 goal |

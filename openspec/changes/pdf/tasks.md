@@ -20,6 +20,8 @@
 - [x] 4.1 The same on PDFium in the GTK shell — check: `cargo clippy`, under headless Weston
 - [x] 4.2 `libpdfium` in the `.deb`, tarballs and PKGBUILD — check: installs and opens a PDF in `ci/` containers. Debian arm64: the `.deb` and the tarball; Arch x86_64: both AUR packages build and install, `forzac-bin` opens one under headless sway at four scales (`ci/arch-check.sh book file.pdf`)
 
+- [x] 4.3 A found word marked on its page, a line under links, the author from the metadata, a double click zooms, in both shells (`docs/android-parity.md` A7–A10) — check: core tests; `--query`, `--pick`, `--click`, screenshots, on a rotated and a cropped page too
+
 ## 5. Check
 
 - [x] 5.1 `cargo test -p forzac-core`, `clippy`, `fmt`; `openspec validate pdf --strict`

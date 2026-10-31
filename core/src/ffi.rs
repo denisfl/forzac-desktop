@@ -425,13 +425,28 @@ pub unsafe extern "C" fn forzac_pdf_set(doc: *mut Document, pages: u32, title: *
     }
 }
 
-/// A match in a PDF page's text ([`forzac_pdf_search`]): the snippet and the match's byte range in it.
+/// Tells the document of a PDF its author as the shell read it from the file, with the title beside it.
+///
+/// # Safety
+/// `doc` from [`forzac_open`]; `title` and `author` valid NUL-terminated strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_pdf_set_author(doc: *mut Document, title: *const c_char, author: *const c_char) {
+    let (title, author) = unsafe { (str(title), str(author)) };
+    if let Some(author) = crate::library::pdf_author(&title, &author) {
+        Arc::make_mut(&mut unsafe { &mut *doc }.book).authors = vec![author.to_owned()];
+    }
+}
+
+/// A match in a PDF page's text ([`forzac_pdf_search`]): the snippet, the match's byte range in it, and its range in
+/// the page's text in UTF-16 units.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ForzacPdfHit {
     pub snippet: *const c_char,
     pub start: u32,
     pub end: u32,
+    pub place_start: u32,
+    pub place_end: u32,
 }
 
 /// The matches of a PDF page.
@@ -447,11 +462,17 @@ pub struct PdfHits {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn forzac_pdf_search(text: *const c_char, query: *const c_char, count: *mut u32) -> *mut PdfHits {
     let found = crate::search::search_page(&unsafe { str(text) }, &unsafe { str(query) });
-    let snippets: Vec<CString> = found.iter().map(|(s, _)| cstring(s)).collect();
+    let snippets: Vec<CString> = found.iter().map(|h| cstring(&h.snippet)).collect();
     let hits: Vec<ForzacPdfHit> = snippets
         .iter()
         .zip(&found)
-        .map(|(s, (_, m))| ForzacPdfHit { snippet: s.as_ptr(), start: m.start as u32, end: m.end as u32 })
+        .map(|(s, h)| ForzacPdfHit {
+            snippet: s.as_ptr(),
+            start: h.matched.start as u32,
+            end: h.matched.end as u32,
+            place_start: h.place.start as u32,
+            place_end: h.place.end as u32,
+        })
         .collect();
     unsafe { *count = hits.len() as u32 };
     Box::into_raw(Box::new(PdfHits { _snippets: snippets, hits }))
@@ -481,6 +502,22 @@ pub unsafe extern "C" fn forzac_pdf_hits_free(hits: *mut PdfHits) {
 pub unsafe extern "C" fn forzac_state_set_title(state: *mut State, id: *const c_char, title: *const c_char) -> bool {
     let (state, id, title) = unsafe { (&mut *state, str(id), str(title)) };
     crate::library::pdf_title(&title).is_none_or(|title| state.store.set_title(&id, title).is_ok())
+}
+
+/// Gives the book `id` the author its shell read from its file, with the title beside it, in the library's cache and
+/// the remembered book.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`]; the strings valid and NUL-terminated.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_state_set_author(
+    state: *mut State,
+    id: *const c_char,
+    title: *const c_char,
+    author: *const c_char,
+) -> bool {
+    let (state, id, title, author) = unsafe { (&mut *state, str(id), str(title), str(author)) };
+    crate::library::pdf_author(&title, &author).is_none_or(|author| state.store.set_author(&id, author).is_ok())
 }
 
 /// Opens a book; null when the file is not a readable book, with the reason in `*error` (when not null): 1 not a

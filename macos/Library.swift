@@ -759,11 +759,11 @@ final class LibraryWindow: NSObject, NSSearchFieldDelegate, NSWindowDelegate, NS
             queue.async { [weak self] in
                 guard self != nil else { return }
                 var data: Data?
-                var pdfTitle: String?
+                var pdfTitle: String?, pdfAuthor: String?
                 if let doc = forzac_open(b.path, nil) {
                     if forzac_is_pdf(doc) {
                         let cover = pdfCover(b.path)
-                        (data, pdfTitle) = (cover?.data, cover?.title)
+                        (data, pdfTitle, pdfAuthor) = (cover?.data, cover?.title, cover?.author)
                     } else {
                         var len = 0
                         data = forzac_cover(doc, &len).map { Data(bytes: $0, count: len) }
@@ -773,7 +773,10 @@ final class LibraryWindow: NSObject, NSSearchFieldDelegate, NSWindowDelegate, NS
                 writeThumbnail(id: b.id, data: data)
                 DispatchQueue.main.async {
                     guard let self else { return }
-                    if let pdfTitle { _ = forzac_state_set_title(self.state, b.id, pdfTitle) }
+                    if let pdfTitle {
+                        _ = forzac_state_set_title(self.state, b.id, pdfTitle)
+                        _ = forzac_state_set_author(self.state, b.id, pdfTitle, pdfAuthor ?? "")
+                    }
                     self.pending -= 1
                     let size = (try? FileManager.default.attributesOfItem(atPath: thumbnailURL(b.id).path))?[.size] as? Int ?? 0
                     if size > 0 { self.loadThumbnail(b.id) } else { self.setThumb(b.id, .generated) }

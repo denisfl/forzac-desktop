@@ -30,10 +30,13 @@ private func shownSize(_ page: PDFPage) -> CGSize {
 private final class PdfSource: PageSource {
     private let doc: PDFDocument
     private let sizes: [CGSize]
+    /// A line under links, which PDFs often leave unmarked; a cover has none.
+    private let linesUnderLinks: Bool
     let rtl = false, alonePageOnItsSide = true
 
-    init(_ doc: PDFDocument, sizedBy main: PDFDocument) {
+    init(_ doc: PDFDocument, sizedBy main: PDFDocument, linesUnderLinks: Bool = true) {
         self.doc = doc
+        self.linesUnderLinks = linesUnderLinks
         sizes = (0..<main.pageCount).map { main.page(at: $0).map(shownSize) ?? .zero }
     }
 
@@ -43,7 +46,17 @@ private final class PdfSource: PageSource {
     func draw(_ i: Int, in ctx: CGContext, size: CGSize, pixels: CGFloat) {
         guard let page = doc.page(at: i) else { return }
         ctx.scaleBy(x: size.width / max(sizes[i].width, 1), y: size.height / max(sizes[i].height, 1))
+        ctx.saveGState()
         page.draw(with: .cropBox, to: ctx)
+        ctx.restoreGState()
+        guard linesUnderLinks else { return }
+        // A point of the window's at 1×, whatever the zoom being drawn.
+        let stroke = sizes[i].width / max(size.width, 1), shown = page.transform(for: .cropBox)
+        ctx.setFillColor(color(light.link))
+        for link in page.annotations where link.type == "Link" {
+            let b = link.bounds
+            ctx.fill(CGRect(x: b.minX, y: b.minY - stroke, width: b.width, height: stroke).applying(shown))
+        }
     }
 }
 
@@ -129,17 +142,22 @@ private func renderPages(_ source: PageSource, first: Int, spread: Bool, area: C
     return ctx.makeImage()
 }
 
-/// A PDF's first page as image data and its title, for the library; nil when it cannot be read or needs a password.
-func pdfCover(_ path: String) -> (data: Data, title: String)? {
+/// A PDF's first page as image data, its title and author, for the library; nil when it cannot be read or needs a
+/// password.
+func pdfCover(_ path: String) -> (data: Data, title: String, author: String)? {
     guard let doc = PDFDocument(url: URL(fileURLWithPath: path)), !doc.isLocked, doc.pageCount > 0, let page = doc.page(at: 0) else { return nil }
     let size = shownSize(page), height: CGFloat = 800
     let area = CGSize(width: height * size.width / max(size.height, 1), height: height)
-    guard let image = renderPages(PdfSource(doc, sizedBy: doc), first: 0, spread: false, area: area, visible: CGRect(origin: .zero, size: area), pixels: 1, paper: 0xFFFFFF) else { return nil }
+    guard let image = renderPages(PdfSource(doc, sizedBy: doc, linesUnderLinks: false), first: 0, spread: false, area: area, visible: CGRect(origin: .zero, size: area), pixels: 1, paper: 0xFFFFFF) else { return nil }
     let data = NSMutableData()
     guard let dest = CGImageDestinationCreateWithData(data, "public.png" as CFString, 1, nil) else { return nil }
     CGImageDestinationAddImage(dest, image, nil)
     guard CGImageDestinationFinalize(dest) else { return nil }
-    return (data as Data, doc.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String ?? "")
+    return (data as Data, pdfAttribute(doc, .titleAttribute), pdfAttribute(doc, .authorAttribute))
+}
+
+private func pdfAttribute(_ doc: PDFDocument, _ name: PDFDocumentAttribute) -> String {
+    doc.documentAttributes?[name] as? String ?? ""
 }
 
 /// The reason a PDF cannot be opened, as `forzac_open` numbers them (6: a password); 0 when it can.
@@ -161,7 +179,7 @@ final class PagedView: NSView {
     /// What the page lies on and what the pill and the foot are drawn in.
     private var paper: UInt32
     private var palette: Palette
-    private let clip = CALayer(), holder = CALayer(), base = CALayer(), sharp = CALayer(), previous = CALayer(), foot = CATextLayer()
+    private let clip = CALayer(), holder = CALayer(), base = CALayer(), sharp = CALayer(), marks = CALayer(), previous = CALayer(), foot = CATextLayer()
     private let pill = CATextLayer()
     /// Rendered pages by first page, at the window's size; thrown away when it changes.
     private var images: [Int: CGImage] = [:]
@@ -172,6 +190,10 @@ final class PagedView: NSView {
     private var pan = CGPoint.zero
     private var sharpTimer: Timer?
     private var sharpTicket = 0
+    /// A match gone to from the search: its page and rectangles in the page's points, y up, until the next click.
+    private var found: (page: Int, rects: [CGRect])?
+    /// The menu, waiting to see whether a click on the middle was half a double click.
+    private var pendingMenu: Timer?
     private var back: [Int] = []
     private var pillTurns = 0
     private var dragFrom: CGPoint?
@@ -219,6 +241,7 @@ final class PagedView: NSView {
         clip.addSublayer(holder)
         holder.addSublayer(base)
         holder.addSublayer(sharp)
+        holder.addSublayer(marks)
         base.backgroundColor = color(paper)
         foot.alignmentMode = .center
         foot.font = interfaceFont(12)
@@ -234,7 +257,7 @@ final class PagedView: NSView {
         pill.isHidden = true
         pill.string = tr("← Back · ⌃O")
         layer!.addSublayer(pill)
-        for l in [clip, holder, base, sharp, previous, foot, pill] {
+        for l in [clip, holder, base, sharp, marks, previous, foot, pill] {
             l.actions = ["position": NSNull(), "bounds": NSNull(), "contents": NSNull(), "transform": NSNull(), "hidden": NSNull(), "frame": NSNull()]
         }
     }
@@ -297,6 +320,7 @@ final class PagedView: NSView {
         base.contents = images[page]
         sharp.contents = nil
         placeHolder()
+        showFound()
         foot.string = "\(page + 1) / \(pageCount)"
         foot.frame = CGRect(x: 0, y: 5, width: size.width, height: 16)
         foot.isHidden = pillShown || footHeight == 0
@@ -314,6 +338,37 @@ final class PagedView: NSView {
             }
         }
         prepare()
+    }
+
+    /// The match gone to, in the book search's soft bars, when its page is showing.
+    private func showFound() {
+        marks.sublayers = nil
+        guard let found else { return }
+        for (i, rect) in placed(source, first: page, spread: spread, area: area) where i == found.page {
+            let scale = rect.width / max(source.size(i).width, 1)
+            for m in found.rects {
+                let bar = CALayer()
+                bar.backgroundColor = color(palette.ink, alpha: 0.14)
+                bar.cornerRadius = 4
+                bar.frame = CGRect(x: rect.minX + m.minX * scale - 2, y: rect.minY + m.minY * scale, width: m.width * scale + 4, height: m.height * scale)
+                marks.addSublayer(bar)
+            }
+        }
+    }
+
+    /// Marks the match at `place` in the text of page `i`.
+    func mark(page i: Int, place: NSRange) {
+        guard let pg = pdf?.page(at: i), let selection = pg.selection(for: place) else { return }
+        let shown = pg.transform(for: .cropBox)
+        found = (i, selection.selectionsByLine().map { $0.bounds(for: pg).applying(shown) })
+        showMarks()
+    }
+
+    private func showMarks() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        showFound()
+        CATransaction.commit()
     }
 
     private func contentsScaleAll() {
@@ -536,14 +591,37 @@ final class PagedView: NSView {
 
     override func mouseUp(with e: NSEvent) {
         if dragged { return }
+        if found != nil {
+            found = nil
+            showMarks()
+        }
         if panelOpen?() == true { return onCommand?(.closePanels) ?? () }
         let p = convert(e.locationInWindow, from: nil)
         if !pill.isHidden, pill.frame.contains(p) { return goBack() }
         if let link = link(at: p) { return follow(link) }
         if p.x >= bounds.width / 3 && p.x <= bounds.width * 2 / 3 {
-            onCommand?(.menu)
+            clickedMiddle(CGPoint(x: p.x, y: p.y - footHeight))
         } else if zoom == 1 {
             turnSide(p.x < bounds.width / 3 ? -1 : 1)
+        }
+    }
+
+    /// The second click of a double click zooms to 2× at the point, or back to 1×; a single one opens the menu.
+    private func clickedMiddle(_ point: CGPoint) {
+        guard let waiting = pendingMenu else {
+            pendingMenu = Timer.scheduledTimer(withTimeInterval: min(NSEvent.doubleClickInterval, 0.3), repeats: false) { [weak self] _ in
+                self?.pendingMenu = nil
+                self?.onCommand?(.menu)
+            }
+            return
+        }
+        waiting.invalidate()
+        pendingMenu = nil
+        if zoom > 1 {
+            resetZoom()
+            show(animated: 0)
+        } else {
+            zoomBy(2, around: point)
         }
     }
 
@@ -610,6 +688,8 @@ private final class PagedPanel: LayerView, NSTableViewDataSource, NSTableViewDel
     struct Row {
         let text: NSAttributedString
         let page: Int
+        /// A match's range in the page's text.
+        var place: NSRange?
     }
 
     private let scroll = NSScrollView()
@@ -619,7 +699,7 @@ private final class PagedPanel: LayerView, NSTableViewDataSource, NSTableViewDel
     private let message: NSTextField
     private let field = NSTextField()
     private(set) var rows: [Row] = []
-    var onPick: ((Int) -> Void)?
+    var onPick: ((Row) -> Void)?
     var onClose: (() -> Void)?
     var onQuery: ((String) -> Void)?
 
@@ -719,7 +799,7 @@ private final class PagedPanel: LayerView, NSTableViewDataSource, NSTableViewDel
     @objc private func clicked() { pick() }
 
     func pick() {
-        if rows.indices.contains(table.selectedRow) { onPick?(rows[table.selectedRow].page) }
+        if rows.indices.contains(table.selectedRow) { onPick?(rows[table.selectedRow]) }
     }
 
     func controlTextDidChange(_ obj: Notification) { onQuery?(field.stringValue) }
@@ -923,7 +1003,9 @@ final class PagedReader: NSObject, NSWindowDelegate {
         var pdf: PDFDocument?
         if isPdf {
             guard let main = PDFDocument(url: url), let renderDoc = PDFDocument(url: url) else { return nil }
-            forzac_pdf_set(opened, UInt32(main.pageCount), main.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String ?? "")
+            let title = pdfAttribute(main, .titleAttribute)
+            forzac_pdf_set(opened, UInt32(main.pageCount), title)
+            forzac_pdf_set_author(opened, title, pdfAttribute(main, .authorAttribute))
             source = PdfSource(renderDoc, sizedBy: main)
             pdf = main
             searchDoc = PDFDocument(url: url)
@@ -970,7 +1052,7 @@ final class PagedReader: NSObject, NSWindowDelegate {
         }
         menu.onContents = { [weak self] in self?.showContents() }
         view.menuKey = { [weak self] e in self?.menu.key(e) ?? false }
-        view.panelOpen = { [weak self] in self?.panelOpen ?? false }
+        view.panelOpen = { [weak self] in (self?.panelOpen ?? false) || (self?.menu.isOpen ?? false) }
         view.onExternal = { NSWorkspace.shared.open($0) }
         view.onCommand = { [weak self] in self?.run($0) }
         view.onMoved = { [weak self] in
@@ -1082,9 +1164,10 @@ final class PagedReader: NSObject, NSWindowDelegate {
     private func makePanel(_ title: String, search: Bool) -> PagedPanel {
         let panel = PagedPanel(titled: title, search: search, palette: palette)
         panel.onClose = { [weak self] in self?.closePanels() }
-        panel.onPick = { [weak self] page in
+        panel.onPick = { [weak self] row in
             self?.closePanels()
-            self?.view.go(to: page)
+            self?.view.go(to: row.page)
+            if let place = row.place { self?.view.mark(page: row.page, place: place) }
         }
         return panel
     }
@@ -1140,7 +1223,7 @@ final class PagedReader: NSObject, NSWindowDelegate {
                     if let a = String(bytes: bytes[..<Int(hit.start)], encoding: .utf8), let m = String(bytes: bytes[Int(hit.start)..<Int(hit.end)], encoding: .utf8) {
                         line.addAttribute(.font, value: interfaceFont(14, .semibold), range: NSRange(location: (a as NSString).length, length: (m as NSString).length))
                     }
-                    found.append(PagedPanel.Row(text: line, page: i))
+                    found.append(PagedPanel.Row(text: line, page: i, place: NSRange(location: Int(hit.place_start), length: Int(hit.place_end - hit.place_start))))
                 }
                 forzac_pdf_hits_free(hits)
                 if found.count != sent && (i % 8 == 0 || found.count - sent > 20) {
@@ -1235,12 +1318,21 @@ final class PagedReader: NSObject, NSWindowDelegate {
                 self.search(query)
                 delay += 1
             }
-            if let at = flag("--click")?.split(separator: ",").compactMap({ Double($0) }), at.count == 2 {
+            if args.contains("--pick") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    if let panel = self?.searchPanel, let row = panel.rows.first { panel.onPick?(row) }
+                }
+                delay += 0.6
+            }
+            // x,y and, for a double click, the number of clicks.
+            if let at = flag("--click")?.split(separator: ",").compactMap({ Double($0) }), at.count >= 2 {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                     guard let self else { return }
                     let point = CGPoint(x: at[0], y: self.view.bounds.height - at[1])
-                    for (type, send) in [(NSEvent.EventType.leftMouseDown, self.view.mouseDown(with:)), (.leftMouseUp, self.view.mouseUp(with:))] {
-                        if let e = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0, windowNumber: self.window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) { send(e) }
+                    for _ in 0..<(at.count > 2 ? Int(at[2]) : 1) {
+                        for (type, send) in [(NSEvent.EventType.leftMouseDown, self.view.mouseDown(with:)), (.leftMouseUp, self.view.mouseUp(with:))] {
+                            if let e = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0, windowNumber: self.window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) { send(e) }
+                        }
                     }
                 }
                 delay += 0.4

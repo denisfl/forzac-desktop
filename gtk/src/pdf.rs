@@ -30,6 +30,10 @@ const MAX_ZOOM: f32 = 4.0;
 const SLIDE: Duration = Duration::from_millis(200);
 /// Moves are saved this long after the last, as a book's.
 const SAVE_DELAY: Duration = Duration::from_secs(1);
+/// The longest a click on the middle waits to see whether it is half a double click.
+const DOUBLE_CLICK: Duration = Duration::from_millis(300);
+/// The Light theme's link colour as a page's pixels: blue, green, red, alpha.
+const LINK_LINE: [u8; 4] = [0x1F, 0x62, 0x94, 0xFF];
 
 // region the engine
 
@@ -101,6 +105,7 @@ struct Info {
     /// Page sizes in points, rotation applied.
     sizes: Vec<(f32, f32)>,
     title: String,
+    author: String,
     /// The outline: title, depth, page.
     outline: Vec<(String, usize, usize)>,
 }
@@ -137,7 +142,7 @@ fn open_doc(engine: &mut Engine, path: &Path) -> Result<Info, Error> {
     if sizes.is_empty() {
         return Err(Error::Damaged);
     }
-    let title = doc.metadata().get(PdfDocumentMetadataTagType::Title).map(|t| t.value().to_owned()).unwrap_or_default();
+    let (title, author) = (tag(&doc, PdfDocumentMetadataTagType::Title), tag(&doc, PdfDocumentMetadataTagType::Author));
     let mut outline = Vec::new();
     if let Some(root) = doc.bookmarks().root() {
         walk(root, 0, sizes.len(), &mut outline);
@@ -145,7 +150,11 @@ fn open_doc(engine: &mut Engine, path: &Path) -> Result<Info, Error> {
     engine.next += 1;
     let id = engine.next;
     engine.docs.insert(id, doc);
-    Ok(Info { doc: id, sizes, title, outline })
+    Ok(Info { doc: id, sizes, title, author, outline })
+}
+
+fn tag(doc: &PdfDocument, name: PdfDocumentMetadataTagType) -> String {
+    doc.metadata().get(name).map(|t| t.value().to_owned()).unwrap_or_default()
 }
 
 /// Why a PDF cannot be opened, if it cannot; off the main thread.
@@ -162,19 +171,19 @@ pub fn problem(path: &Path) -> Option<Error> {
     .unwrap_or(Some(Error::Unavailable))
 }
 
-/// A PDF's first page as a PNG and its title, for the library; off the main thread.
-pub fn cover(path: &Path) -> Option<(Vec<u8>, String)> {
+/// A PDF's first page as a PNG, its title and author, for the library; off the main thread.
+pub fn cover(path: &Path) -> Option<(Vec<u8>, String, String)> {
     let path = path.to_owned();
-    let (raw, w, h, title) = call(move |engine| {
+    let (raw, w, h, title, author) = call(move |engine| {
         let doc = engine.pdfium?.load_pdf_from_file(&path, None).ok()?;
         let page = doc.pages().get(0).ok()?;
         let config = PdfRenderConfig::new().set_target_height(800).set_format(PdfBitmapFormat::BGRA).set_reverse_byte_order(true);
         let bitmap = page.render_with_config(&config).ok()?;
-        let title = doc.metadata().get(PdfDocumentMetadataTagType::Title).map(|t| t.value().to_owned()).unwrap_or_default();
-        Some((bitmap.as_raw_bytes(), bitmap.width(), bitmap.height(), title))
+        let (title, author) = (tag(&doc, PdfDocumentMetadataTagType::Title), tag(&doc, PdfDocumentMetadataTagType::Author));
+        Some((bitmap.as_raw_bytes(), bitmap.width(), bitmap.height(), title, author))
     })??;
     let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_mut_slice(raw, gtk::gdk_pixbuf::Colorspace::Rgb, true, 8, w, h, w * 4);
-    Some((pixbuf.save_to_bufferv("png", &[]).ok()?, title))
+    Some((pixbuf.save_to_bufferv("png", &[]).ok()?, title, author))
 }
 
 /// Where a link goes.
@@ -183,12 +192,98 @@ enum Link {
     External(String),
 }
 
-/// The pixels of part of a page: the page `full` pixels large, its part from `origin`, `size` pixels large.
+/// The pixels of part of a page: the page `full` pixels large, its part from `origin`, `size` pixels large; `line` the
+/// thickness of the line under links.
 struct Part {
     page: usize,
     full: (i32, i32),
     origin: (i32, i32),
     size: (i32, i32),
+    line: i32,
+}
+
+/// How a page's coordinates, y up from its box's corner and before its rotation, sit on the page as it shows.
+struct Shown {
+    box_: PdfRect,
+    rotation: PdfPageRenderRotation,
+}
+
+impl Shown {
+    fn of(page: &PdfPage) -> Option<Self> {
+        Some(Shown { box_: page.boundaries().bounding().ok()?.bounds, rotation: page.rotation().ok()? })
+    }
+
+    /// A point of the page as fractions of the page shown, y down.
+    fn fractions(&self, x: f32, y: f32) -> (f32, f32) {
+        let b = &self.box_;
+        let (u, v) = ((x - b.left().value) / b.width().value.max(1.0), (y - b.bottom().value) / b.height().value.max(1.0));
+        match self.rotation {
+            PdfPageRenderRotation::None => (u, 1.0 - v),
+            PdfPageRenderRotation::Degrees90 => (v, u),
+            PdfPageRenderRotation::Degrees180 => (1.0 - u, v),
+            PdfPageRenderRotation::Degrees270 => (1.0 - v, 1.0 - u),
+        }
+    }
+
+    /// The point of the page at fractions of the page shown.
+    fn point(&self, fx: f32, fy: f32) -> (f32, f32) {
+        let (u, v) = match self.rotation {
+            PdfPageRenderRotation::None => (fx, 1.0 - fy),
+            PdfPageRenderRotation::Degrees90 => (fy, fx),
+            PdfPageRenderRotation::Degrees180 => (1.0 - fx, fy),
+            PdfPageRenderRotation::Degrees270 => (1.0 - fy, 1.0 - fx),
+        };
+        let b = &self.box_;
+        (b.left().value + u * b.width().value, b.bottom().value + v * b.height().value)
+    }
+
+    /// A rectangle of the page as fractions of the page shown: left, top, right, bottom.
+    fn rect(&self, r: &PdfRect) -> [f32; 4] {
+        let (x0, y0) = self.fractions(r.left().value, r.bottom().value);
+        let (x1, y1) = self.fractions(r.right().value, r.top().value);
+        [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)]
+    }
+}
+
+/// Draws a line under the page's links into its pixels: PDFs often leave links unmarked.
+fn underline_links(page: &PdfPage, part: &Part, bytes: &mut [u8], stride: i32) {
+    let Some(shown) = Shown::of(page) else { return };
+    let px = |f: f32, full: i32, origin: i32, size: i32| ((f * full as f32).round() as i32 - origin).clamp(0, size);
+    for link in page.links().iter() {
+        let Ok(rect) = link.rect() else { continue };
+        // The link's bottom edge, which a rotated page shows along another side.
+        let (x0, y0) = shown.fractions(rect.left().value, rect.bottom().value);
+        let (x1, y1) = shown.fractions(rect.right().value, rect.bottom().value);
+        let (left, right) =
+            (px(x0.min(x1), part.full.0, part.origin.0, part.size.0), px(x0.max(x1), part.full.0, part.origin.0, part.size.0));
+        let (top, bottom) =
+            (px(y0.min(y1), part.full.1, part.origin.1, part.size.1), px(y0.max(y1), part.full.1, part.origin.1, part.size.1));
+        let right = right.max(left + part.line).min(part.size.0);
+        for y in top..bottom.max(top + part.line).min(part.size.1) {
+            let row = (y * stride) as usize;
+            for pixel in bytes[row + left as usize * 4..row + right as usize * 4].as_chunks_mut::<4>().0 {
+                *pixel = LINK_LINE;
+            }
+        }
+    }
+}
+
+/// The lines of match `ordinal` of `query` on `page`, as fractions of the page shown. The search reads the page's
+/// text whole; here its characters give the match's place.
+fn match_rects(engine: &Engine, doc: u32, page: usize, query: &str, ordinal: usize) -> Option<Vec<[f32; 4]>> {
+    let pdf_page = engine.docs.get(&doc)?.pages().get(page as _).ok()?;
+    let text = pdf_page.text().ok()?;
+    let (mut whole, mut indices) = (String::new(), Vec::new());
+    for c in text.chars().iter() {
+        if let Some(u) = c.unicode_char() {
+            whole.push(u);
+            indices.extend(std::iter::repeat_n(c.index(), u.len_utf16()));
+        }
+    }
+    let place = forzac_core::search::search_page(&whole, query).into_iter().nth(ordinal)?.place;
+    let (first, last) = (*indices.get(place.start)?, *indices.get(place.end - 1)?);
+    let shown = Shown::of(&pdf_page)?;
+    Some(text.segments_subset(first, last - first + 1).iter().map(|line| shown.rect(&line.bounds())).collect())
 }
 
 fn render(engine: &Engine, doc: u32, part: &Part) -> Option<(Vec<u8>, i32)> {
@@ -200,8 +295,9 @@ fn render(engine: &Engine, doc: u32, part: &Part) -> Option<(Vec<u8>, i32)> {
         .set_format(PdfBitmapFormat::BGRA)
         .set_reverse_byte_order(false);
     page.render_into_bitmap_with_config(&mut bitmap, &config).ok()?;
-    let bytes = bitmap.as_raw_bytes();
+    let mut bytes = bitmap.as_raw_bytes();
     let stride = bytes.len() as i32 / part.size.1;
+    underline_links(&page, part, &mut bytes, stride);
     Some((bytes, stride))
 }
 
@@ -318,6 +414,8 @@ pub struct State {
     swipe: f64,
     swiped: bool,
     jumped: bool,
+    /// A match gone to from the search: its page and lines as fractions of it, until the next click.
+    found: Option<(usize, Vec<[f32; 4]>)>,
 }
 
 impl State {
@@ -426,6 +524,23 @@ mod imp {
                 if first == s.page {
                     for (rect, t) in &s.sharp {
                         snapshot.append_scaled_texture(t, gsk::ScalingFilter::Linear, rect);
+                    }
+                }
+                // The match gone to, in the book search's soft bars.
+                let mut bar = rgba(THEMES[s.theme].ink);
+                bar.set_alpha(0.14);
+                for (page, rect) in s.placed(first, spread, area) {
+                    let Some((_, lines)) = s.found.as_ref().filter(|f| f.0 == page) else { continue };
+                    for &[left, top, right, bottom] in lines {
+                        let line = graphene::Rect::new(
+                            rect.x() + left * rect.width() - 2.0,
+                            rect.y() + top * rect.height(),
+                            (right - left) * rect.width() + 4.0,
+                            (bottom - top) * rect.height(),
+                        );
+                        snapshot.push_rounded_clip(&gsk::RoundedRect::from_rect(line, 4.0));
+                        snapshot.append_color(&bar, &line);
+                        snapshot.pop();
                     }
                 }
                 snapshot.restore();
@@ -568,7 +683,7 @@ impl PdfView {
                 }
             }
             let full = (((rect.width() * scale).round() as i32).max(1), ((rect.height() * scale).round() as i32).max(1));
-            let part = Part { page, full, origin: (0, 0), size: full };
+            let part = Part { page, full, origin: (0, 0), size: full, line: scale.round() as i32 };
             let (reader, book) = (self.imp().near.clone(), pictures.clone());
             let weak = self.downgrade();
             glib::spawn_future_local(async move {
@@ -762,11 +877,11 @@ impl PdfView {
             // A picture is drawn whole, at up to its own size; of a PDF, the part in view.
             let (shown, job) = if pictures.is_some() {
                 let size = (full.0.min(natural[page].0 as i32).max(1), full.1.min(natural[page].1 as i32).max(1));
-                (rect, Part { page, full: size, origin: (0, 0), size })
+                (rect, Part { page, full: size, origin: (0, 0), size, line: 0 })
             } else {
                 let origin = (((part.x() - rect.x()) * px).round() as i32, ((part.y() - rect.y()) * px).round() as i32);
                 let size = (((part.width() * px).round() as i32).max(1), ((part.height() * px).round() as i32).max(1));
-                (part, Part { page, full, origin, size })
+                (part, Part { page, full, origin, size, line: px.round() as i32 })
             };
             let (weak, book) = (self.downgrade(), pictures.clone());
             glib::spawn_future_local(async move {
@@ -779,6 +894,28 @@ impl PdfView {
                     view.queue_draw();
                 }
             });
+        }
+    }
+
+    /// Marks match `ordinal` of `query` on `page`.
+    fn mark(&self, page: usize, query: String, ordinal: usize) {
+        let (doc, weak) = (self.imp().s.borrow().doc, self.downgrade());
+        glib::spawn_future_local(async move {
+            let lines = ask(move |engine| match_rects(engine, doc, page, &query, ordinal)).await.flatten();
+            if let (Some(view), Some(lines)) = (weak.upgrade(), lines) {
+                view.imp().s.borrow_mut().found = Some((page, lines));
+                view.queue_draw();
+            }
+        });
+    }
+
+    /// A double click: to 2× at the point, or back to 1×.
+    fn toggle_zoom(&self, around: (f32, f32)) {
+        if self.imp().s.borrow().zoom > 1.0 {
+            self.reset_zoom();
+            self.queue_draw();
+        } else {
+            self.zoom_by(2.0, around);
         }
     }
 
@@ -796,8 +933,8 @@ impl PdfView {
         let (fx, fy) = ((ax - rect.x()) / rect.width(), (ay - rect.y()) / rect.height());
         ask(move |engine| {
             let pdf_page = engine.docs.get(&doc)?.pages().get(page as _).ok()?;
-            let (w, h) = (pdf_page.width().value, pdf_page.height().value);
-            let link = pdf_page.links().link_at_point(PdfPoints::new(fx * w), PdfPoints::new((1.0 - fy) * h))?;
+            let (px, py) = Shown::of(&pdf_page)?.point(fx, fy);
+            let link = pdf_page.links().link_at_point(PdfPoints::new(px), PdfPoints::new(py))?;
             if let Some(uri) = link.action().and_then(|a| a.as_uri_action().and_then(|u| u.uri().ok())) {
                 return Some(Link::External(uri));
             }
@@ -1162,6 +1299,9 @@ struct PdfPanel {
     message: gtk::Label,
     field: Option<gtk::SearchEntry>,
     pages: RefCell<Vec<usize>>,
+    /// In the search: the query, and each row's match among its page's.
+    query: RefCell<String>,
+    ordinals: RefCell<Vec<usize>>,
 }
 
 impl PdfPanel {
@@ -1223,12 +1363,23 @@ impl PdfPanel {
         let scrolled = gtk::ScrolledWindow::builder().child(&list).vexpand(true).hscrollbar_policy(gtk::PolicyType::Never).build();
         root.append(&scrolled);
         overlay.add_overlay(&root);
-        Rc::new(PdfPanel { root, list, selection, model, message, field, pages: RefCell::default() })
+        Rc::new(PdfPanel {
+            root,
+            list,
+            selection,
+            model,
+            message,
+            field,
+            pages: RefCell::default(),
+            query: RefCell::default(),
+            ordinals: RefCell::default(),
+        })
     }
 
     fn clear(&self) {
         self.model.splice(0, self.model.n_items(), &[]);
         self.pages.borrow_mut().clear();
+        self.ordinals.borrow_mut().clear();
         self.say(None);
     }
 
@@ -1264,6 +1415,8 @@ struct Window {
     contents: RefCell<Option<Rc<PdfPanel>>>,
     search: RefCell<Option<Rc<PdfPanel>>>,
     search_ticket: Cell<u64>,
+    /// The menu, waiting to see whether a click on the middle was half a double click.
+    pending_menu: RefCell<Option<glib::SourceId>>,
     doc: u32,
     count: usize,
     /// A book of picture pages follows the reader's theme: its settings, where they are saved, whether to save.
@@ -1297,10 +1450,13 @@ impl Window {
     /// A click on the page: closes what is over it, else the pill, a link, then the side thirds turn and the middle
     /// opens the menu.
     fn click(self: &Rc<Self>, x: f32, y: f32) {
+        let view = self.view.clone();
+        if view.imp().s.borrow_mut().found.take().is_some() {
+            view.queue_draw();
+        }
         if self.close_panels() {
             return;
         }
-        let view = self.view.clone();
         if !view.imp().s.borrow().back.is_empty() && view.pill_rect(120.0).contains_point(&graphene::Point::new(x, y)) {
             return view.go_back();
         }
@@ -1311,13 +1467,42 @@ impl Window {
                 Some(Link::External(uri)) => gtk::UriLauncher::new(&uri).launch(Some(&window), gio::Cancellable::NONE, |_| {}),
                 None if x >= view.width() as f32 / 3.0 && x <= view.width() as f32 * 2.0 / 3.0 => {
                     if let Some(win) = w.upgrade() {
-                        win.menu.toggle();
+                        win.clicked_middle((x, y));
                     }
                 }
                 None if view.imp().s.borrow().zoom == 1.0 => view.turn_side(if x < view.width() as f32 / 3.0 { -1 } else { 1 }),
                 None => {}
             }
         });
+    }
+
+    /// The second click of a double click zooms to 2× at the point, or back to 1×; a single one opens the menu.
+    fn clicked_middle(self: &Rc<Self>, at: (f32, f32)) {
+        if let Some(waiting) = self.pending_menu.take() {
+            waiting.remove();
+            return self.view.toggle_zoom(at);
+        }
+        let system = self.window.settings().gtk_double_click_time().max(0) as u64;
+        let w = Rc::downgrade(self);
+        let id = glib::timeout_add_local_once(DOUBLE_CLICK.min(Duration::from_millis(system)), move || {
+            if let Some(win) = w.upgrade() {
+                win.pending_menu.take();
+                win.menu.toggle();
+            }
+        });
+        self.pending_menu.replace(Some(id));
+    }
+
+    /// Goes to row `row` of `panel`, and marks a match on its page.
+    fn pick(&self, panel: &PdfPanel, row: usize) {
+        let page = panel.pages.borrow().get(row).copied();
+        let ordinal = panel.ordinals.borrow().get(row).copied();
+        self.close_panels();
+        let Some(page) = page else { return };
+        self.view.go_to(page);
+        if let Some(ordinal) = ordinal {
+            self.view.mark(page, panel.query.borrow().clone(), ordinal);
+        }
     }
 
     /// Closes whatever is over the page; false when nothing was.
@@ -1340,11 +1525,8 @@ impl Window {
         let w = Rc::downgrade(self);
         let p = Rc::downgrade(panel);
         panel.list.connect_activate(move |_, row| {
-            let (Some(w), Some(p)) = (w.upgrade(), p.upgrade()) else { return };
-            let page = p.pages.borrow().get(row as usize).copied();
-            w.close_panels();
-            if let Some(page) = page {
-                w.view.go_to(page);
+            if let (Some(w), Some(p)) = (w.upgrade(), p.upgrade()) {
+                w.pick(&p, row as usize);
             }
         });
         let keys = gtk::EventControllerKey::new();
@@ -1437,11 +1619,8 @@ impl Window {
                     });
                     let (w, p) = (Rc::downgrade(self), Rc::downgrade(&panel));
                     field.connect_activate(move |_| {
-                        let (Some(w), Some(p)) = (w.upgrade(), p.upgrade()) else { return };
-                        let page = p.pages.borrow().first().copied();
-                        w.close_panels();
-                        if let Some(page) = page {
-                            w.view.go_to(page);
+                        if let (Some(w), Some(p)) = (w.upgrade(), p.upgrade()) {
+                            w.pick(&p, 0);
                         }
                     });
                 }
@@ -1461,6 +1640,7 @@ impl Window {
         self.search_ticket.set(ticket);
         let Some(panel) = self.search.borrow().clone() else { return };
         panel.clear();
+        panel.query.replace(query.clone());
         if query.trim().chars().count() < 2 {
             return;
         }
@@ -1477,7 +1657,8 @@ impl Window {
                 .unwrap_or_default();
                 let Some(win) = weak.upgrade().filter(|w| w.search_ticket.get() == ticket) else { return };
                 had_text |= !text.trim().is_empty();
-                for (snippet, matched) in forzac_core::search::search_page(&text, &query) {
+                for (ordinal, hit) in forzac_core::search::search_page(&text, &query).into_iter().enumerate() {
+                    let (snippet, matched) = (hit.snippet, hit.matched);
                     let markup = format!(
                         "{}<b>{}</b>{}",
                         glib::markup_escape_text(&snippet[..matched.start]),
@@ -1485,6 +1666,7 @@ impl Window {
                         glib::markup_escape_text(&snippet[matched.end..])
                     );
                     panel.add(&markup, 0, page);
+                    panel.ordinals.borrow_mut().push(ordinal);
                 }
                 drop(win);
                 // Below the frame clock: a turn's frames come first.
@@ -1651,6 +1833,9 @@ pub fn open_window(
         if let Some(title) = forzac_core::library::pdf_title(&info.title) {
             book.title = title.to_owned();
         }
+        if let Some(author) = forzac_core::library::pdf_author(&info.title, &info.author) {
+            book.authors = vec![author.to_owned()];
+        }
         info
     } else {
         picture_info(&book)
@@ -1702,6 +1887,7 @@ pub fn open_window(
         contents: RefCell::default(),
         search: RefCell::default(),
         search_ticket: Cell::new(0),
+        pending_menu: RefCell::default(),
         settings: Cell::new(settings),
         store: store.clone(),
         saves: !stateless,
@@ -1770,7 +1956,7 @@ fn picture_info(book: &Book) -> Info {
         })
         .collect();
     let outline = book.toc.iter().map(|e| (e.title.clone(), e.level.saturating_sub(1) as usize, e.target.block)).collect();
-    Info { doc: 0, sizes, title: String::new(), outline }
+    Info { doc: 0, sizes, title: String::new(), author: String::new(), outline }
 }
 
 /// The library's cover, when it has none yet: the first page.
@@ -1791,7 +1977,7 @@ fn measure(view: &PdfView, window: &gtk::ApplicationWindow, options: &Options, w
     let args: Vec<String> = std::env::args().collect();
     let keys: Vec<char> = args.iter().position(|a| a == "--keys").and_then(|i| args.get(i + 1)).map_or(Vec::new(), |k| k.chars().collect());
     let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned();
-    let (query, at) = (value("--query"), value("--click"));
+    let (query, at, pick) = (value("--query"), value("--click"), args.iter().any(|a| a == "--pick"));
     let win = Rc::downgrade(win);
     *view.imp().on_first.borrow_mut() = Some(Box::new(move |view| {
         println!("first page: {:?} after start, {} pages", start.elapsed(), view.pages());
@@ -1800,7 +1986,7 @@ fn measure(view: &PdfView, window: &gtk::ApplicationWindow, options: &Options, w
         let wait = Cell::new(2);
         let (keys, win) = (keys.clone(), win.clone());
         let next_key = Cell::new(0);
-        let (query, at) = (query.clone(), RefCell::new(at.clone()));
+        let (query, at, pick) = (query.clone(), RefCell::new(at.clone()), Cell::new(pick));
         if let (Some(query), Some(win)) = (query, win.upgrade()) {
             win.show_search();
             if let Some(field) = win.search.borrow().as_ref().and_then(|p| p.field.clone()) {
@@ -1813,10 +1999,21 @@ fn measure(view: &PdfView, window: &gtk::ApplicationWindow, options: &Options, w
                 wait.set(wait.get() - 1);
                 return glib::ControlFlow::Continue;
             }
-            if let (Some(at), Some(win)) = (at.borrow_mut().take(), win.upgrade())
-                && let Some((x, y)) = at.split_once(',')
+            if pick.take()
+                && let Some(win) = win.upgrade()
+                && let Some(panel) = win.search.borrow().clone()
             {
-                win.click(x.parse().unwrap_or(0.0), y.parse().unwrap_or(0.0));
+                win.pick(&panel, 0);
+                return glib::ControlFlow::Continue;
+            }
+            // x,y and, for a double click, the number of clicks.
+            if let (Some(at), Some(win)) = (at.borrow_mut().take(), win.upgrade()) {
+                let at: Vec<f32> = at.split(',').filter_map(|n| n.parse().ok()).collect();
+                if let [x, y, ..] = at[..] {
+                    for _ in 0..at.get(2).map_or(1, |&n| n as usize) {
+                        win.click(x, y);
+                    }
+                }
                 return glib::ControlFlow::Continue;
             }
             if let (Some(&c), Some(win)) = (keys.get(next_key.get()), win.upgrade()) {

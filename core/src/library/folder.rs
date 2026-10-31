@@ -96,6 +96,13 @@ pub fn pdf_title(raw: &str) -> Option<&str> {
     (!title.is_empty() && !file_like && !junk).then_some(title)
 }
 
+/// A PDF's author from its metadata: only beside a title that looks like one, as an author beside a file name is a
+/// tool's or a login's (Android's rule).
+pub fn pdf_author<'a>(title: &str, author: &'a str) -> Option<&'a str> {
+    pdf_title(title)?;
+    Some(author.trim()).filter(|a| !a.is_empty())
+}
+
 /// A copy's name: `Author — Title.ext` with the first author, the title alone without one, the original name's stem
 /// without a title; characters file systems refuse and a leading dot replaced, at most 120 characters, ` (2)`, ` (3)`…
 /// while `taken` says the name is in use. The extension is `original`'s, or `fallback` when it is not a book's.

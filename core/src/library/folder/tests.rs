@@ -507,7 +507,10 @@ fn a_pdf_is_a_book_of_the_folder() {
     let books = scan(&folder, &mut s);
     assert_eq!(titles(&books), ["Клеппман"], "titled by the file until the shell reads its metadata");
     s.set_title(&books[0].id, "Высоконагруженные приложения").unwrap();
-    assert_eq!(titles(&scan(&folder, &mut store(&home))), ["Высоконагруженные приложения"], "kept in the cache");
+    s.set_author(&books[0].id, "Мартин Клеппман").unwrap();
+    let scanned = scan(&folder, &mut store(&home));
+    assert_eq!(titles(&scanned), ["Высоконагруженные приложения"], "kept in the cache");
+    assert_eq!(scanned[0].authors, "Мартин Клеппман", "kept in the cache");
     let unnamed = home.join("download");
     write(&unnamed, b"%PDF-1.4\nother");
     assert_eq!(import(&unnamed, &folder, &mut s).unwrap().extension().unwrap(), "pdf", "named by its content");
