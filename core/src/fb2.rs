@@ -883,7 +883,7 @@ fn is_preamble(block: &Block) -> bool {
     match block {
         Block::Heading { .. } | Block::EmptyLine | Block::Image { .. } => true,
         Block::Paragraph { kind, .. } => *kind != Kind::Body && *kind != Kind::Verse,
-        Block::TableRow { .. } => false,
+        Block::TableRow { .. } | Block::Formula { .. } => false,
     }
 }
 

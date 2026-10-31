@@ -5,7 +5,8 @@
 
 use std::ops::Range;
 
-use crate::model::{Block, Book, Locator};
+use crate::math::PLACEHOLDER;
+use crate::model::{Block, Book, Locator, StyledText};
 
 /// A match: `[start, end)` in the book's text, a snippet around it with the match at `matched` (bytes of `snippet`),
 /// and where it is: the section (the contents entry at or before it) and the share of the book before it.
@@ -54,14 +55,13 @@ pub fn search(book: &Book, q: &str) -> Vec<Hit> {
     for (c, chapter) in book.chapters.iter().enumerate() {
         for (b, block) in chapter.blocks.iter().enumerate() {
             // The texts to search and where each starts in the block's text: a table row's cells one by one.
-            let texts: Vec<(&str, usize)> = match block {
-                Block::Paragraph { text, .. } | Block::Heading { text, .. } => vec![(&text.text, 0)],
-                Block::TableRow { table, row } => {
-                    table.rows[*row].iter().map(|c| c.text.text.as_str()).zip(table.cell_starts(*row)).collect()
-                }
+            let texts: Vec<(&StyledText, usize)> = match block {
+                Block::Paragraph { text, .. } | Block::Heading { text, .. } => vec![(text, 0)],
+                Block::TableRow { table, row } => table.rows[*row].iter().map(|c| &c.text).zip(table.cell_starts(*row)).collect(),
                 _ => Vec::new(),
             };
-            for (text, base) in texts {
+            for (styled, base) in texts {
+                let text = styled.text.as_str();
                 chars.clear();
                 chars.extend(text.char_indices());
                 let mut i = 0;
@@ -72,7 +72,7 @@ pub fn search(book: &Book, q: &str) -> Vec<Hit> {
                             let at = Locator { chapter: c, block: b, offset: start };
                             let section = contents.iter().rev().find(|e| e.target <= at).map(|e| e.title.clone());
                             let position = if total == 0 { 0.0 } else { (before + start.min(block.text_len())) as f32 / total as f32 };
-                            let (snippet, matched) = snippet(&chars, i, end);
+                            let (snippet, matched) = snippet(&chars, i, end, &|at| book.formula_at(styled, at).map(|f| f.text.as_str()));
                             hits.push(Hit { start: at, end: Locator { offset: end_byte, ..at }, snippet, matched, section, position });
                             i = end.max(i + 1);
                         }
@@ -138,7 +138,7 @@ pub fn search_page(text: &str, q: &str) -> Vec<PageHit> {
     while i < chars.len() {
         match match_at(&chars, i, &q) {
             Some(end) => {
-                let (snippet, matched) = snippet(&chars, i, end);
+                let (snippet, matched) = snippet(&chars, i, end, &|_| None);
                 let place = offsets[i]..offsets[end - 1] + chars[end - 1].1.len_utf16();
                 hits.push(PageHit { snippet, matched, place });
                 i = end.max(i + 1);
@@ -176,7 +176,7 @@ fn match_at(text: &[(usize, char)], from: usize, q: &[char]) -> Option<usize> {
 
 /// The snippet around characters `[start, end)`: up to `BEFORE` characters before and `AFTER` after, cut at spaces,
 /// "…" where cut; soft hyphens dropped and line breaks as spaces. Returns it and the match's byte range in it.
-fn snippet(text: &[(usize, char)], start: usize, end: usize) -> (String, Range<usize>) {
+fn snippet<'a>(text: &[(usize, char)], start: usize, end: usize, formula: &dyn Fn(usize) -> Option<&'a str>) -> (String, Range<usize>) {
     let mut from = start.saturating_sub(BEFORE);
     if from > 0
         && let Some(space) = (from..start).find(|&i| text[i].1 == ' ')
@@ -190,7 +190,16 @@ fn snippet(text: &[(usize, char)], start: usize, end: usize) -> (String, Range<u
         to = space;
     }
     let clean = |a: usize, b: usize| -> String {
-        text[a..b].iter().filter(|(_, c)| *c != SOFT_HYPHEN && *c != '\r').map(|&(_, c)| if c == '\n' { ' ' } else { c }).collect()
+        let mut out = String::new();
+        for &(at, c) in &text[a..b] {
+            match c {
+                SOFT_HYPHEN | '\r' => {}
+                '\n' => out.push(' '),
+                PLACEHOLDER => out.push_str(formula(at).unwrap_or("")),
+                c => out.push(c),
+            }
+        }
+        out
     };
     let mut out = String::new();
     if from > 0 {

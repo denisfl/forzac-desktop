@@ -2,6 +2,7 @@
 //!
 //! Mirrors the Android app's `:core:model` (Forzac for Android).
 
+use crate::math::{Formula, PLACEHOLDER};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -29,6 +30,8 @@ pub struct Book {
     pub notes: HashMap<String, Note>,
     /// Link targets by the key in [`StyleRange::target`] of [`Style::Link`] ranges.
     pub links: HashMap<String, LinkTarget>,
+    /// Formulas by the key in [`StyleRange::target`] of [`Style::Math`] ranges and in [`Block::Formula`].
+    pub math: Arc<HashMap<String, Formula>>,
     /// Titled sections in reading order.
     pub toc: Vec<TocEntry>,
     /// Images by id (in FB2 the `<binary>` id).
@@ -163,6 +166,10 @@ impl Book {
                             cells.iter().zip(&starts).flat_map(|(c, &s)| note_ranges(&c.text).map(move |(a, b)| (a + s, b + s))).collect();
                         (text, notes)
                     }
+                    Block::Formula { key } => match self.math.get(key) {
+                        Some(f) => (f.text.clone(), Vec::new()),
+                        None => continue,
+                    },
                     b => match b.text() {
                         Some(t) => (t.text.clone(), note_ranges(t).collect()),
                         None => continue,
@@ -183,6 +190,7 @@ impl Book {
                     match ch {
                         '\u{AD}' | '\r' => continue,
                         '\u{A0}' | '\u{202F}' => out.push(' '),
+                        PLACEHOLDER => out.push_str(self.formula_in(block, i).map_or("", |f| f.text.as_str())),
                         ch => out.push(ch),
                     }
                     count += 1;
@@ -193,6 +201,37 @@ impl Book {
             }
         }
         out.trim().to_owned()
+    }
+}
+
+impl Book {
+    /// The formula at byte `at` of a block's text.
+    fn formula_in(&self, block: &Block, at: usize) -> Option<&Formula> {
+        let starts = match block {
+            Block::TableRow { table, row } => table.cell_starts(*row),
+            _ => vec![0],
+        };
+        let texts = block.texts();
+        let (text, start) = texts.iter().zip(starts).rev().find(|(_, s)| *s <= at)?;
+        self.formula_at(text, at - start)
+    }
+
+    /// The formula at byte `at` of `text`.
+    pub fn formula_at(&self, text: &StyledText, at: usize) -> Option<&Formula> {
+        let range = text.styles.iter().find(|s| s.style == Style::Math && s.start == at)?;
+        self.math.get(range.target.as_deref()?)
+    }
+
+    /// `text` with its formulas as their linear text.
+    pub fn linear_text(&self, text: &StyledText) -> String {
+        let mut out = String::with_capacity(text.text.len());
+        for (i, c) in text.text.char_indices() {
+            match c {
+                PLACEHOLDER => out.push_str(self.formula_at(text, i).map_or("", |f| f.text.as_str())),
+                c => out.push(c),
+            }
+        }
+        out
     }
 }
 
@@ -294,6 +333,10 @@ pub enum Block {
         table: Arc<Table>,
         row: usize,
     },
+    /// A display formula by its key in [`Book::math`].
+    Formula {
+        key: String,
+    },
 }
 
 impl Block {
@@ -355,7 +398,8 @@ pub struct StyleRange {
     pub start: usize,
     pub end: usize,
     pub style: Style,
-    /// For [`Style::NoteRef`] the note id, for [`Style::Link`] the key in [`Book::links`].
+    /// For [`Style::NoteRef`] the note id, for [`Style::Link`] the key in [`Book::links`], for [`Style::Math`] the key in
+    /// [`Book::math`].
     pub target: Option<String>,
 }
 
@@ -372,6 +416,8 @@ pub enum Style {
     Link,
     /// Small capitals: lower-case letters as small capitals, the text itself unchanged.
     SmallCaps,
+    /// A formula: one character ([`crate::math::PLACEHOLDER`]), its key in [`Book::math`] the range's target.
+    Math,
 }
 
 /// A footnote or comment.

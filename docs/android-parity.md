@@ -37,7 +37,7 @@ what was decided then. New since the table, and open:
 | A11 | Selection and quotes in a PDF; margin cropping; splitting scanned spreads; screens by lines (`pdf-text`, `pdf-pages`) | None: `pdf` leaves them out of its first version | deferred (F5) |
 | A12 | Offered in "Open with" for plain text, a plain zip and XML (`open-with`, `markdown-txt`) | The same (`data/app.truenrth.forzac.desktop`); the packages do not make Forzac their default | same, fixed 2026-10-31 |
 | A13 | The gesture on a first opening, the page's reveal on the next (`opening-gesture`, `page-reveal`) | None | to decide: X1 predates the 2026-10-30 goal |
-| A14 | Formulas (F7) | Read as plain text | gap under the 2026-10-30 goal; "Not planned" predates it |
+| A14 | Formulas (F7) | The same engine, ported (`formulas`) | same, fixed 2026-10-31; checked on a hand-written EPUB, no real textbook yet |
 
 Decided before the 2026-10-30 goal and possibly to reopen: T2 (hyphenation beyond Russian and English), M1 ("Curl" and
 "Cover"), P6 (a "Continue" shortcut on Linux), X4 (the page's text for screen readers).
@@ -55,7 +55,7 @@ and may change A5.
 | F4 | Format decided by content (`data/BookParser.kt`) | `core/src/lib.rs` (`parse_format`) | same |
 | F5 | PDF as pages with text layer, search, quotes (`PdfBook.kt`, `PdfReaderScreen.kt`) | Pages on PDFKit (macOS) and PDFium (GTK), outline, search, links; no selection or quotes | `pdf`, as on paper, without themes; margin cropping, spreads split and quotes not in the first version |
 | F6 | Fixed-layout EPUB of picture pages: fit to screen, manga right to left, spreads (`FixedLayoutScreen.kt`, A spec fixed-layout) | Pages fitted to the window on the theme's paper, right to left, spreads (`core/src/epub/mod.rs`, `macos/Paged.swift`, `gtk/src/pdf.rs`) | `fixed-layout`, reopened 2026-10-30; the theme by `t`, no "Aa" |
-| F7 | MathML formulas typeset by its own engine, inline and display, shrunk to the column, viewer (`model/Math.kt`, `typesetting/MathLayout.kt`, `FormulaViewer.kt`, A spec math) | MathML read as plain text, annotations dropped (`core/src/epub/xhtml.rs`, skip list) | intended (Not planned for 1.0, confirmed) |
+| F7 | MathML formulas typeset by its own engine, inline and display, shrunk to the column, viewer (`model/Math.kt`, `typesetting/MathLayout.kt`, `FormulaViewer.kt`, A spec math) | The same, a port of those files (`core/src/math.rs`, `core/src/layout/math.rs`, the view of `viewer`); bundled STIX Two Math for what a book's face lacks. A note's panel shows the formula rather than its linear text | `formulas`, reopened 2026-10-31 |
 | F8 | A book is imported into the library (copied, id = content hash) from the file picker, "Open with" and "Share", then opened (`MainActivity.kt` `handleIntent`, `LibraryViewModel.kt`, A spec library) | Opening from anywhere copies the book into the Books folder as `Author — Title.ext`; "Add a Folder" imports in bulk (`core/src/library/folder.rs`) | same; Android's search of the device (`find-books`) is row A4 |
 | F9 | TXT and Markdown, told apart by content; encodings; paragraphs, chapters, lists, tables, anchors (`text/TextParser.kt`, `text/PlainTextReader.kt`, `text/MarkdownReader.kt`, `text/MarkdownInline.kt`, A change markdown-txt) | A port rule for rule (`core/src/text.rs`, `core/src/markdown.rs`, change markdown-txt), checked block for block against the Android reader on 700 files; list items with a hanging indent, task boxes drawn as on Android, a done task in the secondary ink (60 % against 55 %) | same |
 
@@ -205,7 +205,7 @@ From [roadmap.md](roadmap.md):
 | NP2 | Text selection and quotes (highlights, copy, share) — reopened 2026-10-17 | Q2 |
 | NP3 | A library screen with import and covers; recent books are enough — reversed 2026-10-17, import on 2026-10-19 | F8, P4, N3, X1 |
 | NP4 | Dictionaries | (Android: deferred on 2026-10-28, no code) |
-| NP5 | Formulas (MathML) | F7 |
+| NP5 | Formulas (MathML) — reopened 2026-10-31 (`formulas`) | F7 |
 | NP6 | Fixed-layout EPUB — reopened 2026-10-30 (`fixed-layout`) | F6 |
 | NP7 | Flatpak (AUR and the `.deb` first) | — |
 | NP8 | A Developer ID, notarisation, Homebrew and the App Store | — |

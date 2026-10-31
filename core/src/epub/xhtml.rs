@@ -8,6 +8,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use super::{fragment_of, is_external, resolve_path};
+use crate::layout::is_accent_mark;
+use crate::math::{ColumnAlign, Formula, MathNode, PLACEHOLDER, TokenKind, Variant};
 use crate::model::{Block, Kind, Style, StyleRange, StyledText, Table, TableCell};
 use crate::typography;
 use crate::xml::{Ev, Res, Xml, attr};
@@ -69,6 +71,8 @@ pub(super) struct Doc {
     pub anchors: HashMap<String, Anchor>,
     /// Note reference targets in this document: `path#id`.
     pub note_refs: HashSet<String>,
+    /// The document's formulas by key.
+    pub formulas: HashMap<String, Formula>,
 }
 
 impl Doc {
@@ -79,6 +83,7 @@ impl Doc {
             path: path.to_owned(),
             main,
             hidden: Sink { hidden: true, ..Sink::default() },
+            formulas: HashMap::new(),
             anchors: HashMap::new(),
             note_refs: HashSet::new(),
         }
@@ -196,15 +201,37 @@ pub(super) fn read(path: &str, bytes: &[u8], css: &Css) -> Doc {
         sb: Vec::new(),
         styles: Vec::new(),
         links: Vec::new(),
+        formulas: HashMap::new(),
     };
-    let mut xml = Xml::new(&data).with_attributes(&["class", "type", "id", "name", "src", "href", "start", "colspan", "hidden"]);
+    let mut xml = Xml::new(&data).with_attributes(&[
+        "class",
+        "type",
+        "id",
+        "name",
+        "src",
+        "href",
+        "start",
+        "colspan",
+        "hidden",
+        "display",
+        "mathvariant",
+        "mathsize",
+        "linethickness",
+        "accent",
+        "open",
+        "close",
+        "separators",
+        "columnalign",
+        "columnlines",
+        "width",
+    ]);
     // A break or gross markup error past the start keeps what was read.
     let _ = r.walk(&mut xml);
     r.flush();
     let mut sinks = r.sinks.into_iter();
     let main = sinks.next().unwrap_or_default();
     let hidden = sinks.next().unwrap_or_default();
-    Doc { path: path.to_owned(), main, hidden, anchors: r.anchors, note_refs: r.note_refs }
+    Doc { path: path.to_owned(), main, hidden, anchors: r.anchors, note_refs: r.note_refs, formulas: r.formulas }
 }
 
 struct Reader<'a> {
@@ -224,6 +251,8 @@ struct Reader<'a> {
     sb: Vec<char>,
     styles: Vec<(usize, usize, Style, Option<String>)>,
     links: Vec<(usize, usize)>,
+    /// This document's formulas by key.
+    formulas: HashMap<String, Formula>,
 }
 
 impl Reader<'_> {
@@ -251,6 +280,9 @@ impl Reader<'_> {
 
     fn start(&mut self, xml: &mut Xml, owned_name: String, attrs: &[(String, String)]) -> Res<()> {
         let name = owned_name.as_str();
+        if name == "math" {
+            return self.formula(xml, attrs);
+        }
         // `hidden` is not shown in HTML (Standard Ebooks: captions for screen readers).
         if SKIP.contains(&name) || attr(attrs, "hidden").is_some() {
             return xml.skip();
@@ -459,6 +491,24 @@ impl Reader<'_> {
         }
     }
 
+    /// `math`: a display formula (not in a table) is a block; any other is one character of the paragraph.
+    fn formula(&mut self, xml: &mut Xml, attrs: &[(String, String)]) -> Res<()> {
+        let display = attr(attrs, "display") == Some("block");
+        let node = one(math_children(xml)?);
+        let key = format!("{}#math{}", self.path, self.formulas.len());
+        self.formulas.insert(key.clone(), Formula::new(node, display));
+        if display && self.table.is_none() {
+            self.flush();
+            let sink = self.sink();
+            self.sinks[sink].blocks.push(Block::Formula { key });
+        } else {
+            let at = self.sb.len();
+            self.sb.push(PLACEHOLDER);
+            self.styles.push((at, at + 1, Style::Math, Some(key)));
+        }
+        Ok(())
+    }
+
     /// A title page with an image (Standard Ebooks): its title and author are a caption for screen readers, which the
     /// book's CSS hides, and the page is the image. The images stay, the text goes; anchors inside point to its start.
     fn drop_title_text(&mut self, frame: &Frame) {
@@ -648,11 +698,22 @@ impl Reader<'_> {
         styles.dedup();
         let text = StyledText { text, styles };
         let owner = self.frames.iter().rev().find(|f| f.pre || f.heading.is_some() || f.kind.is_some());
-        let block = match owner {
-            None => Block::Paragraph { text, kind: Kind::Body },
-            Some(f) if f.pre => Block::Paragraph { text, kind: Kind::Code },
-            Some(Frame { heading: Some(level), .. }) => Block::Heading { text, level: *level },
-            Some(f) => Block::Paragraph { text, kind: f.kind.unwrap_or(Kind::Body) },
+        // A formula alone in its paragraph is a display formula: textbooks set their equations so.
+        let alone = text.text.chars().eq([PLACEHOLDER]) && !self.in_cell() && !self.cells.contains(&self.sink());
+        let formula = text.styles.iter().find(|s| alone && s.style == Style::Math).and_then(|s| s.target.clone());
+        let block = match (owner, formula) {
+            (None, Some(key)) => {
+                if let Some(f) = self.formulas.get_mut(&key) {
+                    f.display = true;
+                }
+                Block::Formula { key }
+            }
+            (owner, _) => match owner {
+                None => Block::Paragraph { text, kind: Kind::Body },
+                Some(f) if f.pre => Block::Paragraph { text, kind: Kind::Code },
+                Some(Frame { heading: Some(level), .. }) => Block::Heading { text, level: *level },
+                Some(f) => Block::Paragraph { text, kind: f.kind.unwrap_or(Kind::Body) },
+            },
         };
         let link_only = self.links.iter().any(|(a, b)| *a <= lead && *b >= end);
         let index = self.sink();
@@ -661,6 +722,215 @@ impl Reader<'_> {
             sink.link_only.insert(sink.blocks.len());
         }
         sink.blocks.push(block);
+    }
+}
+
+/// One node for a list of them: the node, or a row.
+fn one(mut nodes: Vec<MathNode>) -> MathNode {
+    if nodes.len() == 1 { nodes.remove(0) } else { MathNode::Row(nodes) }
+}
+
+/// The child elements of the current one, up to its end.
+fn math_children(xml: &mut Xml) -> Res<Vec<MathNode>> {
+    let mut out = Vec::new();
+    loop {
+        match xml.next()? {
+            Ev::Start(mut name, attrs) => {
+                name.make_ascii_lowercase();
+                out.extend(math_element(xml, &name, &attrs)?);
+            }
+            Ev::End | Ev::Eof => return Ok(out),
+            Ev::Text(_) => {}
+        }
+    }
+}
+
+/// Child `i` of an element, or an empty row: a malformed formula shows what it has.
+fn nth(nodes: &[MathNode], i: usize) -> MathNode {
+    nodes.get(i).cloned().unwrap_or(MathNode::Row(Vec::new()))
+}
+
+/// The element just started as a node of the tree, read up to its end; `None` for what does not show.
+fn math_element(xml: &mut Xml, name: &str, attrs: &[(String, String)]) -> Res<Option<MathNode>> {
+    let boxed = |n: MathNode| Box::new(n);
+    Ok(Some(match name {
+        "mi" | "mn" | "mo" | "mtext" | "ms" => {
+            let kind = match name {
+                "mi" => TokenKind::Identifier,
+                "mn" => TokenKind::Number,
+                "mo" => TokenKind::Operator,
+                _ => TokenKind::Text,
+            };
+            let variant = match attr(attrs, "mathvariant") {
+                Some("normal") => Variant::Normal,
+                Some("bold") => Variant::Bold,
+                Some("italic") => Variant::Italic,
+                Some("bold-italic") => Variant::BoldItalic,
+                _ => Variant::Default,
+            };
+            let scale = math_size(attr(attrs, "mathsize"));
+            let text = token_text(xml)?;
+            if text.is_empty() && kind != TokenKind::Text {
+                return Ok(None);
+            }
+            MathNode::Token { text, kind, variant, scale }
+        }
+        "mfrac" => {
+            let line = !matches!(attr(attrs, "linethickness").map(str::trim), Some("0" | "0px" | "0em"));
+            let kids = math_children(xml)?;
+            MathNode::Frac { num: boxed(nth(&kids, 0)), den: boxed(nth(&kids, 1)), line }
+        }
+        "msub" | "msup" | "msubsup" => {
+            let kids = math_children(xml)?;
+            let (sub, sup) = match name {
+                "msub" => (Some(boxed(nth(&kids, 1))), None),
+                "msup" => (None, Some(boxed(nth(&kids, 1)))),
+                _ => (Some(boxed(nth(&kids, 1))), Some(boxed(nth(&kids, 2)))),
+            };
+            MathNode::Scripts { base: boxed(nth(&kids, 0)), sub, sup }
+        }
+        "munder" | "mover" | "munderover" => {
+            let accent = attr(attrs, "accent") == Some("true");
+            let kids = math_children(xml)?;
+            let base = boxed(nth(&kids, 0));
+            match name {
+                "munder" => MathNode::UnderOver { base, under: Some(boxed(nth(&kids, 1))), over: None, accent_over: false },
+                "mover" => {
+                    let over = nth(&kids, 1);
+                    let mark = matches!(&over, MathNode::Token { text, .. } if is_accent_mark(text));
+                    MathNode::UnderOver { base, under: None, over: Some(boxed(over)), accent_over: accent || mark }
+                }
+                _ => MathNode::UnderOver { base, under: Some(boxed(nth(&kids, 1))), over: Some(boxed(nth(&kids, 2))), accent_over: accent },
+            }
+        }
+        "msqrt" => MathNode::Root { radicand: boxed(one(math_children(xml)?)), index: None },
+        "mroot" => {
+            let kids = math_children(xml)?;
+            MathNode::Root { radicand: boxed(nth(&kids, 0)), index: Some(boxed(nth(&kids, 1))) }
+        }
+        "mfenced" => {
+            let open = attr(attrs, "open").unwrap_or("(").to_owned();
+            let close = attr(attrs, "close").unwrap_or(")").to_owned();
+            let separators: Vec<char> = attr(attrs, "separators").unwrap_or(",").chars().filter(|c| !c.is_whitespace()).collect();
+            let mut content = Vec::new();
+            for (i, item) in math_children(xml)?.into_iter().enumerate() {
+                if i > 0 && !separators.is_empty() {
+                    let separator = separators[(i - 1).min(separators.len() - 1)];
+                    content.push(MathNode::token(&separator.to_string(), TokenKind::Operator));
+                }
+                content.push(item);
+            }
+            MathNode::Fenced { open, close, content: boxed(one(content)) }
+        }
+        "mtable" => math_table(xml, attrs)?,
+        "mspace" => {
+            let em = space_em(attr(attrs, "width"));
+            xml.skip()?;
+            MathNode::Space(em)
+        }
+        "semantics" | "mmultiscripts" => return Ok(math_children(xml)?.into_iter().next()),
+        "annotation" | "annotation-xml" | "none" | "mprescripts" | "maligngroup" | "malignmark" | "mglyph" => {
+            xml.skip()?;
+            return Ok(None);
+        }
+        // mrow, mstyle, mpadded, menclose, mphantom…
+        _ => one(math_children(xml)?),
+    }))
+}
+
+/// `mtable`: rows `mtr` and `mlabeledtr`, cells `mtd`; the alignment is the table's or that of the first row's cells.
+fn math_table(xml: &mut Xml, attrs: &[(String, String)]) -> Res<MathNode> {
+    let words = |value: Option<&str>| value.map(|v| v.split_whitespace().map(str::to_owned).collect::<Vec<_>>());
+    let table_align = words(attr(attrs, "columnalign"));
+    let lines = words(attr(attrs, "columnlines")).unwrap_or_default().iter().map(|l| l == "solid" || l == "dashed").collect();
+    let (mut rows, mut cell_align) = (Vec::new(), None);
+    loop {
+        match xml.next()? {
+            Ev::Start(mut name, _) => {
+                name.make_ascii_lowercase();
+                if name != "mtr" && name != "mlabeledtr" {
+                    xml.skip()?;
+                    continue;
+                }
+                let (mut cells, mut aligns) = (Vec::new(), Vec::new());
+                loop {
+                    match xml.next()? {
+                        Ev::Start(_, attrs) => {
+                            aligns.push(attr(&attrs, "columnalign").unwrap_or_default().to_owned());
+                            cells.push(one(math_children(xml)?));
+                        }
+                        Ev::End | Ev::Eof => break,
+                        Ev::Text(_) => {}
+                    }
+                }
+                cell_align.get_or_insert(aligns);
+                rows.push(cells);
+            }
+            Ev::End | Ev::Eof => break,
+            Ev::Text(_) => {}
+        }
+    }
+    let align = table_align
+        .or(cell_align)
+        .unwrap_or_default()
+        .iter()
+        .map(|a| match a.as_str() {
+            "left" => ColumnAlign::Left,
+            "right" => ColumnAlign::Right,
+            _ => ColumnAlign::Center,
+        })
+        .collect();
+    Ok(MathNode::Matrix { rows, align, lines })
+}
+
+/// A token's text up to its end, white space collapsed, without the invisible operators.
+fn token_text(xml: &mut Xml) -> Res<String> {
+    let mut text = String::new();
+    loop {
+        match xml.next()? {
+            Ev::Text(t) => text.push_str(&t),
+            Ev::Start(..) => xml.skip()?,
+            Ev::End | Ev::Eof => break,
+        }
+    }
+    text.retain(|c| !('\u{2061}'..='\u{2064}').contains(&c));
+    Ok(text.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// `mathsize`: `big`, `small`, `120%`, `1.2em`.
+fn math_size(value: Option<&str>) -> f32 {
+    match value {
+        Some("big") => 1.2,
+        Some("small") => 0.85,
+        Some(v) if v.ends_with('%') => v[..v.len() - 1].parse::<f32>().map_or(1.0, |p| p / 100.0),
+        Some(v) if v.ends_with("em") => v[..v.len() - 2].parse().unwrap_or(1.0),
+        _ => 1.0,
+    }
+}
+
+/// `mspace`'s width in em: `0.5em`, `1ex`, `3px`, `thinmathspace`…
+fn space_em(value: Option<&str>) -> f32 {
+    let Some(v) = value.map(|v| v.trim().to_lowercase()) else { return 0.0 };
+    let number = |unit: &str| v.strip_suffix(unit).and_then(|n| n.parse::<f32>().ok());
+    if let Some(n) = number("em") {
+        n
+    } else if let Some(n) = number("ex") {
+        n * 0.43
+    } else if let Some(n) = number("px") {
+        n / 16.0
+    } else if let Some(n) = number("pt") {
+        n / 12.0
+    } else {
+        match v.as_str() {
+            "veryverythinmathspace" => 1.0 / 18.0,
+            "verythinmathspace" => 2.0 / 18.0,
+            "thinmathspace" => 3.0 / 18.0,
+            "mediummathspace" => 4.0 / 18.0,
+            "thickmathspace" => 5.0 / 18.0,
+            "verythickmathspace" => 6.0 / 18.0,
+            "veryverythickmathspace" => 7.0 / 18.0,
+            _ => v.parse().unwrap_or(0.0),
+        }
     }
 }
 

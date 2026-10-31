@@ -1,4 +1,4 @@
-//! Ported from the Android app's `EpubParserTest` (MathML is not a goal here).
+//! Ported from the Android app's `EpubParserTest`.
 
 use crate::archive::zip;
 use crate::model::{Block, Book, Kind, LinkTarget, Locator, Style, StyledText};
@@ -864,4 +864,73 @@ fn parse_empty_pages() -> Result<Book, Error> {
         ("OPS/content.opf", opf.as_bytes()),
         ("OPS/a.xhtml", page.as_bytes()),
     ]))
+}
+
+const MATH: &str = r#"xmlns="http://www.w3.org/1998/Math/MathML""#;
+
+fn math_book(body: &str) -> Book {
+    book(docs(&[("a.xhtml", body)]))
+}
+
+fn formula_of<'b>(book: &'b Book, text: &StyledText) -> &'b crate::math::Formula {
+    let range = text.styles.iter().find(|s| s.style == Style::Math).expect("a formula");
+    assert_eq!(text.text[range.start..range.end].chars().count(), 1, "one character");
+    &book.math[range.target.as_deref().unwrap()]
+}
+
+#[test]
+fn a_formula_in_a_paragraph_is_one_character() {
+    let b = math_book(&format!(
+        r#"<p>Let <math {MATH}><mi>A</mi><mo>=</mo><mfenced open="[" close="]"><mtable><mtr><mtd><mn>1</mn></mtd><mtd><mn>2</mn></mtd></mtr><mtr><mtd><mn>3</mn></mtd><mtd><mn>4</mn></mtd></mtr></mtable></mfenced></math>.</p>"#
+    ));
+    let ps = paragraphs(&b);
+    assert_eq!(ps[0].0.text, "Let \u{FFFC}.");
+    assert_eq!(formula_of(&b, ps[0].0).text, "A = [1 2; 3 4]");
+}
+
+#[test]
+fn a_prefixed_formula_with_an_annotation_shows_no_tex() {
+    let b = math_book(
+        r#"<p>x <m:math xmlns:m="http://www.w3.org/1998/Math/MathML"><m:semantics><m:msub><m:mi>a</m:mi><m:mn>11</m:mn></m:msub><m:annotation encoding="application/x-tex">a_{11}</m:annotation></m:semantics></m:math> y</p>"#,
+    );
+    let ps = paragraphs(&b);
+    assert_eq!(ps[0].0.text, "x \u{FFFC} y");
+    assert_eq!(formula_of(&b, ps[0].0).text, "a_11");
+}
+
+#[test]
+fn a_display_formula_and_one_alone_in_its_paragraph_are_blocks() {
+    let b = math_book(&format!(
+        r#"<p>Before</p><math {MATH} display="block"><mi>x</mi></math><p>  <math {MATH}><mi>y</mi></math>  </p><p>After</p>"#
+    ));
+    let blocks = &b.chapters[0].blocks;
+    let keys: Vec<&str> = blocks.iter().filter_map(|b| if let Block::Formula { key } = b { Some(key.as_str()) } else { None }).collect();
+    assert_eq!(keys.len(), 2);
+    assert_eq!(b.math[keys[1]].text, "y");
+    assert!(b.math[keys[1]].display, "alone in its paragraph");
+    assert_eq!(texts(&b), ["Before", "After"]);
+}
+
+#[test]
+fn a_formula_in_a_table_stays_in_its_cell() {
+    let b = math_book(&format!(
+        r#"<table><tr><td><math {MATH} display="block"><mi>x</mi></math></td><td>b</td></tr><tr><td><math {MATH}><mi>y</mi></math></td><td>c</td></tr></table>"#
+    ));
+    let Block::TableRow { table, .. } = &b.chapters[0].blocks[0] else { panic!("a table") };
+    assert_eq!(table.rows[0][0].text.text, "\u{FFFC}");
+    assert_eq!(formula_of(&b, &table.rows[1][0].text).text, "y");
+}
+
+#[test]
+fn a_malformed_formula_loses_nothing_around_it() {
+    let b = math_book(&format!(r#"<p>one <math {MATH}><mfrac><mi>a</mi></mfrac></math> two</p>"#));
+    let ps = paragraphs(&b);
+    assert_eq!(ps[0].0.text, "one \u{FFFC} two");
+    assert!(formula_of(&b, ps[0].0).text.starts_with('a'));
+}
+
+#[test]
+fn invisible_operators_are_dropped_and_an_accent_is_known_by_its_mark() {
+    let b = math_book(&format!(r#"<p>t <math {MATH}><mi>a</mi><mo>&#x2062;</mo><mover><mi>x</mi><mo>¯</mo></mover></math></p>"#));
+    assert_eq!(formula_of(&b, paragraphs(&b)[0].0).text, "ax\u{304}");
 }

@@ -79,6 +79,16 @@ pub struct ForzacArea {
     pub at: ForzacLocator,
 }
 
+/// A polyline of a formula (a root sign, a stretched fence): `count` points, x and y in turn.
+#[repr(C)]
+pub struct ForzacPath {
+    pub points: *const f32,
+    pub count: u32,
+    pub width: f32,
+    /// 0 text, 1 link, 2 secondary.
+    pub ink: u8,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ForzacPage {
@@ -92,6 +102,8 @@ pub struct ForzacPage {
     pub area_count: u32,
     pub strokes: *const ForzacStroke,
     pub stroke_count: u32,
+    pub paths: *const ForzacPath,
+    pub path_count: u32,
 }
 
 /// Reading position: chapter, block, byte offset in the block. Pages are derived from it.
@@ -234,6 +246,7 @@ struct Published {
     images: Vec<ForzacImage>,
     rules: Vec<ForzacRule>,
     strokes: Vec<ForzacStroke>,
+    paths: Vec<ForzacPath>,
     areas: Vec<ForzacArea>,
     targets: Vec<CString>,
 }
@@ -262,6 +275,11 @@ impl Published {
             .collect();
         self.rules = p.rules.iter().map(|r| ForzacRule { rect: r.rect.into(), strength: r.strength }).collect();
         self.strokes = p.strokes.iter().map(|s| ForzacStroke { rect: s.rect.into(), ink: s.ink as u8, shape: s.shape as u8 }).collect();
+        self.paths = p
+            .paths
+            .iter()
+            .map(|l| ForzacPath { points: l.points.as_ptr().cast(), count: l.points.len() as u32, width: l.width, ink: l.ink as u8 })
+            .collect();
         let none = Locator::default().into();
         let (kinds, targets): (Vec<(u8, ForzacLocator)>, Vec<CString>) = p
             .areas
@@ -294,6 +312,8 @@ impl Published {
             area_count: self.areas.len() as u32,
             strokes: self.strokes.as_ptr(),
             stroke_count: self.strokes.len() as u32,
+            paths: self.paths.as_ptr(),
+            path_count: self.paths.len() as u32,
         }
     }
 }
@@ -1025,7 +1045,7 @@ pub unsafe extern "C" fn forzac_note_title(doc: *mut Document, id: *const c_char
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn forzac_note_text(doc: *mut Document, id: *const c_char) -> *const c_char {
     let doc = unsafe { &mut *doc };
-    let text = doc.book.notes.get(unsafe { str(id) }.as_ref()).map(|n| blocks_text(&n.blocks));
+    let text = doc.book.notes.get(unsafe { str(id) }.as_ref()).map(|n| blocks_text(&doc.book, &n.blocks));
     doc.text(text.as_deref())
 }
 
@@ -1037,13 +1057,19 @@ pub unsafe extern "C" fn forzac_note_text(doc: *mut Document, id: *const c_char)
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn forzac_link_preview_text(doc: *mut Document, key: *const c_char) -> *const c_char {
     let doc = unsafe { &mut *doc };
-    let text = doc.book.preview(unsafe { str(key) }.as_ref()).map(blocks_text);
+    let text = doc.book.preview(unsafe { str(key) }.as_ref()).map(|b| blocks_text(&doc.book, b));
     doc.text(text.as_deref())
 }
 
 /// Blocks' texts joined by line breaks, as `Book::text`: without soft hyphens, no-break spaces as spaces.
-fn blocks_text(blocks: &[Block]) -> String {
-    let texts: Vec<&str> = blocks.iter().flat_map(|b| b.texts()).map(|t| t.text.as_str()).collect();
+fn blocks_text(book: &Book, blocks: &[Block]) -> String {
+    let texts: Vec<String> = blocks
+        .iter()
+        .flat_map(|b| match b {
+            Block::Formula { key } => book.math.get(key).map(|f| f.text.clone()).into_iter().collect(),
+            b => b.texts().into_iter().map(|t| book.linear_text(t)).collect::<Vec<_>>(),
+        })
+        .collect();
     texts.join("\n").replace('\u{AD}', "").replace(['\u{A0}', '\u{202F}'], " ")
 }
 

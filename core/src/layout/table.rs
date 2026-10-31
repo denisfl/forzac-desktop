@@ -5,7 +5,7 @@ use std::sync::Arc;
 use super::page::draw_block;
 use super::{Align, BlockLayout, Cell, Content, Group, PageContent, Spec, Typesetter};
 use crate::fonts::Face;
-use crate::model::{Block, Book, Locator, Table};
+use crate::model::{Block, Book, Locator, Style, Table};
 
 /// Text sizes tried in turn when a table does not fit: the body size, then 0.9 and 0.8 of it.
 const SCALES: [f32; 3] = [1.0, 0.9, 0.8];
@@ -78,7 +78,19 @@ pub struct TableView {
 /// The table whose first row is at `at`, typeset for the view at the typesetter's text size: columns by content
 /// (`natural_widths`), not fitted to the column; rows one under another. `None` when `at` is not a table's first row.
 pub fn layout_table(book: &Book, at: Locator, typesetter: &mut Typesetter) -> Option<TableView> {
-    let Block::TableRow { table, row: 0 } = book.chapters.get(at.chapter)?.blocks.get(at.block)? else { return None };
+    typesetter.use_formulas(book);
+    let block = book.chapters.get(at.chapter)?.blocks.get(at.block)?;
+    let formula = match block {
+        Block::Formula { key } => Some(key.as_str()),
+        b => b
+            .text()
+            .and_then(|t| t.styles.iter().find(|s| s.style == Style::Math && s.start == at.offset))
+            .and_then(|s| s.target.as_deref()),
+    };
+    if let Some(key) = formula {
+        return formula_view(book, key, typesetter);
+    }
+    let Block::TableRow { table, row: 0 } = block else { return None };
     // The rows take their geometry from the cache: the view's for the time of this call.
     let key = Arc::as_ptr(table) as usize;
     let geometry = Arc::new(typesetter.natural_geometry(table));
@@ -93,6 +105,24 @@ pub fn layout_table(book: &Book, at: Locator, typesetter: &mut Typesetter) -> Op
         Some(g) => typesetter.tables.insert(key, g),
         None => typesetter.tables.remove(&key),
     };
+    Some(view)
+}
+
+/// A formula shrunk to the column, set for the view: at the book's size, a little room around it.
+fn formula_view(book: &Book, key: &str, typesetter: &mut Typesetter) -> Option<TableView> {
+    let display = book.math.get(key)?.display;
+    let (line, width, ascent, descent) = typesetter.formula_view(key, display)?;
+    let pad = typesetter.line_height * 0.25;
+    let block = BlockLayout {
+        content: Content::Formula { line, w: width, h: ascent + descent + 2.0 * pad, baseline: pad + ascent, shrunk: false },
+        x: 0.0,
+        group: Group::Alone,
+        space_before: 0.0,
+        space_after: 0.0,
+        keep_with_next: false,
+    };
+    let mut view = TableView { width, height: block.height(), ..TableView::default() };
+    draw_block(&mut view.content, &block, 0..1, 0.0, 0.0);
     Some(view)
 }
 
@@ -114,8 +144,10 @@ impl Typesetter {
                     let text = &cell.text.text;
                     let word = text.split([' ', '\n', '\u{a0}']).map(|w| self.width_of(face, w, size)).fold(0.0, f32::max);
                     let line = text.split('\n').map(|l| self.width_of(face, l, size)).fold(0.0, f32::max);
-                    min[col] = min[col].max(word + 2.0);
-                    max[col] = max[col].max(line + 2.0);
+                    // A formula's character says nothing of its width.
+                    let (widest, all) = self.formula_widths(&cell.text, size);
+                    min[col] = min[col].max(word.max(widest) + 2.0);
+                    max[col] = max[col].max(line + all + 2.0);
                 }
                 col += cell.col_span;
             }

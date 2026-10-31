@@ -226,6 +226,7 @@ pub(crate) fn read(archive: &HashMap<String, Vec<u8>>) -> Result<Book, Error> {
         notes,
         toc,
         images,
+        math: docs.iter().flat_map(|d| d.formulas.iter().map(|(k, f)| (k.clone(), f.clone()))).collect::<HashMap<_, _>>().into(),
         ..Book::default()
     };
     resolve_links(&mut book, &|path, fragment| {

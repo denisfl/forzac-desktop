@@ -23,7 +23,7 @@ In Claude Code: `/opsx:propose`, `/opsx:apply`, `/opsx:archive`.
 core/    Rust: model, parsers, hyphenation, shaping (HarfRust), Knuth–Plass, pagination → pages as glyph runs
 gtk/     Linux shell: GTK 4 (Rust), pages drawn as GSK text nodes
 macos/   macOS shell: AppKit (Swift), pages drawn with Core Text, turned with Core Animation
-assets/  bundled fonts (PT Serif, Literata, Source Serif 4, PT Sans, PT Mono for code; OFL) and hyphenation patterns (hyph-utf8) with their licences
+assets/  bundled fonts (PT Serif, Literata, Source Serif 4, PT Sans, PT Mono for code, STIX Two Math for formulas; OFL) and hyphenation patterns (hyph-utf8) with their licences
 data/    .desktop file, MIME type for FB3, icons (made by scripts/icons.py from the Android app's vector icon)
 packaging/aur/  AUR packages: forzac (from source), forzac-bin (release archives)
 ```
@@ -139,6 +139,6 @@ xdg-mime default app.truenrth.forzac.desktop application/epub+zip application/x-
 
 ## Licences
 
-The code is licensed under the [Mozilla Public License 2.0](LICENSE). Bundled: PT Serif, Literata, Source Serif 4 and PT Sans — SIL Open Font License 1.1 (`OFL.txt` in each `assets/fonts/` folder); Russian hyphenation patterns — LPPL 1.2 or later, English — free use
+The code is licensed under the [Mozilla Public License 2.0](LICENSE). Bundled: PT Serif, Literata, Source Serif 4, PT Sans and STIX Two Math — SIL Open Font License 1.1 (`OFL.txt` in each `assets/fonts/` folder); Russian hyphenation patterns — LPPL 1.2 or later, English — free use
 with the notice kept (`assets/hyph/*.lic.txt`). The macOS app embeds [Sparkle](https://sparkle-project.org) — MIT
 (`Contents/Resources/licenses/Sparkle-LICENSE`).

@@ -239,3 +239,25 @@ fn trailing_byte_sequences_as_calibre_writes_them() {
     assert_eq!(tbs(&entries, 28672, 32767), [0x86, 0x80, 2]);
     assert_eq!(tbs(&entries, 400_000, 404_095), Vec::<u8>::new());
 }
+
+#[test]
+fn formulas_go_as_their_linear_text() {
+    use crate::math::{Formula, MathNode, TokenKind};
+    let node = MathNode::Scripts {
+        base: MathNode::token("a", TokenKind::Identifier).into(),
+        sub: Some(MathNode::token("11", TokenKind::Number).into()),
+        sup: None,
+    };
+    let key = "f".to_owned();
+    let inline = StyledText {
+        text: "the \u{FFFC} element".into(),
+        styles: vec![StyleRange { start: 4, end: 7, style: Style::Math, target: Some(key.clone()) }],
+    };
+    let blocks = vec![Block::Paragraph { text: inline, kind: Kind::Body }, Block::Formula { key: key.clone() }];
+    let math: HashMap<String, Formula> = [(key, Formula::new(node, false))].into();
+    let book = Book { title: "T".into(), chapters: vec![Chapter { title: None, blocks }], math: math.into(), ..Book::default() };
+    let html = markup(&book, "T", "").text;
+    assert!(html.contains("the a_11 element"), "{html}");
+    assert!(!html.contains('\u{FFFC}'), "no replacement character");
+    assert_eq!(html.matches("a_11").count(), 2, "the display formula too");
+}

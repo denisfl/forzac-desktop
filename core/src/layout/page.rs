@@ -1,6 +1,6 @@
 //! Pagination (a port of the Android `Paginator`) and page contents.
 
-use super::{Area, BlockLayout, BookPages, Content, GlyphRun, Group, Ink, PageStyle, Rect, Stroke, Target, Typesetter};
+use super::{Area, BlockLayout, BookPages, Content, GlyphRun, Group, Ink, PageStyle, Path, Rect, Stroke, Target, Typesetter};
 use crate::fonts::Face;
 use crate::model::{Block, Book, Chapter, Locator};
 
@@ -50,6 +50,7 @@ pub struct PageContent {
     pub rules: Vec<Rule>,
     pub areas: Vec<Area>,
     pub strokes: Vec<Stroke>,
+    pub paths: Vec<Path>,
 }
 
 /// A chapter typeset for one page style.
@@ -117,7 +118,7 @@ impl ChapterLayout {
     pub fn height(&self, i: usize) -> f32 {
         let height = |s: &Slice| {
             self.blocks.get(s.layout).map_or(0.0, |b| match &b.content {
-                Content::Text(t) => (s.line_end - s.line_start) as f32 * t.line_height,
+                Content::Text(t) => t.span(s.line_start, s.line_end),
                 _ => b.height(),
             })
         };
@@ -164,7 +165,7 @@ impl ChapterLayout {
             if let Some(b) = self.blocks.get(s.layout) {
                 let (left, top, at) = (style.margin_h + b.x, style.margin_top + s.top, out.areas.len());
                 draw_block(&mut out, b, s.line_start..s.line_end, left, top);
-                self.view_area(&mut out, at, b, s.block, left, top, style);
+                self.view_area(&mut out, at, b, s.block, s.line_start..s.line_end, left, top, style);
             }
         }
         out
@@ -172,13 +173,36 @@ impl ChapterLayout {
 
     /// The area of an image at least a third of the column wide or of a table, which open in the view: an image's
     /// rectangle; for a table one area around its rows drawn here, inserted at `at` (before the first row's cell areas)
-    /// and grown by later rows. `block` is the model block of `b`, drawn at `left`, `top`.
+    /// and grown by later rows; a formula shrunk to the column by its place. `block` is the model block of `b`, its lines
+    /// `lines` drawn at `left`, `top`.
     #[allow(clippy::too_many_arguments)]
-    fn view_area(&self, out: &mut PageContent, at: usize, b: &BlockLayout, block: usize, left: f32, top: f32, style: &PageStyle) {
+    fn view_area(
+        &self,
+        out: &mut PageContent,
+        at: usize,
+        b: &BlockLayout,
+        block: usize,
+        lines: std::ops::Range<usize>,
+        left: f32,
+        top: f32,
+        style: &PageStyle,
+    ) {
         if !self.viewable {
             return;
         }
+        let place = |offset: usize| Target::Table(Locator { chapter: self.chapter, block, offset });
         match &b.content {
+            Content::Text(t) => {
+                for n in lines.clone() {
+                    let y = top + t.span(lines.start, n) + t.baseline_of(n);
+                    for (offset, rect) in &t.lines[n].shrunk {
+                        out.areas.insert(at, Area { rect: rect.offset(left, y), target: place(*offset) });
+                    }
+                }
+            }
+            Content::Formula { w, h, shrunk: true, .. } => {
+                out.areas.insert(at, Area { rect: Rect { x: left, y: top, w: *w, h: *h }, target: place(0) })
+            }
             Content::Image { id, w, h } if *w >= style.text_width() / 3.0 => {
                 out.areas.insert(at, Area { rect: Rect { x: left, y: top, w: *w, h: *h }, target: Target::Image(id.clone()) })
             }
@@ -207,9 +231,9 @@ impl ChapterLayout {
         let mut out = PageContent::default();
         for (i, lines, top) in self.flow_lines(y0, y1) {
             let b = &self.blocks[i];
-            let (left, at) = (style.margin_h + b.x, out.areas.len());
+            let (left, at, lines_shown) = (style.margin_h + b.x, out.areas.len(), lines.clone());
             draw_block(&mut out, b, lines, left, top);
-            self.view_area(&mut out, at, b, self.block_index[i], left, top, style);
+            self.view_area(&mut out, at, b, self.block_index[i], lines_shown, left, top, style);
         }
         out
     }
@@ -224,9 +248,9 @@ impl ChapterLayout {
             }
             let (lines, line_top) = match &b.content {
                 Content::Text(t) => {
-                    let first = ((y0 - top) / t.line_height).ceil().max(0.0) as usize;
-                    let last = (((y1 - top) / t.line_height).ceil().max(0.0) as usize).min(t.lines.len());
-                    (first..last.max(first), top + first as f32 * t.line_height)
+                    let first = t.line_from(y0 - top);
+                    let last = t.line_from(y1 - top);
+                    (first..last.max(first), top + t.top(first))
                 }
                 _ if top < y0 => continue,
                 _ => (0..1, top),
@@ -302,7 +326,7 @@ impl ChapterLayout {
         match &self.blocks[i].content {
             Content::Text(t) if self.block_index[i] == at.block => {
                 let line = t.starts.iter().rposition(|&s| s <= at.offset).unwrap_or(0);
-                top + line as f32 * t.line_height
+                top + t.top(line)
             }
             _ => top,
         }
@@ -316,7 +340,7 @@ impl ChapterLayout {
             match &b.content {
                 Content::Text(t) => {
                     for (line, &start) in t.starts.iter().enumerate() {
-                        if top + line as f32 * t.line_height >= y - 0.5 {
+                        if top + t.top(line) >= y - 0.5 {
                             return at(i, start);
                         }
                         last = at(i, start);
@@ -340,16 +364,17 @@ pub(super) fn draw_block(out: &mut PageContent, b: &BlockLayout, lines: std::ops
     match &b.content {
         Content::Text(t) => {
             for line in lines.clone() {
-                let y = top + (line - lines.start) as f32 * t.line_height + t.baseline;
+                let y = top + t.span(lines.start, line) + t.baseline_of(line);
                 push_line(out, &t.lines[line], left, y);
             }
         }
         Content::Empty => {}
         Content::Image { id, w, h } => out.images.push(PageImage { id: id.clone(), rect: Rect { x: left, y: top, w: *w, h: *h } }),
+        Content::Formula { line, baseline, .. } => push_line(out, line, left, top + baseline),
         Content::Row { cells, rules, height, width, .. } => {
             for cell in cells {
                 for (n, line) in cell.text.lines.iter().enumerate() {
-                    let y = top + cell.y + n as f32 * cell.text.line_height + cell.text.baseline;
+                    let y = top + cell.y + cell.text.span(0, n) + cell.text.baseline_of(n);
                     push_line(out, line, left + cell.x, y);
                 }
             }
@@ -388,8 +413,8 @@ fn mark_block(
         Content::Text(t) => {
             for line in lines.clone() {
                 if let Some((a, b)) = span(&t.lines[line], 0) {
-                    let y = top + (line - lines.start) as f32 * t.line_height;
-                    out.push(Rect { x: left + a, y, w: b - a, h: t.line_height });
+                    let y = top + t.span(lines.start, line);
+                    out.push(Rect { x: left + a, y, w: b - a, h: t.height_of(line) });
                 }
             }
         }
@@ -398,8 +423,8 @@ fn mark_block(
             for cell in cells {
                 for (n, line) in cell.text.lines.iter().enumerate() {
                     if let Some((a, b)) = span(line, cell.offset) {
-                        let y = top + cell.y + n as f32 * cell.text.line_height;
-                        out.push(Rect { x: left + cell.x + a, y, w: b - a, h: cell.text.line_height });
+                        let y = top + cell.y + cell.text.top(n);
+                        out.push(Rect { x: left + cell.x + a, y, w: b - a, h: cell.text.height_of(n) });
                     }
                 }
             }
@@ -415,16 +440,16 @@ fn word_block(out: &mut Vec<Word>, b: &BlockLayout, block: &Block, at: Locator, 
         (Content::Text(t), _) => {
             let Some(text) = block.text() else { return };
             for line in lines.clone() {
-                let y = top + (line - lines.start) as f32 * t.line_height;
-                line_words(out, &t.lines[line], &text.text, 0, at, left, y, t.line_height);
+                let y = top + t.span(lines.start, line);
+                line_words(out, &t.lines[line], &text.text, 0, at, left, y, t.height_of(line));
             }
         }
         // A table row's text is its cells joined by line breaks (`Table::cell_starts`); words stay in their cell.
         (Content::Row { cells, .. }, Block::TableRow { table, row }) => {
             for (cell, c) in cells.iter().zip(&table.rows[*row]) {
                 for (n, line) in cell.text.lines.iter().enumerate() {
-                    let y = top + cell.y + n as f32 * cell.text.line_height;
-                    line_words(out, line, &c.text.text, cell.offset, at, left + cell.x, y, cell.text.line_height);
+                    let y = top + cell.y + cell.text.top(n);
+                    line_words(out, line, &c.text.text, cell.offset, at, left + cell.x, y, cell.text.height_of(n));
                 }
             }
         }
@@ -562,7 +587,13 @@ fn layout_blocks(book: &Book, blocks: Vec<Block>, style: &PageStyle, typesetter:
         .filter_map(|b| if let Block::Image { id } = b { book.images.get_key_value(id) } else { None })
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    let note_book = Book { language: book.language.clone(), images, chapters: vec![Chapter { title: None, blocks }], ..Book::default() };
+    let note_book = Book {
+        language: book.language.clone(),
+        images,
+        math: book.math.clone(),
+        chapters: vec![Chapter { title: None, blocks }],
+        ..Book::default()
+    };
     ChapterLayout { viewable: false, ..paginate_from(&note_book, 0, style, typesetter, 0.0) }
 }
 
@@ -570,6 +601,7 @@ fn push_line(out: &mut PageContent, line: &super::Line, x: f32, y: f32) {
     out.runs.extend(line.runs.iter().map(|r| r.offset(x, y)));
     out.areas.extend(line.areas.iter().map(|a| Area { rect: a.rect.offset(x, y), target: a.target.clone() }));
     out.strokes.extend(line.strokes.iter().map(|s| Stroke { rect: s.rect.offset(x, y), ..*s }));
+    out.paths.extend(line.paths.iter().map(|p| p.offset(x, y)));
 }
 
 /// Paginates a chapter: a port of the Android `Paginator`, which needs only line counts and heights from its layouts.
@@ -632,7 +664,7 @@ fn paginate_from(book: &Book, chapter: usize, style: &PageStyle, typesetter: &mu
         if block.keep_with_next && y > 0.0 {
             // A heading stays with two lines of what follows (or with the first row of a table).
             let next = blocks.get(index + 1).map_or(0.0, |n| match &n.content {
-                Content::Text(t) => t.lines.len().min(2) as f32 * t.line_height,
+                Content::Text(t) => t.top(t.lines.len().min(2)),
                 _ => n.height(),
             });
             if y + block.height() + lh + next > page_height {
@@ -643,7 +675,7 @@ fn paginate_from(book: &Book, chapter: usize, style: &PageStyle, typesetter: &mu
         let mut line = 0;
         while line < lines {
             let mut end = line;
-            while end < lines && (end - line + 1) as f32 * text.line_height <= page_height - y {
+            while end < lines && text.span(line, end + 1) <= page_height - y {
                 end += 1;
             }
             if end < lines {
@@ -660,7 +692,7 @@ fn paginate_from(book: &Book, chapter: usize, style: &PageStyle, typesetter: &mu
                 }
             }
             slices.push(Slice { layout: index, block: laid[index].0, line_start: line, line_end: end, top: y });
-            y += (end - line) as f32 * text.line_height;
+            y += text.span(line, end);
             line = end;
             if line < lines {
                 new_page(&mut slices, &mut y, &mut prev);

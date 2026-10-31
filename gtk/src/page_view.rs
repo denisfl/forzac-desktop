@@ -1833,6 +1833,26 @@ fn content_node(
             shape => task_box(&snapshot, stroke.rect, &ink, shape == Shape::Checked),
         }
     }
+    // A formula's polylines: root signs and stretched fences.
+    for line in &content.paths {
+        let ink = match line.ink {
+            Ink::Text => rgba(text),
+            Ink::Link => rgba(link),
+            Ink::Secondary => secondary,
+        };
+        let builder = gsk::PathBuilder::new();
+        for (i, p) in line.points.iter().enumerate() {
+            if i == 0 {
+                builder.move_to(p[0], p[1]);
+            } else {
+                builder.line_to(p[0], p[1]);
+            }
+        }
+        let stroke = gsk::Stroke::new(line.width);
+        stroke.set_line_join(gsk::LineJoin::Round);
+        stroke.set_line_cap(gsk::LineCap::Round);
+        snapshot.append_stroke(&builder.to_path(), &stroke, &ink);
+    }
     for run in &content.runs {
         let ink = match run.ink {
             Ink::Text => rgba(text),

@@ -38,6 +38,13 @@ typedef struct {
 } ForzacStroke;             // a line through struck-out text, or a list task's box
 
 typedef struct {
+    const float *points;    // x and y in turn
+    uint32_t count;
+    float width;
+    uint8_t ink;            // 0 text, 1 link, 2 secondary
+} ForzacPath;               // a polyline of a formula: a root sign, a stretched fence
+
+typedef struct {
     uint32_t chapter;
     uint32_t block;
     uint32_t offset;
@@ -62,6 +69,8 @@ typedef struct {
     uint32_t area_count;
     const ForzacStroke *strokes;
     uint32_t stroke_count;
+    const ForzacPath *paths;
+    uint32_t path_count;
 } ForzacPage;
 
 // Indices into the presets; theme -1 follows the system's light or dark.

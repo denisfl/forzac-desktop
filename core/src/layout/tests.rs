@@ -663,3 +663,126 @@ fn small_capitals_of_the_font_or_reduced_capitals() {
     assert_eq!(caps.iter().map(|r| r.glyphs.len()).sum::<usize>(), plain.iter().map(|r| r.glyphs.len()).sum::<usize>());
     assert_ne!(caps[0].glyphs, plain[0].glyphs, "small capital glyphs");
 }
+
+fn style() -> PageStyle {
+    crate::settings::Settings::default().page_style(760.0, 980.0)
+}
+
+/// A book of `blocks` with one formula per key.
+fn math_book(blocks: Vec<Block>, formulas: Vec<(&str, crate::math::MathNode)>) -> Book {
+    let math: HashMap<String, crate::math::Formula> =
+        formulas.into_iter().map(|(k, n)| (k.to_owned(), crate::math::Formula::new(n, false))).collect();
+    Book { math: math.into(), ..book(blocks) }
+}
+
+fn with_formula(before: &str, key: &str, after: &str) -> StyledText {
+    let text = format!("{before}\u{FFFC}{after}");
+    let styles = vec![StyleRange { start: before.len(), end: before.len() + 3, style: Style::Math, target: Some(key.into()) }];
+    StyledText { text, styles }
+}
+
+fn tall_fraction() -> crate::math::MathNode {
+    use crate::math::{MathNode as N, TokenKind::Identifier};
+    let tower = |inner: N| N::Frac { num: inner.into(), den: N::token("b", Identifier).into(), line: true };
+    tower(tower(tower(N::token("a", Identifier))))
+}
+
+fn wide_row() -> crate::math::MathNode {
+    use crate::math::{MathNode as N, TokenKind::Identifier};
+    N::Row((0..200).map(|_| N::token("x", Identifier)).collect())
+}
+
+#[test]
+fn a_line_is_as_tall_as_its_formula_and_the_others_keep_their_height() {
+    let style = style();
+    let filler = TEXT.repeat(2);
+    let text = with_formula(&filler, "f", &filler);
+    let b = math_book(vec![Block::Paragraph { text, kind: Kind::Body }], vec![("f", tall_fraction())]);
+    let mut ts = typesetter(style);
+    let layout = ts.layout(&b.chapters[0].blocks[0], &b).unwrap();
+    let t = text_of(&layout);
+    let heights: Vec<f32> = (0..t.lines.len()).map(|n| t.height_of(n)).collect();
+    let tall = heights.iter().filter(|h| **h > t.line_height + 0.5).count();
+    assert_eq!(tall, 1, "{heights:?}");
+    assert_eq!(heights.iter().filter(|h| (**h - t.line_height).abs() < 0.01).count(), heights.len() - 1, "the others");
+    assert!((t.height() - heights.iter().sum::<f32>()).abs() < 0.01);
+    assert!((t.top(t.lines.len()) - t.height()).abs() < 0.01);
+}
+
+#[test]
+fn a_paragraph_without_formulas_keeps_one_line_height() {
+    let b = book(vec![paragraph(TEXT)]);
+    let mut ts = typesetter(style());
+    let layout = ts.layout(&b.chapters[0].blocks[0], &b).unwrap();
+    assert!(text_of(&layout).tops.is_empty());
+}
+
+#[test]
+fn a_formula_counts_as_one_word_on_its_line_and_draws_its_parts() {
+    let text = with_formula("a ", "f", " b");
+    let b = math_book(vec![Block::Paragraph { text, kind: Kind::Body }], vec![("f", tall_fraction())]);
+    let style = style();
+    let mut ts = typesetter(style);
+    let l = paginate(&b, 0, &style, &mut ts);
+    let p = l.render_body(0, &style);
+    assert!(!p.strokes.is_empty(), "a fraction's rules");
+    assert!(p.runs.iter().all(|r| r.glyphs.iter().all(|g| *g != 0)), "no missing glyph");
+    let words = l.words(0, &style, &b);
+    assert_eq!(words.len(), 3, "{words:?}");
+    assert_eq!(words[1].end.offset - words[1].start.offset, 3, "the character");
+}
+
+#[test]
+fn a_wide_formula_shrinks_and_opens_in_the_view_and_one_that_fits_does_not() {
+    use crate::math::{MathNode as N, TokenKind::Identifier};
+    let style = style();
+    let blocks = vec![
+        Block::Paragraph { text: with_formula("w ", "wide", ""), kind: Kind::Body },
+        Block::Paragraph { text: with_formula("n ", "narrow", ""), kind: Kind::Body },
+        Block::Formula { key: "wide".into() },
+    ];
+    let b = math_book(blocks, vec![("wide", wide_row()), ("narrow", N::token("x", Identifier))]);
+    let mut ts = typesetter(style);
+    let l = paginate(&b, 0, &style, &mut ts);
+    let content = l.render_body(0, &style);
+    let tables: Vec<Locator> =
+        content.areas.iter().filter_map(|a| if let Target::Table(at) = a.target { Some(at) } else { None }).collect();
+    assert_eq!(tables, [Locator { chapter: 0, block: 0, offset: 2 }, Locator { chapter: 0, block: 2, offset: 0 }]);
+    for at in tables {
+        let view = layout_table(&b, at, &mut ts).expect("the view");
+        assert!(view.width > style.text_width(), "at the book's size");
+        assert!(view.height > 0.0 && !view.content.runs.is_empty());
+    }
+}
+
+#[test]
+fn a_stretched_fence_is_a_polyline_on_the_page() {
+    use crate::math::{MathNode as N, TokenKind::Number};
+    let matrix = N::Matrix { rows: (0..3).map(|_| vec![N::token("1", Number); 3]).collect(), align: vec![], lines: vec![] };
+    let fenced = N::Fenced { open: "(".into(), close: ")".into(), content: matrix.into() };
+    let b = math_book(vec![Block::Formula { key: "m".into() }], vec![("m", fenced)]);
+    let style = style();
+    let mut ts = typesetter(style);
+    let p = paginate(&b, 0, &style, &mut ts).render_body(0, &style);
+    assert_eq!(p.paths.len(), 2);
+    let inside = |x: f32| x >= 0.0 && x <= style.width;
+    assert!(p.paths.iter().all(|l| l.points.iter().all(|q| inside(q[0]))), "on the page: {:?}", p.paths);
+}
+
+#[test]
+fn formulas_read_as_their_linear_text() {
+    use crate::math::{
+        MathNode as N,
+        TokenKind::{Identifier, Number},
+    };
+    let scripted = N::Scripts { base: N::token("a", Identifier).into(), sub: Some(N::token("11", Number).into()), sup: None };
+    let text = with_formula("the ", "f", " element");
+    let b = math_book(vec![Block::Paragraph { text, kind: Kind::Body }, Block::Formula { key: "f".into() }], vec![("f", scripted)]);
+    let end = Locator { chapter: 1, ..Locator::default() };
+    assert_eq!(b.text(Locator::default(), end, usize::MAX), "the a_11 element\na_11");
+    let hits = crate::search::search(&b, "element");
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].snippet.contains("a_11"), "{}", hits[0].snippet);
+    assert_eq!(hits[0].start.offset, "the \u{FFFC} ".len(), "offsets count the character");
+    assert!(crate::search::search(&b, "a_11").is_empty(), "not searched inside");
+}

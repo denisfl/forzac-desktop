@@ -598,3 +598,16 @@ fn svg_images_and_an_svg_cover() {
         forzac_close(doc);
     }
 }
+
+#[test]
+fn a_formulas_polylines_cross_the_abi() {
+    use crate::layout::{Ink, Path};
+    let content =
+        PageContent { paths: vec![Path { points: vec![[1.0, 2.0], [3.0, 4.0]], width: 1.5, ink: Ink::Link }], ..PageContent::default() };
+    let mut published = Published::default();
+    let page = published.publish(&content, &Book::default());
+    assert_eq!(page.path_count, 1);
+    let path = unsafe { &*page.paths };
+    assert_eq!((path.count, path.width, path.ink), (2, 1.5, Ink::Link as u8));
+    assert_eq!(unsafe { std::slice::from_raw_parts(path.points, 4) }, [1.0, 2.0, 3.0, 4.0]);
+}

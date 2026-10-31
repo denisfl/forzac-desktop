@@ -248,6 +248,16 @@ func drawPage(_ page: ForzacPage, in ctx: CGContext, height h: CGFloat, palette:
             drawTaskBox(ctx, flipped(stroke.rect), ink, done: stroke.shape == 2)
         }
     }
+    // A formula's polylines: root signs and stretched fences.
+    for i in 0..<Int(page.path_count) {
+        let path = page.paths[i]
+        ctx.setStrokeColor(path.ink == 1 ? color(palette.link) : color(palette.ink, alpha: path.ink == 2 ? secondaryAlpha : 1))
+        ctx.setLineWidth(CGFloat(path.width))
+        ctx.setLineJoin(.round)
+        ctx.setLineCap(.round)
+        ctx.addLines(between: (0..<Int(path.count)).map { CGPoint(x: CGFloat(path.points[2 * $0]), y: h - CGFloat(path.points[2 * $0 + 1])) })
+        ctx.strokePath()
+    }
     for r in 0..<Int(page.run_count) {
         let run = page.runs[r]
         guard let font = fonts.font(run.font, size: run.size) else { continue }

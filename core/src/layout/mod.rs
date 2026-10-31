@@ -5,6 +5,7 @@
 //! headings without it, fixed line height for vertical rhythm, no lone line at the top or bottom of a page, a heading
 //! kept with the next block, the chapter start lowered by two lines, images and table rows never split.
 
+mod math;
 mod page;
 mod pages;
 mod table;
@@ -12,6 +13,7 @@ mod table;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+pub(crate) use math::is_accent_mark;
 pub use page::{ChapterLayout, EndLines, Page, PageContent, PageImage, Rule, Word, end_page, layout_note, layout_preview, paginate};
 pub use pages::{BookPages, CountControl};
 pub use table::{TableView, layout_table};
@@ -19,7 +21,9 @@ pub use table::{TableView, layout_table};
 use crate::fonts::{self, Face, Family, FontId, Glyph, Shaper};
 use crate::hyphen::Hyphenator;
 use crate::knuth_plass::{self, Break, INFINITY, Item};
+use crate::math::Formula;
 use crate::model::{Block, Book, Kind, Locator, Style, StyledText};
+use math::{MathBox, MathItem, MathLayout, MathMetrics};
 
 /// Page geometry and text parameters, in logical pixels.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -119,7 +123,7 @@ pub enum Target {
     Link(String),
     /// An image at least a third of the column wide, by its id in `Book::images`: it opens in the view.
     Image(String),
-    /// A table, by its first row: it opens in the view (`layout_table`).
+    /// A table, by its first row, or a formula shrunk to the column, by its place: it opens in the view (`layout_table`).
     Table(Locator),
     /// A highlight, by its start. The core never sets it: the shells add their highlights' lines to a page's areas.
     Highlight(Locator),
@@ -188,6 +192,20 @@ pub enum Shape {
     Checked = 2,
 }
 
+/// A polyline of a formula, its points in page coordinates: a root sign, a stretched fence.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Path {
+    pub points: Vec<[f32; 2]>,
+    pub width: f32,
+    pub ink: Ink,
+}
+
+impl Path {
+    fn offset(&self, dx: f32, dy: f32) -> Path {
+        Path { points: self.points.iter().map(|p| [p[0] + dx, p[1] + dy]).collect(), ..*self }
+    }
+}
+
 /// A note marker or a link on the page.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Area {
@@ -208,13 +226,19 @@ enum Group {
 
 /// One line: its runs and active areas relative to the line's left edge and baseline.
 #[derive(Debug, Clone, Default)]
-struct Line {
+pub(super) struct Line {
     runs: Vec<GlyphRun>,
     areas: Vec<Area>,
     /// Lines through struck-out text.
     strokes: Vec<Stroke>,
     /// Each glyph's text offset (bytes into the block), x and advance: where a range of the text is, for marks.
     glyphs: Vec<(u32, f32, f32)>,
+    /// A formula's polylines.
+    paths: Vec<Path>,
+    /// How far the line's formulas reach above and below the baseline.
+    math: Option<(f32, f32)>,
+    /// Formulas shrunk to the column, which open in the view: their text offset and rectangle.
+    shrunk: Vec<(usize, Rect)>,
 }
 
 /// Lines of a paragraph set at one width.
@@ -224,11 +248,60 @@ struct TextLayout {
     starts: Vec<usize>,
     line_height: f32,
     baseline: f32,
+    /// Lines taller than the others (formulas): each line's top and the bottom of the last, and each baseline. Empty in
+    /// a paragraph without formulas, whose lines are all `line_height` high.
+    tops: Vec<f32>,
+    baselines: Vec<f32>,
 }
 
 impl TextLayout {
     fn height(&self) -> f32 {
-        self.lines.len() as f32 * self.line_height
+        self.top(self.lines.len())
+    }
+
+    /// The top of line `n`, below the paragraph's top; the bottom of the last for `n` past it.
+    fn top(&self, n: usize) -> f32 {
+        if self.tops.is_empty() { n as f32 * self.line_height } else { self.tops[n] }
+    }
+
+    /// The height of lines `[a, b)`.
+    fn span(&self, a: usize, b: usize) -> f32 {
+        if self.tops.is_empty() { (b - a) as f32 * self.line_height } else { self.tops[b] - self.tops[a] }
+    }
+
+    /// The baseline of line `n`, below its top.
+    fn baseline_of(&self, n: usize) -> f32 {
+        if self.baselines.is_empty() { self.baseline } else { self.baselines[n] - self.tops[n] }
+    }
+
+    fn height_of(&self, n: usize) -> f32 {
+        self.span(n, n + 1)
+    }
+
+    /// The first line whose top is at or below `y`; the line count when none is.
+    fn line_from(&self, y: f32) -> usize {
+        if self.tops.is_empty() {
+            ((y / self.line_height).ceil().max(0.0) as usize).min(self.lines.len())
+        } else {
+            self.tops[..self.lines.len()].partition_point(|&top| top < y)
+        }
+    }
+
+    /// Makes room for the lines' formulas, with `pad` above and below.
+    fn fit_formulas(&mut self, pad: f32) {
+        if self.lines.iter().all(|l| l.math.is_none()) {
+            return;
+        }
+        let below = self.line_height - self.baseline;
+        let mut y = 0.0;
+        for line in &self.lines {
+            let (ascent, descent) = line.math.unwrap_or_default();
+            let (up, down) = (self.baseline.max(ascent + pad), below.max(descent + pad));
+            self.tops.push(y);
+            self.baselines.push(y + up);
+            y += up + down;
+        }
+        self.tops.push(y);
     }
 }
 
@@ -247,6 +320,15 @@ enum Content {
         id: String,
         w: f32,
         h: f32,
+    },
+    /// A display formula: its parts from the left edge and the baseline, `baseline` below the block's top; shrunk to the
+    /// column, it opens in the view.
+    Formula {
+        line: Line,
+        w: f32,
+        h: f32,
+        baseline: f32,
+        shrunk: bool,
     },
     /// Row `row` of its table. Rule strengths: 0 none, 1 light between rows, 2 medium under the header, 3 heavy above and
     /// below the table.
@@ -274,14 +356,14 @@ impl BlockLayout {
         match &self.content {
             Content::Text(t) => t.height(),
             Content::Empty => 0.0,
-            Content::Image { h, .. } => *h,
+            Content::Image { h, .. } | Content::Formula { h, .. } => *h,
             Content::Row { height, .. } => *height,
         }
     }
 
     /// Images and table rows are never split between pages.
     fn atomic(&self) -> bool {
-        matches!(self.content, Content::Image { .. } | Content::Row { .. })
+        matches!(self.content, Content::Image { .. } | Content::Row { .. } | Content::Formula { .. })
     }
 
     fn line_count(&self) -> usize {
@@ -323,6 +405,17 @@ struct Piece {
     descent: f32,
     segment: usize,
     glyphs: Arc<[Glyph]>,
+    /// A formula: `glyphs` is one stand-in for its width.
+    formula: Option<Arc<Fitted>>,
+}
+
+/// A formula typeset for a column.
+pub(super) struct Fitted {
+    line: Line,
+    width: f32,
+    ascent: f32,
+    descent: f32,
+    shrunk: bool,
 }
 
 /// A run of one style: face (or the monospace face), size, raise, ink, target and strikethrough.
@@ -339,6 +432,8 @@ struct Segment {
     target: Option<Target>,
     /// Set with the font's own small capitals (`smcp`).
     small_caps: bool,
+    /// A formula's key in `Book::math`.
+    formula: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -379,6 +474,11 @@ pub struct Typesetter {
     faces: [FontId; 4],
     /// The monospace font for code; the regular face when it cannot be read.
     mono: FontId,
+    /// The book's formulas, as of the last block; typeset ones by key, size, width and whether they are display ones.
+    formulas: Arc<HashMap<String, Formula>>,
+    fitted: HashMap<(String, u32, u32, bool), Arc<Fitted>>,
+    /// The width formulas of the paragraph being set shrink to.
+    formula_width: f32,
 }
 
 impl Typesetter {
@@ -386,7 +486,18 @@ impl Typesetter {
         let line_height = (style.text_size * style.line_height).floor();
         let faces = Face::ALL.map(|f| style.family.face(f));
         let mono = fonts::mono().unwrap_or(faces[0]);
-        Typesetter { style, shaper: Shaper::new(), hyphenator, tables: HashMap::new(), line_height, faces, mono }
+        Typesetter {
+            style,
+            shaper: Shaper::new(),
+            hyphenator,
+            tables: HashMap::new(),
+            line_height,
+            faces,
+            mono,
+            formulas: Arc::default(),
+            fitted: HashMap::new(),
+            formula_width: 0.0,
+        }
     }
 
     /// The font of `face` in the style's family.
@@ -431,6 +542,7 @@ impl Typesetter {
 
     /// `None` for a block that takes no room: an image that is missing or cannot be read.
     pub fn layout(&mut self, block: &Block, book: &Book) -> Option<BlockLayout> {
+        self.use_formulas(book);
         let w = self.style.text_width();
         let lh = self.line_height;
         let half = lh / 2.0;
@@ -447,6 +559,7 @@ impl Typesetter {
             }),
             Block::Image { id } => self.image(id, book),
             Block::TableRow { table, row } => Some(self.table_row(table, *row)),
+            Block::Formula { key } => self.formula_block(key),
             Block::Heading { text, level } => Some(self.make(
                 text,
                 Spec {
@@ -579,6 +692,7 @@ impl Typesetter {
     /// break (`br`) start at the edge, as in HTML.
     fn text(&mut self, text: &StyledText, spec: &Spec) -> TextLayout {
         let size = self.style.text_size * spec.scale;
+        self.formula_width = spec.width;
         let mut segments = segments(text, size, spec.italic, spec.bold, spec.mono);
         let shown = self.small_caps(&text.text, &mut segments);
         let shown = shown.as_deref().unwrap_or(&text.text);
@@ -598,7 +712,117 @@ impl Typesetter {
         let (asc, desc) = self.shaper.line_metrics(face);
         let units = size / self.shaper.units_per_em(face);
         let baseline = (line_height - (asc - desc) * units) / 2.0 + asc * units;
-        TextLayout { lines, starts, line_height, baseline }
+        let mut layout = TextLayout { lines, starts, line_height, baseline, tops: Vec::new(), baselines: Vec::new() };
+        layout.fit_formulas(size * FORMULA_PAD);
+        layout
+    }
+
+    /// The formulas of `book` from now on.
+    pub(super) fn use_formulas(&mut self, book: &Book) {
+        if !Arc::ptr_eq(&self.formulas, &book.math) {
+            self.formulas = book.math.clone();
+            self.fitted.clear();
+        }
+    }
+
+    /// Formula `key` at `size`, shrunk to `width` when wider, though not below [`MIN_FORMULA_SCALE`].
+    fn fitted(&mut self, key: &str, size: f32, width: f32, display: bool) -> Option<Arc<Fitted>> {
+        let cache = (key.to_owned(), size.to_bits(), width.to_bits(), display);
+        if let Some(f) = self.fitted.get(&cache) {
+            return Some(f.clone());
+        }
+        let formulas = self.formulas.clone();
+        let node = &formulas.get(key)?.node;
+        let mut set = MathLayout::new(self, size, display).layout(node);
+        let shrunk = set.width > width && set.width > 0.0;
+        if shrunk {
+            let smaller = size * MIN_FORMULA_SCALE.max(width / set.width * 0.98);
+            set = MathLayout::new(self, smaller, display).layout(node);
+        }
+        let fitted = Arc::new(self.formula_line(&set, shrunk));
+        self.fitted.insert(cache, fitted.clone());
+        Some(fitted)
+    }
+
+    /// A typeset formula as what a page draws.
+    fn formula_line(&mut self, set: &MathBox, shrunk: bool) -> Fitted {
+        let mut line = Line { math: Some((set.ascent, set.descent)), ..Line::default() };
+        for item in &set.items {
+            match item {
+                MathItem::Text { text, x, y, size, italic, bold } => {
+                    let mut at = *x;
+                    for (font, glyphs, scale) in self.formula_runs(text, *size, *italic, *bold) {
+                        for g in glyphs.iter() {
+                            let position = [at + g.x_offset as f32 * scale, y - g.y_offset as f32 * scale];
+                            push_glyph(&mut line.runs, font, *size, Ink::Text, g.id, position);
+                            at += g.advance as f32 * scale;
+                        }
+                    }
+                }
+                MathItem::Rule { x, y, w, h } => {
+                    line.strokes.push(Stroke { rect: Rect { x: *x, y: *y, w: *w, h: *h }, ink: Ink::Text, shape: Shape::Fill })
+                }
+                MathItem::Path { points, width } => line.paths.push(Path { points: points.clone(), width: *width, ink: Ink::Text }),
+            }
+        }
+        Fitted { line, width: set.width, ascent: set.ascent, descent: set.descent, shrunk }
+    }
+
+    /// A token of a formula shaped in the book's face, the math face for what it lacks, each with its pixels per font unit.
+    fn formula_runs(&mut self, text: &str, size: f32, italic: bool, bold: bool) -> Vec<(FontId, Arc<[Glyph]>, f32)> {
+        let base = self.font_of(Face::of(italic, bold));
+        let mut runs = Vec::new();
+        let (mut start, mut run_font) = (0, None);
+        for (at, ch) in text.char_indices().chain([(text.len(), '\0')]) {
+            let font = (at < text.len()).then(|| fonts::math_font_for(base, ch));
+            if font != run_font {
+                if let Some(f) = run_font.filter(|_| at > start) {
+                    let scale = size / self.shaper.units_per_em(f);
+                    runs.push((f, self.shaper.shape(f, &text[start..at]), scale));
+                }
+                (start, run_font) = (at, font);
+            }
+        }
+        runs
+    }
+
+    /// A display formula: centred, half a line around it, never split.
+    fn formula_block(&mut self, key: &str) -> Option<BlockLayout> {
+        let (width, half) = (self.style.text_width(), self.line_height / 2.0);
+        let f = self.fitted(key, self.style.text_size, width, true)?;
+        let pad = self.line_height * 0.25;
+        Some(BlockLayout {
+            content: Content::Formula {
+                line: f.line.clone(),
+                w: f.width,
+                h: f.ascent + f.descent + 2.0 * pad,
+                baseline: pad + f.ascent,
+                shrunk: f.shrunk,
+            },
+            x: ((width - f.width) / 2.0).max(0.0),
+            group: Group::Alone,
+            space_before: half,
+            space_after: half,
+            keep_with_next: false,
+        })
+    }
+
+    /// Formula `key` set at the typesetter's text size for the view: not shrunk.
+    pub(super) fn formula_view(&mut self, key: &str, display: bool) -> Option<(Line, f32, f32, f32)> {
+        let f = self.fitted(key, self.style.text_size, f32::MAX, display)?;
+        Some((f.line.clone(), f.width, f.ascent, f.descent))
+    }
+
+    /// The widest formula of `text` and the width of them all, at `size`: for a table's columns.
+    pub(super) fn formula_widths(&mut self, text: &StyledText, size: f32) -> (f32, f32) {
+        let (mut widest, mut all) = (0f32, 0.0);
+        for key in text.styles.iter().filter(|s| s.style == Style::Math).filter_map(|s| s.target.as_deref()) {
+            if let Some(f) = self.fitted(key, size, f32::MAX, false) {
+                widest = widest.max(f.width);
+                all += f.width;
+            }
+        }
+        (widest, all)
     }
 
     /// Small capitals of a font without its own (`smcp`): lower-case letters set as capitals at
@@ -715,6 +939,26 @@ impl Typesetter {
     fn word_pieces(&mut self, text: &str, segments: &[Segment], (start, end): (usize, usize), pieces: &mut Vec<Piece>) {
         for (index, seg) in segments.iter().enumerate().filter(|(_, s)| s.start < end && s.end > start) {
             let (a, b) = (seg.start.max(start), seg.end.min(end));
+            if let Some(key) = &seg.formula {
+                if let Some(f) = self.fitted(key, seg.size, self.formula_width, false) {
+                    // One stand-in glyph for the formula's width, on a fine scale, so that the line sees a character.
+                    let stand_in = Glyph { id: 1, advance: (f.width * 64.0).round() as i32, x_offset: 0, y_offset: 0, cluster: 0 };
+                    let glyphs: Arc<[Glyph]> = Arc::from([stand_in]);
+                    pieces.push(Piece {
+                        start: a,
+                        font: self.segment_font(seg),
+                        size: seg.size,
+                        rise: 0.0,
+                        scale: 1.0 / 64.0,
+                        ascent: f.ascent,
+                        descent: f.descent,
+                        segment: index,
+                        glyphs,
+                        formula: Some(f),
+                    });
+                }
+                continue;
+            }
             let base = self.segment_font(seg);
             // Nearly always the book face has every character: no glyph 0 (.notdef), and the shape is cached.
             let whole = self.piece(text, a, b, base, seg, index);
@@ -742,7 +986,18 @@ impl Typesetter {
         let glyphs = self.shaper.shape_as(font, &text[a..b], seg.small_caps);
         let scale = seg.size / self.shaper.units_per_em(font);
         let (asc, desc) = self.shaper.line_metrics(font);
-        Piece { start: a, font, size: seg.size, rise: seg.rise, scale, ascent: asc * scale, descent: -desc * scale, segment, glyphs }
+        Piece {
+            start: a,
+            font,
+            size: seg.size,
+            rise: seg.rise,
+            scale,
+            ascent: asc * scale,
+            descent: -desc * scale,
+            segment,
+            glyphs,
+            formula: None,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -892,6 +1147,8 @@ impl Typesetter {
                 line.runs.iter_mut().flat_map(|r| r.positions.iter_mut()).for_each(|p| p[0] += shift);
                 line.areas.iter_mut().for_each(|a| a.rect.x += shift);
                 line.strokes.iter_mut().for_each(|s| s.rect.x += shift);
+                line.paths.iter_mut().flat_map(|p| p.points.iter_mut()).for_each(|p| p[0] += shift);
+                line.shrunk.iter_mut().for_each(|s| s.1.x += shift);
             }
             lines.push(line);
             starts.push(line_start.unwrap_or(prev_end));
@@ -934,6 +1191,31 @@ fn capital_of(c: char) -> Option<char> {
     match (upper.next(), upper.next()) {
         (Some(u), None) if u.len_utf8() == c.len_utf8() => Some(u),
         _ => None,
+    }
+}
+
+/// Room above and below a formula on its line, in em.
+const FORMULA_PAD: f32 = 0.15;
+/// The smallest a formula wider than the column shrinks to, as on Android: smaller, it could not be read.
+const MIN_FORMULA_SCALE: f32 = 0.55;
+
+/// The sizes of a token of a formula, from its glyphs.
+impl MathMetrics for Typesetter {
+    fn measure(&mut self, text: &str, size: f32, italic: bool, bold: bool) -> (f32, f32, f32) {
+        let (mut width, mut ascent, mut descent) = (0.0, 0f32, 0f32);
+        for (font, glyphs, scale) in self.formula_runs(text, size, italic, bold) {
+            for g in glyphs.iter() {
+                width += g.advance as f32 * scale;
+                let (up, down) = match self.shaper.glyph_heights(font, g.id) {
+                    Some(heights) => heights,
+                    None if g.id == 0 || text.trim().is_empty() => (0.0, 0.0),
+                    None => self.shaper.line_metrics(font),
+                };
+                ascent = ascent.max(up * scale);
+                descent = descent.max(-down * scale);
+            }
+        }
+        (width, ascent, descent)
     }
 }
 
@@ -1044,6 +1326,7 @@ fn segments(text: &StyledText, size: f32, italic: bool, bold: bool, mono: bool) 
                 ink: if link.is_some() { Ink::Link } else { Ink::Text },
                 target: note.or(link),
                 small_caps: has(Style::SmallCaps),
+                formula: range(Style::Math).and_then(|r| r.target.clone()),
             }
         })
         .collect();
@@ -1059,6 +1342,7 @@ fn segments(text: &StyledText, size: f32, italic: bool, bold: bool, mono: bool) 
             ink: Ink::Text,
             target: None,
             small_caps: false,
+            formula: None,
         });
     }
     out
@@ -1078,6 +1362,13 @@ fn span_width(pieces: &[Piece], a: usize, b: usize) -> f32 {
 fn draw(line: &mut Line, pieces: &[Piece], segments: &[Segment], a: usize, b: usize, mut x: f32) {
     for p in pieces {
         let seg = &segments[p.segment];
+        if let Some(f) = &p.formula {
+            if (a..b).contains(&p.start) {
+                draw_formula(line, f, seg, p.start, x);
+                x += f.width;
+            }
+            continue;
+        }
         for g in p.glyphs.iter() {
             if !(a..b).contains(&(p.start + g.cluster as usize)) {
                 continue;
@@ -1118,6 +1409,22 @@ fn draw(line: &mut Line, pieces: &[Piece], segments: &[Segment], a: usize, b: us
             }
             x += advance;
         }
+    }
+}
+
+/// A formula at `x`, in its text's ink.
+fn draw_formula(line: &mut Line, f: &Fitted, seg: &Segment, at: usize, x: f32) {
+    line.runs.extend(f.line.runs.iter().map(|r| GlyphRun { ink: seg.ink, ..r.offset(x, 0.0) }));
+    line.strokes.extend(f.line.strokes.iter().map(|s| Stroke { rect: s.rect.offset(x, 0.0), ink: seg.ink, ..*s }));
+    line.paths.extend(f.line.paths.iter().map(|p| Path { ink: seg.ink, ..p.offset(x, 0.0) }));
+    line.glyphs.push((at as u32, x, f.width));
+    let (ascent, descent) = line.math.unwrap_or_default();
+    line.math = Some((ascent.max(f.ascent), descent.max(f.descent)));
+    let rect = Rect { x, y: -f.ascent, w: f.width, h: f.ascent + f.descent };
+    if let Some(target) = &seg.target {
+        line.areas.push(Area { rect, target: target.clone() });
+    } else if f.shrunk {
+        line.shrunk.push((at, rect));
     }
 }
 

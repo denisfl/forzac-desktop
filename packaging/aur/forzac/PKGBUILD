@@ -41,7 +41,7 @@ package() {
   install -Dm644 data/app.truenrth.forzac.desktop -t "$pkgdir/usr/share/applications/"
   install -Dm644 data/forzac-mime.xml "$pkgdir/usr/share/mime/packages/forzac.xml"
   install -Dm644 LICENSE assets/hyph/hyph-ru.lic.txt assets/hyph/hyph-en-us.lic.txt -t "$pkgdir/usr/share/licenses/$pkgname/"
-  for f in pt-serif pt-sans literata source-serif pt-mono golos-text; do
+  for f in pt-serif pt-sans literata source-serif pt-mono golos-text stix-two-math; do
     install -Dm644 "assets/fonts/$f/OFL.txt" "$pkgdir/usr/share/licenses/$pkgname/$f-OFL.txt"
   done
 }

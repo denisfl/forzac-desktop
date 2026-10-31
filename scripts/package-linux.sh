@@ -16,7 +16,7 @@ install -Dm644 "$root/data/app.truenrth.forzac.desktop" -t "$stage/share/applica
 install -Dm644 "$root/data/forzac-mime.xml" "$stage/share/mime/packages/forzac.xml"
 mkdir -p "$stage/share/icons" && cp -r "$root/data/icons/hicolor" "$stage/share/icons/"
 install -Dm644 "$root/LICENSE" "$root/assets/hyph/hyph-ru.lic.txt" "$root/assets/hyph/hyph-en-us.lic.txt" -t "$stage/share/licenses/forzac/"
-for f in pt-serif pt-sans literata source-serif pt-mono golos-text; do
+for f in pt-serif pt-sans literata source-serif pt-mono golos-text stix-two-math; do
     install -Dm644 "$root/assets/fonts/$f/OFL.txt" "$stage/share/licenses/forzac/$f-OFL.txt"
 done
 tar -C "$(dirname "$stage")" -czf "$PWD/$name.tar.gz" "$name"

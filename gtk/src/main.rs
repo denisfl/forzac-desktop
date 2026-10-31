@@ -710,9 +710,10 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
         VIEWS.with(|v| v.borrow_mut().push(view.downgrade()));
     }
 
-    if let Some(events) = options.mouse.clone() {
-        let menu = menu.clone();
-        view.connect_first_frame(move |view| {
+    // A view has one first-frame slot: the measurements below take these events along.
+    let play_mouse = {
+        let (events, menu) = (options.mouse.clone().unwrap_or_default(), menu.clone());
+        move |view: &PageView| {
             for (i, e) in events.split(';').map(|e| e.split_whitespace().collect::<Vec<_>>()).filter(|e| e.len() >= 3).enumerate() {
                 let (view, kind, n) = (view.clone(), e[0].to_owned(), e.get(3).and_then(|n| n.parse().ok()).unwrap_or(1));
                 let (x, y) = (e[1].parse().unwrap_or(0.0), e[2].parse().unwrap_or(0.0));
@@ -726,7 +727,10 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
                     }
                 });
             }
-        });
+        }
+    };
+    if options.png.is_none() {
+        view.connect_first_frame(play_mouse.clone());
     }
     if options.measure || options.png.is_some() || options.turns > 0 || options.scrolls > 0 || options.toggles > 0 || options.strokes > 0 {
         let options = options.clone();
@@ -746,10 +750,14 @@ fn open_window(app: &gtk::Application, path: &Path, options: &Options, store: &S
             if options.page > 0 {
                 view.go_to_page(options.page);
             }
-            if let Some(png) = options.png.clone().filter(|_| std::env::args().any(|a| a == "--show-help" || a == "--show-menu")) {
-                // The whole window once the help has faded in.
+            play_mouse(view);
+            if let Some(png) =
+                options.png.clone().filter(|_| std::env::args().any(|a| a == "--show-help" || a == "--show-menu" || a == "--mouse"))
+            {
+                // The whole window once the help has faded in or the events have played.
                 let window = window.clone();
-                glib::timeout_add_local_once(Duration::from_millis(400), move || {
+                let wait = if options.mouse.is_some() { 1500 } else { 400 };
+                glib::timeout_add_local_once(Duration::from_millis(wait), move || {
                     save_window_png(&window, &png);
                     window.close();
                 });

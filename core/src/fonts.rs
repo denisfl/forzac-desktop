@@ -145,6 +145,25 @@ pub fn mono() -> Option<FontId> {
     *MONO.get_or_init(|| register_instance(&assets()?.join("fonts/pt-mono/Regular.ttf"), 0, None, Some(Face::Regular)))
 }
 
+static MATH: OnceLock<Option<FontId>> = OnceLock::new();
+
+/// The math face (STIX Two Math from the assets), inside formulas only; `None` when its file cannot be read.
+pub fn math() -> Option<FontId> {
+    *MATH.get_or_init(|| register_instance(&assets()?.join("fonts/stix-two-math/STIXTwoMath-Regular.ttf"), 0, None, None))
+}
+
+/// The font to draw `ch` with inside a formula set in `base`: `base` when it has the character, else the math face,
+/// else a fallback font.
+pub fn math_font_for(base: FontId, ch: char) -> FontId {
+    if covers(font(base), ch) || ch.is_control() {
+        return base;
+    }
+    match math().filter(|&m| covers(font(m), ch)) {
+        Some(m) => m,
+        None => font_for(base, ch),
+    }
+}
+
 static ASSETS: OnceLock<PathBuf> = OnceLock::new();
 
 /// Where the bundled assets are (`fonts/<family>/…`); set once by the shell before typesetting.
@@ -271,7 +290,15 @@ pub fn font_for(base: FontId, ch: char) -> FontId {
     // Already registered fallback fonts first, then the platform; the lock is not held while the provider runs.
     let known = {
         let reg = registry().lock().unwrap();
-        reg.entries.iter().enumerate().skip(Face::ALL.len()).find(|(_, e)| covers(e.font, ch)).map(|(i, _)| FontId(i as u16))
+        let math = MATH.get().copied().flatten();
+        let other = |i: &usize| math != Some(FontId(*i as u16));
+        reg.entries
+            .iter()
+            .enumerate()
+            .skip(Face::ALL.len())
+            .filter(|(i, _)| other(i))
+            .find(|(_, e)| covers(e.font, ch))
+            .map(|(i, _)| FontId(i as u16))
     };
     let found = known.or_else(|| {
         let (path, index) = provider.and_then(|p| p(ch))?;
@@ -388,6 +415,15 @@ impl Shaper {
         let m = self.font(id).metrics();
         let line = if m.use_typo_metrics { m.typo_line.or(m.hhea_line) } else { m.hhea_line.or(m.typo_line) };
         line.map(|l| (l.ascender.to_f32(), l.descender.to_f32())).unwrap_or((800.0, -200.0))
+    }
+
+    /// How far glyph `glyph` of font `id` reaches above and below the baseline (y up), in font units; `None` without an
+    /// outline to read (a space, a font of other outlines).
+    pub fn glyph_heights(&mut self, id: FontId, glyph: u32) -> Option<(f32, f32)> {
+        let tables = self.font(id).tables();
+        let (loca, glyf) = (tables.loca(None).ok()?, tables.glyf().ok()?);
+        let outline = loca.get_glyf(read_fonts::types::GlyphId::new(glyph), &glyf).ok()??;
+        Some((outline.y_max() as f32, outline.y_min() as f32))
     }
 
     /// Whether font `id` has real small capitals (OpenType `smcp`): Literata has them, Source Serif in its roman only.

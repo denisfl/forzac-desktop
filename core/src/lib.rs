@@ -18,6 +18,7 @@ pub mod layout;
 pub mod library;
 pub mod log;
 mod markdown;
+pub mod math;
 pub mod model;
 pub mod quotes;
 pub mod search;

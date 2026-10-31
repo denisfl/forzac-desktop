@@ -147,7 +147,10 @@ impl Writer<'_> {
                     closing.push(close);
                 }
             }
-            self.text(&t.text[a..b]);
+            match active.iter().find(|s| s.style == Style::Math).and_then(|s| self.book.math.get(s.target.as_deref()?)) {
+                Some(formula) => self.text(&formula.text),
+                None => self.text(&t.text[a..b]),
+            }
             for close in closing.into_iter().rev() {
                 self.out.push_str(close);
             }
@@ -211,6 +214,13 @@ impl Writer<'_> {
                 }
             },
             Block::EmptyLine => self.out.push_str("<p height=\"1em\" width=\"0pt\"> </p>"),
+            Block::Formula { key } => {
+                if let Some(formula) = self.book.math.get(key) {
+                    self.out.push_str("<p height=\"1em\" width=\"0pt\" align=\"center\">");
+                    self.text(&formula.text);
+                    self.out.push_str("</p>");
+                }
+            }
             Block::Image { id } => {
                 if let Some(n) = self.image(id) {
                     let _ = write!(
