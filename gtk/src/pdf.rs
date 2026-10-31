@@ -247,6 +247,10 @@ impl Shown {
 
 /// Draws a line under the page's links into its pixels: PDFs often leave links unmarked.
 fn underline_links(page: &PdfPage, part: &Part, bytes: &mut [u8], stride: i32) {
+    // A page of links, such as the contents, is a list already.
+    if page.links().iter().count() >= 8 {
+        return;
+    }
     let Some(shown) = Shown::of(page) else { return };
     let px = |f: f32, full: i32, origin: i32, size: i32| ((f * full as f32).round() as i32 - origin).clamp(0, size);
     for link in page.links().iter() {

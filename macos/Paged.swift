@@ -53,7 +53,10 @@ private final class PdfSource: PageSource {
         // A point of the window's at 1×, whatever the zoom being drawn.
         let stroke = sizes[i].width / max(size.width, 1), shown = page.transform(for: .cropBox)
         ctx.setFillColor(color(light.link))
-        for link in page.annotations where link.type == "Link" {
+        let links = page.annotations.filter { $0.type == "Link" }
+        // A page of links, such as the contents, is a list already.
+        guard links.count < 8 else { return }
+        for link in links {
             let b = link.bounds
             ctx.fill(CGRect(x: b.minX, y: b.minY - stroke, width: b.width, height: stroke).applying(shown))
         }

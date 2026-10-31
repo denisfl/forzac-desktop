@@ -31,7 +31,7 @@ what was decided then. New since the table, and open:
 | A5 | A new book opens at the text (F3) | At its first page: Standard Ebooks at "Imprint" (inferred from the code, not run) | gap; Android's change is still open |
 | A6 | A PDF's spreads as in a paper book: page 1 alone on the right, then (2, 3), (4, 5) (A spec pdf-reading) | The same; a last page alone on the left | same, fixed 2026-10-30 |
 | A7 | A word found in a PDF is marked on its page (`pdf-text`) | The same, in the book search's bars, until the next click | same, fixed 2026-10-31 |
-| A8 | A thin line under a PDF's links, often unmarked otherwise (`pdf-text`) | The same, in the Light theme's link colour | same, fixed 2026-10-31 |
+| A8 | A thin line under a PDF's links, often unmarked otherwise (`pdf-text`) | The same, in the Light theme's link colour, but none on a page of eight links or more, such as the contents | same, fixed 2026-10-31; the contents page differs by the maintainer's word |
 | A9 | A PDF's author from its metadata (`pdf-pages`) | The same, beside a title that looks like one (Android's rule) | same, fixed 2026-10-31 |
 | A10 | Double tap zooms a PDF 2× at the point (`pdf-original-zoom`) | A double click in the middle third zooms 2× at the point, and back; the menu waits up to 300 ms for the second click | same, fixed 2026-10-31 |
 | A11 | Selection and quotes in a PDF; margin cropping; splitting scanned spreads; screens by lines (`pdf-text`, `pdf-pages`) | None: `pdf` leaves them out of its first version | deferred (F5) |

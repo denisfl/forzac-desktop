@@ -63,7 +63,7 @@ The menu SHALL have the title, a slider by page and "Page N of M". "Aa" MUST NOT
 - **THEN** page 120 shows with the "← Back" pill
 
 ### Requirement: Search and links
-Search SHALL follow the book search's rules: from two characters, ignoring case, ё equal to е, a hyphen at a line's end not interrupting a word. Results SHALL arrive as pages are read, in the background, without delaying turns; a page without text SHALL be skipped, and a PDF with no text at all SHALL say its pages are scanned. Picking a match SHALL close the search, show the screen with it, and mark it on the page in the book search's colour, until the next click on the page. A link SHALL have a thin line in the Light theme's link colour under its area, as PDFs often leave links unmarked, and SHALL NOT have it on the shelf's cover. A link in the file SHALL go to its target with the "← Back" pill, an external one SHALL open in the default application, and a link SHALL win over the click zones.
+Search SHALL follow the book search's rules: from two characters, ignoring case, ё equal to е, a hyphen at a line's end not interrupting a word. Results SHALL arrive as pages are read, in the background, without delaying turns; a page without text SHALL be skipped, and a PDF with no text at all SHALL say its pages are scanned. Picking a match SHALL close the search, show the screen with it, and mark it on the page in the book search's colour, until the next click on the page. A link SHALL have a thin line in the Light theme's link colour under its area, as PDFs often leave links unmarked, except on a page of eight links or more, such as the contents, which is a list already, and on the shelf's cover. A link in the file SHALL go to its target with the "← Back" pill, an external one SHALL open in the default application, and a link SHALL win over the click zones.
 
 #### Scenario: Scan
 - **WHEN** the reader searches in a scan of 1904
@@ -72,6 +72,10 @@ Search SHALL follow the book search's rules: from two characters, ignoring case,
 #### Scenario: A found word
 - **WHEN** the reader picks a match of "replication" on page 214
 - **THEN** page 214 shows with the word marked and the pill; the next click removes the mark
+
+#### Scenario: Contents
+- **WHEN** the reader opens a contents page where every line is a link
+- **THEN** no lines are drawn, and a click on a line still goes to its target
 
 #### Scenario: Link
 - **WHEN** the reader clicks "Chapter 5" in the text
