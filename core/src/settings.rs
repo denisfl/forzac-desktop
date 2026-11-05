@@ -12,9 +12,48 @@ pub const THEMES: [&str; 6] = ["Light", "Sepia", "Dark", "Dawn", "Wave", "Forest
 const LIGHT: usize = 0;
 const DARK: usize = 2;
 
-/// Text sizes in logical pixels: steps, not a slider.
+/// Text sizes in logical pixels: steps, not a slider. A computer's and a tablet's.
 pub const TEXT_SIZES: [f32; 7] = [16.0, 18.0, 20.0, 22.0, 24.0, 27.0, 30.0];
 pub const DEFAULT_SIZE: usize = 2;
+/// A phone's text sizes, Android's (sp there, points on an iPhone): a phone is read closer to the eyes.
+pub const PHONE_TEXT_SIZES: [f32; 7] = [15.0, 16.0, 17.0, 18.0, 20.0, 22.0, 24.0];
+pub const PHONE_DEFAULT_SIZE: usize = 3;
+
+/// The steps of text size a device has: a property of the device, not the reader's choice, so never stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Sizes {
+    /// A computer's and a tablet's.
+    #[default]
+    Computer,
+    /// A phone's, Android's.
+    Phone,
+}
+
+impl Sizes {
+    pub const ALL: [Sizes; 2] = [Sizes::Computer, Sizes::Phone];
+
+    pub fn table(self) -> &'static [f32] {
+        match self {
+            Sizes::Computer => &TEXT_SIZES,
+            Sizes::Phone => &PHONE_TEXT_SIZES,
+        }
+    }
+
+    pub fn default_index(self) -> usize {
+        match self {
+            Sizes::Computer => DEFAULT_SIZE,
+            Sizes::Phone => PHONE_DEFAULT_SIZE,
+        }
+    }
+
+    /// The step for a stored size: the same size, or the nearest one (the smaller of two) when it is a size of the other
+    /// scale, so that a reader's size does not jump when the scale changes; `None` for any other value.
+    fn index_of(self, stored: &str) -> Option<usize> {
+        let px = Sizes::ALL.iter().flat_map(|s| s.table()).copied().find(|s| s.to_string() == stored)?;
+        let table = self.table();
+        (0..table.len()).min_by(|&a, &b| (table[a] - px).abs().total_cmp(&(table[b] - px).abs()))
+    }
+}
 
 /// The narrowest text column, in em, of a page in a two-page spread (~55–60 characters): a full-screen 13" MacBook
 /// (1440 px) holds two at the default size.
@@ -142,8 +181,9 @@ pub enum Setting {
 pub struct Settings {
     /// An index in `THEMES`; `None` follows the system's light or dark appearance.
     pub theme: Option<usize>,
-    /// An index in `TEXT_SIZES`.
+    /// An index in `sizes`' table.
     pub size: usize,
+    pub sizes: Sizes,
     pub family: Family,
     pub spacing: Spacing,
     pub align: Align,
@@ -156,6 +196,7 @@ impl Default for Settings {
         Settings {
             theme: None,
             size: DEFAULT_SIZE,
+            sizes: Sizes::Computer,
             family: Family::default(),
             spacing: Spacing::default(),
             align: Align::default(),
@@ -172,12 +213,23 @@ fn find<T: Copy>(all: &[T], key: Option<&str>, key_of: impl Fn(T) -> &'static st
 }
 
 impl Settings {
-    /// The settings remembered in `store`; defaults for anything missing or unknown.
+    /// The defaults of a device with `sizes`.
+    pub fn defaults(sizes: Sizes) -> Settings {
+        Settings { size: sizes.default_index(), sizes, ..Settings::default() }
+    }
+
+    /// The settings remembered in `store`, with a computer's sizes; defaults for anything missing or unknown.
     pub fn load(store: &Store) -> Settings {
-        let d = Settings::default();
+        Settings::load_with(store, Sizes::Computer)
+    }
+
+    /// The settings remembered in `store` on a device with `sizes`; defaults for anything missing or unknown.
+    pub fn load_with(store: &Store, sizes: Sizes) -> Settings {
+        let d = Settings::defaults(sizes);
         Settings {
             theme: store.setting("theme").and_then(|t| THEMES.iter().position(|n| *n == t)),
-            size: store.setting("text-size").and_then(|px| TEXT_SIZES.iter().position(|s| s.to_string() == px)).unwrap_or(d.size),
+            size: store.setting("text-size").and_then(|px| sizes.index_of(px)).unwrap_or(d.size),
+            sizes,
             family: store.setting("font").and_then(Family::from_key).unwrap_or(d.family),
             spacing: find(&Spacing::ALL, store.setting("spacing"), Spacing::key).unwrap_or(d.spacing),
             align: find(&Align::ALL, store.setting("align"), Align::key).unwrap_or(d.align),
@@ -189,7 +241,7 @@ impl Settings {
     /// Remembers the settings in `store` (one write). A theme following the system is not written.
     pub fn save(&self, store: &mut Store) -> io::Result<()> {
         let mut values = vec![
-            ("text-size", TEXT_SIZES[self.size].to_string()),
+            ("text-size", self.text_size().to_string()),
             ("font", self.family.key().to_owned()),
             ("spacing", self.spacing.key().to_owned()),
             ("align", self.align.key().to_owned()),
@@ -208,7 +260,8 @@ impl Settings {
     }
 
     pub fn text_size(&self) -> f32 {
-        TEXT_SIZES[self.size.min(TEXT_SIZES.len() - 1)]
+        let table = self.sizes.table();
+        table[self.size.min(table.len() - 1)]
     }
 
     /// Whether a window of `width` × `height` logical pixels shows two pages side by side: pages, not "Scroll", wider than tall,
@@ -277,7 +330,7 @@ impl Settings {
                 self.theme = Some((i + delta).rem_euclid(THEMES.len() as i32) as usize);
             }
             Setting::Font => self.family = round(&Family::ALL, self.family, delta),
-            Setting::Size => self.size = (self.size as i32 + delta).clamp(0, TEXT_SIZES.len() as i32 - 1) as usize,
+            Setting::Size => self.size = (self.size as i32 + delta).clamp(0, self.sizes.table().len() as i32 - 1) as usize,
             Setting::Spacing => self.spacing = round(&Spacing::ALL, self.spacing, delta),
             Setting::Align => self.align = round(&Align::ALL, self.align, delta),
             Setting::Margins => self.margins = round(&Margins::ALL, self.margins, delta),

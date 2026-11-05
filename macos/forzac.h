@@ -76,12 +76,13 @@ typedef struct {
 // Indices into the presets; theme -1 follows the system's light or dark.
 typedef struct {
     int32_t theme;          // Light, Sepia, Dark, Dawn, Wave, Forest
-    uint32_t size;          // below forzac_settings_size_count()
+    uint32_t size;          // below forzac_settings_size_steps()
     uint32_t family;        // PT Serif, Literata, Source Serif, PT Sans
     uint32_t spacing;       // compact, normal, loose
     uint32_t align;         // justified, left
     uint32_t margins;       // narrow, medium, wide
     uint32_t turning;       // slide, scroll, cover, curl (the last two: the phone and tablet shells)
+    uint32_t sizes;         // the device's text sizes: 0 a computer's and a tablet's, 1 a phone's (Android's)
 } ForzacSettings;
 
 typedef struct {
@@ -344,14 +345,16 @@ bool forzac_font_file(uint16_t font, char *path, size_t capacity, uint32_t *inde
 uint32_t forzac_font_variations(uint16_t font, uint32_t *tags, float *values, uint32_t capacity);
 bool forzac_font_is_color(uint16_t font);
 
-ForzacSettings forzac_settings_default(void);
+ForzacSettings forzac_settings_default(void);  // a computer's sizes
+ForzacSettings forzac_settings_default_for(uint32_t sizes);
 uint32_t forzac_settings_theme(const ForzacSettings *settings, bool system_dark);
 float forzac_settings_text_size(const ForzacSettings *settings);
 // Whether a window this size shows two pages side by side (forzac_paginate then makes pages half its width).
 bool forzac_settings_spread(const ForzacSettings *settings, float width, float height);
 // How far a spread's pages are drawn towards the gutter: the left page right, the right page left; 0 if not a spread.
 float forzac_settings_spread_inset(const ForzacSettings *settings, float width, float height);
-uint32_t forzac_settings_size_count(void);
+uint32_t forzac_settings_size_count(void);  // a computer's
+uint32_t forzac_settings_size_steps(const ForzacSettings *settings);
 // setting: 0 theme, 1 font, 2 size, 3 spacing, 4 alignment, 5 margins, 6 pages.
 void forzac_settings_step(ForzacSettings *settings, uint32_t setting, int32_t delta, bool system_dark);
 
@@ -490,7 +493,9 @@ void forzac_state_load_bookmarks(const ForzacState *state, ForzacDocument *doc);
 bool forzac_state_save_bookmarks(ForzacState *state, ForzacDocument *doc);
 void forzac_state_load_quotes(const ForzacState *state, ForzacDocument *doc);
 bool forzac_state_save_quotes(ForzacState *state, ForzacDocument *doc);
-ForzacSettings forzac_state_settings(const ForzacState *state);
+ForzacSettings forzac_state_settings(const ForzacState *state);  // a computer's sizes
+// A size remembered from the other scale becomes the nearest of this one.
+ForzacSettings forzac_state_settings_for(const ForzacState *state, uint32_t sizes);
 bool forzac_state_save_settings(ForzacState *state, const ForzacSettings *settings);
 void forzac_state_close(ForzacState *state);
 

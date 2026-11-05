@@ -121,3 +121,39 @@ fn cover_and_curl_are_kept() {
         assert_eq!(Settings::load(&store).turning, turning);
     }
 }
+
+#[test]
+fn a_phone_has_androids_sizes() {
+    let mut s = Settings::defaults(Sizes::Phone);
+    assert_eq!(s.text_size(), 18.0, "Android's default");
+    for _ in 0..20 {
+        s.step(Setting::Size, 1, false);
+    }
+    assert_eq!(s.text_size(), 24.0, "a phone's sizes stop at 24");
+    for _ in 0..20 {
+        s.step(Setting::Size, -1, false);
+    }
+    assert_eq!(s.text_size(), 15.0);
+    assert_eq!(Settings::defaults(Sizes::Computer), Settings::default());
+}
+
+#[test]
+fn a_remembered_size_does_not_jump_on_the_other_scale() {
+    let mut store = store();
+    let mut on = |px: &str, sizes: Sizes| {
+        store.set_setting("text-size", px).unwrap();
+        Settings::load_with(&store, sizes).text_size()
+    };
+    for px in ["16", "18", "20", "22", "24"] {
+        assert_eq!(on(px, Sizes::Phone).to_string(), px, "a size of both scales stays");
+    }
+    assert_eq!((on("27", Sizes::Phone), on("30", Sizes::Phone)), (24.0, 24.0), "the computer's largest");
+    assert_eq!((on("15", Sizes::Computer), on("17", Sizes::Computer)), (16.0, 16.0), "the smaller of two");
+    assert_eq!(on("13", Sizes::Phone), 18.0, "no scale's size: the default");
+    // A phone's size saved and loaded again.
+    let mut s = Settings::defaults(Sizes::Phone);
+    s.step(Setting::Size, -1, false);
+    s.save(&mut store).unwrap();
+    assert_eq!(Settings::load_with(&store, Sizes::Phone), s);
+    assert_eq!(store.setting("text-size"), Some("17"));
+}

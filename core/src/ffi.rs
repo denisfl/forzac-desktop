@@ -15,7 +15,7 @@ use crate::layout::{
     layout_preview, layout_table, paginate,
 };
 use crate::model::{Block, Book, LinkTarget, Locator};
-use crate::settings::{Align, Margins, Setting, Settings, Spacing, TEXT_SIZES, THEMES, Turning};
+use crate::settings::{Align, Margins, Setting, Settings, Sizes, Spacing, TEXT_SIZES, THEMES, Turning};
 
 #[repr(C)]
 pub struct ForzacRun {
@@ -138,6 +138,8 @@ pub struct ForzacSettings {
     pub align: u32,
     pub margins: u32,
     pub turning: u32,
+    /// The device's text sizes: 0 a computer's and a tablet's, 1 a phone's (Android's).
+    pub sizes: u32,
 }
 
 fn pick<T: Copy + Default>(all: &[T], i: u32) -> T {
@@ -150,9 +152,11 @@ fn index<T: PartialEq>(all: &[T], value: T) -> u32 {
 
 impl From<ForzacSettings> for Settings {
     fn from(s: ForzacSettings) -> Self {
+        let sizes = pick(&Sizes::ALL, s.sizes);
         Settings {
             theme: usize::try_from(s.theme).ok().map(|t| t.min(THEMES.len() - 1)),
-            size: (s.size as usize).min(TEXT_SIZES.len() - 1),
+            size: (s.size as usize).min(sizes.table().len() - 1),
+            sizes,
             family: pick(&Family::ALL, s.family),
             spacing: pick(&Spacing::ALL, s.spacing),
             align: pick(&Align::ALL, s.align),
@@ -172,6 +176,7 @@ impl From<Settings> for ForzacSettings {
             align: index(&Align::ALL, s.align),
             margins: index(&Margins::ALL, s.margins),
             turning: index(&Turning::ALL, s.turning),
+            sizes: index(&Sizes::ALL, s.sizes),
         }
     }
 }
@@ -1911,10 +1916,16 @@ pub unsafe extern "C" fn forzac_close(doc: *mut Document) {
     }
 }
 
-/// The default settings.
+/// The default settings, with a computer's text sizes.
 #[unsafe(no_mangle)]
 pub extern "C" fn forzac_settings_default() -> ForzacSettings {
     Settings::default().into()
+}
+
+/// The default settings of a device with `sizes` (0 a computer's and a tablet's, 1 a phone's).
+#[unsafe(no_mangle)]
+pub extern "C" fn forzac_settings_default_for(sizes: u32) -> ForzacSettings {
+    Settings::defaults(pick(&Sizes::ALL, sizes)).into()
 }
 
 /// The theme shown for `settings`: the chosen one, else Light or Dark as the system prefers (an index into the
@@ -1955,10 +1966,19 @@ pub unsafe extern "C" fn forzac_settings_spread_inset(settings: *const ForzacSet
     Settings::from(unsafe { *settings }).spread_inset(width, height)
 }
 
-/// How many text sizes there are (`ForzacSettings::size` is below it).
+/// How many text sizes a computer has (`ForzacSettings::size` is below it).
 #[unsafe(no_mangle)]
 pub extern "C" fn forzac_settings_size_count() -> u32 {
     TEXT_SIZES.len() as u32
+}
+
+/// How many text sizes the device of `settings` has (`ForzacSettings::size` is below it).
+///
+/// # Safety
+/// `settings` must point to valid settings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_settings_size_steps(settings: *const ForzacSettings) -> u32 {
+    Settings::from(unsafe { *settings }).sizes.table().len() as u32
 }
 
 /// Switches `setting` (0 theme, 1 font, 2 size, 3 spacing, 4 alignment, 5 margins, 6 pages) to its next (`delta` 1)
@@ -2781,9 +2801,20 @@ pub unsafe extern "C" fn forzac_state_save_quotes(state: *mut State, doc: *mut D
 /// `state` null or from [`forzac_state_open`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn forzac_state_settings(state: *const State) -> ForzacSettings {
+    unsafe { forzac_state_settings_for(state, 0) }
+}
+
+/// The settings remembered in `state` on a device with `sizes` (0 a computer's and a tablet's, 1 a phone's): a size
+/// remembered from the other scale becomes the nearest of this one; defaults when `state` is null.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`] or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_state_settings_for(state: *const State, sizes: u32) -> ForzacSettings {
+    let sizes = pick(&Sizes::ALL, sizes);
     match unsafe { state.as_ref() } {
-        Some(state) => Settings::load(&state.store).into(),
-        None => Settings::default().into(),
+        Some(state) => Settings::load_with(&state.store, sizes).into(),
+        None => Settings::defaults(sizes).into(),
     }
 }
 
