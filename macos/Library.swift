@@ -533,6 +533,8 @@ final class LibraryItem: NSView {
             if i == 0 { more.frame = CGRect(x: width - 16, y: y - 3, width: 16, height: 22) }
             y += height + (i == 0 ? 2 : 4)
         }
+        // In a row as tall as its tallest item, the share at the bottom: a row's shares on one line, as on Android.
+        if let share = labels.last, bounds.height > y { share.frame.origin.y += bounds.height - y }
         return y
     }
 }

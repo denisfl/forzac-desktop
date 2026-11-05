@@ -3,9 +3,7 @@
 ## Purpose
 The library window, as the web reader's: the books read, with their covers, the last one to continue first; opening,
 dropping and removing books, search, the empty state, its keys and the cover cache. Books open in place.
-
 ## Requirements
-
 ### Requirement: The library window
 Running Forzac without a file and closing the last book window SHALL show the library window, in both shells. It SHALL
 hold two sections (`Sections`): "Books" — the books in the Books folder (`books-folder`) together with the remembered
@@ -31,7 +29,7 @@ reading" card: its cover, the caption "CONTINUE READING", the title, the authors
 read. A rule SHALL separate it from the shelf when the shelf is not empty. The shelf SHALL hold the other books, the
 last opened first, as a grid of covers in the proportion 2 : 3 with columns from 130 to 176 logical pixels wide as the
 window allows; under each cover its title, its authors in the secondary colour and the share read ("N%", at least 1 %;
-"Finished" for a finished book).
+"Finished" for a finished book), at the bottom of its row, so that a row's shares stand on one line, as on Android.
 
 #### Scenario: A finished book
 - **WHEN** the last opened book was read to its end page and an older one is half read
@@ -198,7 +196,7 @@ reading" card:
 - Series: a heading per series with its books in their number order (unnumbered last, by title); series A to Z; books
   outside a series last, under "Not in a series".
 - Shelves: as `Shelves` says.
-Comparing ignores case, "ё"/"е" and leading punctuation. `Tab` and `Shift+Tab` SHALL move to the next and previous
+Comparing ignores case, "ё"/"е", leading punctuation (quotes, brackets, an ellipsis) and a leading English "The", "A" or "An"; titles and names starting with a digit come first, then those in the alphabet of the interface language (Cyrillic in a Russian interface, Latin in an English one), then the rest, as Android's shelf orders them (`library-sort`). Equal titles in the Title view go by their first author. `Tab` and `Shift+Tab` SHALL move to the next and previous
 view, a click on a tab SHALL choose it; the view SHALL be remembered in the state. Under each cover, when the view is
 not Series and the book is in a series, the series and its number SHALL be shown in the secondary colour on one line,
 shortened with an ellipsis.
@@ -208,6 +206,10 @@ shortened with an ellipsis.
   the reader presses `Tab` three times
 - **THEN** the Series view shows the series' heading with "Полдень, XXII век" before "Стажёры", and after a restart the
   library opens in the Series view
+
+#### Scenario: The interface's alphabet first
+- **WHEN** the library holds "Оно", "Анна Каренина", "The Shining" and "„Крутой маршрут“", the interface is Russian and the Title view is chosen
+- **THEN** the order is "Анна Каренина", "„Крутой маршрут“", "Оно", "The Shining"; in an English interface "The Shining" comes first
 
 ### Requirement: The book's menu
 A "⋯" button SHALL appear next to a book's title under the pointer and on the selected book; a click on it, or a
@@ -333,3 +335,4 @@ of a live resize on the Pi 5. The library SHALL lay out without clipping down to
 #### Scenario: A wide window
 - **WHEN** the window is widened past 550 pixels
 - **THEN** the pill disappears and the switcher is in the header's centre, "Books" still selected
+

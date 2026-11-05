@@ -202,13 +202,26 @@ pub struct Group {
     pub books: Vec<usize>,
 }
 
-/// The key books are compared by: lower case, "ё" as "е", without leading punctuation.
-fn sort_key(s: &str) -> String {
-    s.trim_start_matches(|c: char| !c.is_alphanumeric())
-        .chars()
-        .flat_map(char::to_lowercase)
-        .map(|c| if c == 'ё' { 'е' } else { c })
-        .collect()
+/// The key books are compared by (Android's `library-sort`): lower case, "ё" as "е", without leading punctuation (quotes,
+/// brackets, an ellipsis) and English "The", "A", "An"; led by its group, so that a key starting with a digit comes first,
+/// then one in the alphabet of the interface `language` (Cyrillic in Russian, Latin in English), then the rest.
+fn sort_key(s: &str, language: Language) -> String {
+    let s = s.trim_start_matches(|c: char| !c.is_alphanumeric());
+    let s = ["the ", "a ", "an "]
+        .iter()
+        .find_map(|a| s.get(..a.len()).filter(|head| head.eq_ignore_ascii_case(a)).map(|_| s[a.len()..].trim_start()))
+        .unwrap_or(s);
+    let key: String = s.chars().flat_map(char::to_lowercase).map(|c| if c == 'ё' { 'е' } else { c }).collect();
+    let own = |c: char| match language {
+        Language::Russian => matches!(c, 'а'..='я' | 'ё'),
+        Language::English => c.is_ascii_lowercase(),
+    };
+    let group = match key.chars().next() {
+        Some(c) if c.is_numeric() => '0',
+        Some(c) if own(c) => '1',
+        _ => '2',
+    };
+    format!("{group}{key}")
 }
 
 /// The surname in an author's name: its last word that is not an initial ("Лев Толстой", "Фило В." → Фило), else the
@@ -228,7 +241,14 @@ fn shown_title(e: &Entry) -> String {
 /// under each series, books by number (unnumbered last), books outside a series last; Shelves: Reading, Not started and
 /// Finished when not empty, then the reader's shelves A to Z, a book under every shelf it is on.
 pub fn arrange(books: &[Entry], view: View) -> Vec<Group> {
+    arrange_in(books, view, language())
+}
+
+/// [`arrange`] for an interface in `language`.
+fn arrange_in(books: &[Entry], view: View, language: Language) -> Vec<Group> {
+    let sort_key = |s: &str| sort_key(s, language);
     let title = |i: usize| sort_key(&shown_title(&books[i]));
+    let first_author = |i: usize| books[i].authors.split(", ").next().map_or(String::new(), |a| sort_key(surname(a)) + &sort_key(a));
     let in_series = |i: usize| books[i].series.as_ref().map(|s| (sort_key(&s.name), s.number.unwrap_or(f32::MAX)));
     let by = |mut idx: Vec<usize>, key: &dyn Fn(usize) -> (String, f32, String)| {
         idx.sort_by(|&a, &b| key(a).partial_cmp(&key(b)).unwrap_or(std::cmp::Ordering::Equal));
@@ -256,7 +276,8 @@ pub fn arrange(books: &[Entry], view: View) -> Vec<Group> {
             }
             groups
         }
-        View::Title => vec![Group { heading: None, books: by(all, &|i| (title(i), 0.0, String::new())) }],
+        // Equal titles by their first author.
+        View::Title => vec![Group { heading: None, books: by(all, &|i| (title(i), 0.0, first_author(i))) }],
         View::Author | View::Series => {
             let head = |i: usize| -> Option<String> {
                 match view {

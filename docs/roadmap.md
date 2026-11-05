@@ -112,7 +112,13 @@ Total: about 18–22 weeks.
 
 ## After 1.0
 
-- `accessibility`: the page's text for screen readers (Orca, VoiceOver), as TalkBack reads it on Android.
+Decided with the maintainer on 2026-11-05 (`docs/android-parity.md`, recheck against Android 1.0.4), after 0.20:
+
+- `accessibility`: the page's text for screen readers, VoiceOver on the Mac first, then Orca, as TalkBack reads it on
+  Android.
+- `pdf-quotes`: selection and quotes in a PDF, as on Android (A11); margin cropping of scans only if asked.
+- `hyphenation-languages`: hyphenation patterns for the languages Android hyphenates, each pattern's licence checked
+  (T2).
 
 ## From the UX review
 

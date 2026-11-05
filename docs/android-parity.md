@@ -16,6 +16,25 @@ modules (`core/typesetting/src/main/kotlin/app/truenrth/forzac/typesetting/…` 
 `openspec/specs/x/spec.md` (or the active change of that name). Desktop paths are in this repository; "spec x" is
 `openspec/specs/x/spec.md`. Symbols in parentheses.
 
+## Recheck of 2026-11-05: Android 1.0.4
+
+Against Android 1.0.4 (`360a896`) and the desktop after `942c3d2`, for what Android archived since the recheck below
+(`2026-11-02-standard-ebooks-opening`, `2026-11-03-*`).
+
+| # | Android | Desktop | Status |
+|---|---|---|---|
+| B1 | The shelf's alphabetical orders skip leading quotes, brackets and English "The", "A", "An"; digits, then the interface's alphabet, then the rest (`library-sort`) | The same in every view (`parity-1-0-4`); checked on the Mac with Russian and English interfaces | same, fixed 2026-11-05 |
+| B2 | "14 books … by author ↓" over the shelf from 11 books, with a reverse order (`library-sort`) | Five views as tabs (Recent, Title, Author, Series, Shelves), no count and no reverse | intended (decided 2026-11-05) |
+| B3 | Under each cover the title in two lines, room for two kept, so the share in a row stands on one line (`library-titles`) | Title in up to three lines, authors, the series; the share at the bottom of the row's cells, on one line | same, fixed 2026-11-05 |
+| B4 | A tie after a short word gives way where a line would have holes (`justify-gaps`) | The same as a Knuth–Plass penalty (`parity-1-0-4`): on Android's test book at 760 × 980 lines with spaces over 3× 23 → 12, over 4× 5 → 3 | same, fixed 2026-11-05 |
+| A5 | A new book opens at the text (`standard-ebooks-opening`) | The same (`book-start`, `942c3d2`) | same, fixed 2026-11-05 |
+| B5 | Turning with the volume keys (`volume-keys`, 1.0.4), a crash on Huawei (1.0.2), removing a book under the panel (1.0.1) | — | intended: a phone's buttons, devices and panel |
+
+Measured for B4 with the desktop's defaults, a counter outside the repository: Android counts 2.6 % of a phone's
+justified lines with a space over 2× (its test book) and the desktop 4.6 % at 760 × 980 — Knuth–Plass spreads a
+paragraph's looseness over many lines, so it has more slightly loose lines and fewer holes (over 4×: 3 of 8,005 lines
+against Android's 25 of 13,960).
+
 ## Recheck of 2026-10-30
 
 Against Android at `9259c96` and the desktop at `92674f6`, by reading both code bases; nothing was run. The rows below
@@ -27,16 +46,16 @@ what was decided then. New since the table, and open:
 | A1 | "Books" in the file dialog takes PDF | The same | same, fixed 2026-10-30 |
 | A2 | "N h M min left in book" in the menu (`book-time-left`) | The same line under the chapter's, not while the slider moves | same, fixed 2026-10-30 |
 | A3 | The screen stays on in a PDF and a book of pictures | The same in both shells | same, fixed 2026-10-30 |
-| A4 | Searching the device for books, with a list to tick (`find-books`) | The Books folder and "Add a Folder" | to decide: a computer has real file dialogs |
-| A5 | A new book opens at the text (F3) | At its first page: Standard Ebooks at "Imprint" (inferred from the code, not run) | gap; Android's change is still open |
+| A4 | Searching the device for books, with a list to tick (`find-books`) | The Books folder and "Add a Folder" | intended (decided 2026-11-05: a computer has file dialogs and drag and drop) |
+| A5 | A new book opens at the text (F3) | The same (`book-start`) | same, fixed 2026-11-05 (see the recheck of 2026-11-05) |
 | A6 | A PDF's spreads as in a paper book: page 1 alone on the right, then (2, 3), (4, 5) (A spec pdf-reading) | The same; a last page alone on the left | same, fixed 2026-10-30 |
 | A7 | A word found in a PDF is marked on its page (`pdf-text`) | The same, in the book search's bars, until the next click | same, fixed 2026-10-31 |
 | A8 | A thin line under a PDF's links, often unmarked otherwise (`pdf-text`) | The same, in the Light theme's link colour, but none on a page of eight links or more, such as the contents | same, fixed 2026-10-31; the contents page differs by the maintainer's word |
 | A9 | A PDF's author from its metadata (`pdf-pages`) | The same, beside a title that looks like one (Android's rule) | same, fixed 2026-10-31 |
 | A10 | Double tap zooms a PDF 2× at the point (`pdf-original-zoom`) | A double click in the middle third zooms 2× at the point, and back; the menu waits up to 300 ms for the second click | same, fixed 2026-10-31 |
-| A11 | Selection and quotes in a PDF; margin cropping; splitting scanned spreads; screens by lines (`pdf-text`, `pdf-pages`) | None: `pdf` leaves them out of its first version | deferred (F5) |
+| A11 | Selection and quotes in a PDF; margin cropping; splitting scanned spreads; screens by lines (`pdf-text`, `pdf-pages`) | None: `pdf` leaves them out of its first version | decided 2026-11-05: selection and quotes after 0.20 (roadmap); margin cropping if asked; splitting and screens by lines not planned (a phone's narrow screen) |
 | A12 | Offered in "Open with" for plain text, a plain zip and XML (`open-with`, `markdown-txt`) | The same (`data/app.truenrth.forzac.desktop`); the packages do not make Forzac their default | same, fixed 2026-10-31 |
-| A13 | The gesture on a first opening, the page's reveal on the next (`opening-gesture`, `page-reveal`) | None | to decide: X1 predates the 2026-10-30 goal |
+| A13 | The gesture on a first opening, the page's reveal on the next (`opening-gesture`, `page-reveal`) | None; the help card (`?`) | intended (decided 2026-11-05) |
 | A14 | Formulas (F7) | The same engine, ported (`formulas`) | same, fixed 2026-10-31; checked on a hand-written EPUB, no real textbook yet |
 
 Decided before the 2026-10-30 goal and possibly to reopen: T2 (hyphenation beyond Russian and English), M1 ("Curl" and
@@ -64,7 +83,7 @@ and may change A5.
 | # | Android | Desktop | Status |
 |---|---|---|---|
 | T1 | `StaticLayout`, high-quality breaking, inter-word justification, last line natural (`typesetting/BlockLayouts.kt` `build`) | Knuth–Plass over HarfRust-shaped words (`core/src/knuth_plass.rs`, `core/src/layout/mod.rs`), [ADR 0001](adr/0001-stack.md) | same |
-| T2 | Hyphenation for any language Android has patterns for, by the book's locale (`BlockLayouts.kt` `textLocale`) | Russian and English patterns only; any other language is not hyphenated (`core/src/hyphen.rs` `for_language`) | intended (decision T2) |
+| T2 | Hyphenation for any language Android has patterns for, by the book's locale (`BlockLayouts.kt` `textLocale`) | Russian and English patterns only; any other language is not hyphenated (`core/src/hyphen.rs` `for_language`) | decided 2026-11-05: patterns for Android's languages after 0.20 (roadmap) |
 | T3 | A book without a language: guessed from its text, Cyrillic → `ru`, else `en` (`model/BookLanguage.kt`) | The same rule: the first 2000 letters, more than half Cyrillic gives `ru`, else `en` (`core/src/language.rs`) | same |
 | T4 | Paragraph kinds: indent 1.5 em, citation 0.92 wide, epigraph 0.7 wide italic 0.92, author right, verse 0.88 unhyphenated, subtitle bold centred kept with next (`BlockLayouts.kt` `paragraph`) | The same geometry (`core/src/layout/mod.rs` `Typesetter::layout`) | same |
 | T5 | Headings bold centred, 1.35 / 1.15, unhyphenated, kept with next (`BlockLayouts.kt` `heading`) | The same | same |
@@ -82,7 +101,7 @@ and may change A5.
 
 | # | Android | Desktop | Status |
 |---|---|---|---|
-| M1 | "Slide", "Cover", "Curl" (Android 13+), "Scroll" (`PageTurn.kt`) | "Slide" and "Scroll" (`core/src/settings.rs` `Turning`) | intended (no Curl and Cover) |
+| M1 | "Slide", "Cover", "Curl" (Android 13+), "Scroll" (`PageTurn.kt`) | "Slide" and "Scroll"; the core has "Cover" and "Curl" for the phone and tablet shells (`fc1fcd0`), which the computer's settings step over | intended (confirmed 2026-11-05: two modes on a computer) |
 | M2 | The page follows the finger, a fling turns, taps in the left/right third turn, the middle opens the menu (`ReaderScreen.kt` `readerGestures`) | Keys (`j l → ↓ Space PgDn Enter` / `k h ← ↑ Shift+Space PgUp Backspace`), a 200 ms ease-out slide; a wheel step turns a page, a touchpad swipe at most one (`page_view.rs` `turn`, `macos/PageView.swift` `keyDown`, `scrollWheel`). A click on the page turns nothing | unclear (click to turn); since `reader-menu`: a click in a side third turns, the middle opens the menu, `Enter` opens the menu instead of turning — same |
 | M3 | "Scroll": one column of the same typesetting, chapters apart, everything works in it (`ReaderScreen.kt` `FlowView`) | One column of tiles, a gap between chapters; line, screen and half-screen keys, wheel by three lines, kinetic touchpad (`gtk/src/scroll.rs`, `macos/PageView.swift`) | same |
 | M4 | Switching modes keeps the line (A spec page-turning) | `m` keeps the top line (spec page-turning) | same |
@@ -175,7 +194,7 @@ and may change A5.
 | X1 | Opening a book plays the cover turning to the marbled endpaper and the title page, hiding the load (`BookOpening.kt`, A spec reader-ui "Жест открытия книги") | The first page appears; Android now plays the gesture only on a first opening, and on reopening fades the page in from 96 % (`page-reveal`) | intended (decision X1, made before the 2026-10-30 goal) |
 | X2 | The screen stays on while reading, for 10 minutes after the last touch (`ReaderScreen.kt` `KeepScreenOn`) | Both shells keep the display awake for 10 minutes after the last input, in an active window; the Mac's window for pages since A3 | same for books |
 | X3 | Always immersive; system bars come with the menu (`SystemBars`) | A window; `f`/`F11` (`⌃⌘F`) full screen | intended (platform) |
-| X4 | TalkBack reads the page and has next/previous page, bookmark and menu actions (`ReaderScreen.kt` `semantics`) | The page is drawn without accessible text (`page_view.rs`, `PageView.swift`) | intended for 1.0; `accessibility` after it |
+| X4 | TalkBack reads the page and has next/previous page, bookmark and menu actions (`ReaderScreen.kt` `semantics`) | The page is drawn without accessible text (`page_view.rs`, `PageView.swift`) | decided 2026-11-05: after 0.20, VoiceOver first, then GTK (`accessibility`) |
 | X5 | Interface in English and Russian (A spec localization) | The reader's choice in the library settings, then the system | same |
 | X6 | — | `?` shows the keys and the single support line (`gtk/src/main.rs` `HELP`, `main.swift` `helpText`) | intended (desktop only) |
 

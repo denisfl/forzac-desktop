@@ -248,3 +248,32 @@ fn a_pdf_title_that_looks_like_a_file_is_not_one() {
         assert_eq!(pdf_title(junk), None, "{junk}");
     }
 }
+
+#[test]
+fn the_shelf_puts_the_interfaces_alphabet_first_and_skips_articles() {
+    let books = [
+        entry("Оно", "Стивен Кинг", None),
+        entry("Анна Каренина", "Лев Толстой", None),
+        entry("The Shining", "Stephen King", None),
+        entry("„Крутой маршрут“", "Евгения Гинзбург", None),
+        entry("The Hobbit", "J. R. R. Tolkien", None),
+        entry("1984", "George Orwell", None),
+        entry("An Island", "Айзек Азимов", None),
+    ];
+    let titles = |language| -> Vec<String> { shown(&books, &arrange_in(&books, View::Title, language))[0].1.clone() };
+    assert_eq!(
+        titles(Language::Russian),
+        ["1984", "Анна Каренина", "„Крутой маршрут“", "Оно", "The Hobbit", "An Island", "The Shining"],
+        "digits, then Cyrillic in a Russian interface; quotes and articles skipped"
+    );
+    assert_eq!(
+        titles(Language::English),
+        ["1984", "The Hobbit", "An Island", "The Shining", "Анна Каренина", "„Крутой маршрут“", "Оно"],
+        "Latin first in an English one"
+    );
+    let heads: Vec<Option<String>> = arrange_in(&books, View::Author, Language::Russian).into_iter().map(|g| g.heading).collect();
+    assert_eq!(heads[..3], [Some("Айзек Азимов".into()), Some("Евгения Гинзбург".into()), Some("Стивен Кинг".into())]);
+    let same = [entry("Оно", "Стивен Кинг", None), entry("Оно", "Айзек Азимов", None)];
+    assert_eq!(shown(&same, &arrange_in(&same, View::Title, Language::Russian))[0].1, ["Оно", "Оно"]);
+    assert_eq!(arrange_in(&same, View::Title, Language::Russian)[0].books, [1, 0], "equal titles by author");
+}

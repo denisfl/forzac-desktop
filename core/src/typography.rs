@@ -5,7 +5,7 @@
 
 const NBSP: char = '\u{a0}';
 const EM_DASH: char = '—';
-const SHORT_WORDS: &str = "вксуоаияВКСУОАИЯ";
+pub(crate) const SHORT_WORDS: &str = "вксуоаияВКСУОАИЯ";
 
 pub fn normalize(c: &mut [char]) {
     let is_dash = |ch: char| ch == '-' || ch == '–';

@@ -786,3 +786,35 @@ fn formulas_read_as_their_linear_text() {
     assert_eq!(hits[0].start.offset, "the \u{FFFC} ".len(), "offsets count the character");
     assert!(crate::search::search(&b, "a_11").is_empty(), "not searched inside");
 }
+
+#[test]
+fn a_tie_after_a_short_word_is_found_and_only_there() {
+    let text = "Он шёл в\u{a0}лес и\u{a0}пел, 10\u{a0}000 —\u{a0}всё";
+    let word = |w: &str| {
+        let at = text.find(w).unwrap();
+        (at, at + w.len())
+    };
+    let (a, b) = word("в\u{a0}лес");
+    assert_eq!(tie_in(text, a, b), Some(a + "в".len()));
+    let (a, b) = word("10\u{a0}000");
+    assert_eq!(tie_in(text, a, b), None, "a number keeps its space");
+    let (a, b) = word("—\u{a0}всё");
+    assert_eq!(tie_in(text, a, b), None, "a dash keeps its space");
+}
+
+#[test]
+fn a_tie_breaks_only_in_justified_text() {
+    // A column where "о" would otherwise leave a hole: ragged text never breaks the tie.
+    let text = "Слова слова слова о\u{a0}учительнице-одиночке слова слова слова слова о\u{a0}несправедливости".repeat(6);
+    let b = book(vec![paragraph(&text)]);
+    let ends_in_tie = |justify: bool| {
+        let mut style = style();
+        style.justify = justify;
+        style.width = 330.0;
+        let mut ts = typesetter(style);
+        let l = ts.layout(&b.chapters[0].blocks[0], &b).unwrap();
+        let t = text_of(&l);
+        (1..t.starts.len()).any(|n| text[..t.starts[n]].trim_end().ends_with(" о"))
+    };
+    assert!(!ends_in_tie(false));
+}

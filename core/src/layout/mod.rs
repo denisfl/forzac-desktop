@@ -923,6 +923,19 @@ impl Typesetter {
             }
             let end = text[i..].find([' ', '\n', EM_SPACE]).map_or(text.len(), |e| i + e);
             let penalty = if justify { 50.0 } else { 300.0 };
+            // A tie after a short word (`typography::normalize`) may break at a cost, which pays only where the line would
+            // otherwise be set with holes (Android's `justify-gaps`). Justified text only: a ragged line has no holes.
+            if let Some(at) = tie_in(text, i, end).filter(|_| justify) {
+                self.word(text, segments, (i, at), hyphenate, penalty, &mut items, &mut meta, &mut pieces);
+                let seg = &segments[segment_at(segments, at)];
+                // As wide as the no-break space was inside the word, so a tie that holds sets as before.
+                let space = self.width_of(self.segment_font(seg), "\u{a0}", seg.size);
+                items.push(Item::Penalty { width: 0.0, penalty: TIE_COST, flagged: false });
+                items.push(Item::Glue { width: space, stretch: 0.0, shrink: 0.0 });
+                meta.extend([Meta::Plain, Meta::Plain]);
+                i = at + NBSP.len_utf8();
+                continue;
+            }
             self.word(text, segments, (i, end), hyphenate, penalty, &mut items, &mut meta, &mut pieces);
             i = end;
         }
@@ -1192,6 +1205,26 @@ fn capital_of(c: char) -> Option<char> {
         (Some(u), None) if u.len_utf8() == c.len_utf8() => Some(u),
         _ => None,
     }
+}
+
+/// The cost of breaking a tie after a short word: about that of a line whose spaces are three times as wide as they should be,
+/// so a tie gives way only to a hole (measured on Android's test book: lines with spaces over 3× halved, about one line
+/// in 140 ending in a short word).
+const TIE_COST: f32 = 5000.0;
+const NBSP: char = '\u{a0}';
+
+/// The first tie in word `[start, end)` of `text`: a no-break space after a one-letter word of `typography::SHORT_WORDS`.
+fn tie_in(text: &str, start: usize, end: usize) -> Option<usize> {
+    let word = &text[start..end];
+    word.char_indices()
+        .map(|(o, c)| (start + o, c))
+        .find(|&(at, c)| {
+            let mut before = text[..at].chars().rev();
+            c == NBSP
+                && before.next().is_some_and(|p| crate::typography::SHORT_WORDS.contains(p))
+                && before.next().is_none_or(|q| !q.is_alphabetic())
+        })
+        .map(|(at, _)| at)
 }
 
 /// Room above and below a formula on its line, in em.

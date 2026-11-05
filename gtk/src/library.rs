@@ -1501,6 +1501,9 @@ impl Library {
         }
         let share = label(&library::share_label(b.progress, b.opened), "shelf-share");
         share.set_margin_top(4);
+        // A row is as tall as its tallest item: the share at the bottom, so a row's shares stand on one line, as on Android.
+        share.set_vexpand(true);
+        share.set_valign(gtk::Align::End);
         item.append(&share);
         self.connect_item(&item, &cover, &more, book);
         (item.upcast(), cover, more)
