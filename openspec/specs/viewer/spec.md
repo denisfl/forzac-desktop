@@ -3,9 +3,7 @@
 ## Purpose
 How an image or a table that cannot be read on the page is read in a view filling the window: opened from the page by
 key or click, zoomed, panned and closed back to the same page, in both shells.
-
 ## Requirements
-
 ### Requirement: Opening the view
 An image at least a third of the text column wide, or a table, SHALL open in a view filling the window when the reader
 presses `Enter` while it is focused (`Tab`) or clicks it. The view SHALL use the reader's theme: the page's paper as
@@ -83,3 +81,11 @@ for a table of 100 rows; opening an image SHALL not decode it again when its pag
 #### Scenario: An open view at rest
 - **WHEN** a table view is open and the reader does nothing for 10 seconds
 - **THEN** Forzac uses no CPU in that time
+
+### Requirement: A shrunk formula in the view
+The view for images and tables SHALL also open a shrunk formula, as a table: at the book's text size, in the theme's colours, set again at each zoom step, panned with the arrows, `h` `j` `k` `l` and a drag, and closed with `Esc`.
+
+#### Scenario: Zooming a formula
+- **WHEN** a formula is open in the view and the reader presses `+`
+- **THEN** it is set again larger and stays sharp
+

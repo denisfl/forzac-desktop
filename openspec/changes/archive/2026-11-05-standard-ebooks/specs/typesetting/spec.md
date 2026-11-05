@@ -34,10 +34,7 @@ outside the book.
 - **THEN** the cover shows the picture and the title, not a generated cover
 
 ### Requirement: Line art
-An image whose background is transparent and whose opaque pixels are dark and colourless (a diagram, an engraving, a
-logo, a title page) SHALL be drawn in the theme's text colour with its pixels' opacity, on the page, in the view and in
-the note panel. Other images SHALL be drawn as they are. A theme change SHALL NOT re-typeset: only the colour at
-drawing changes. There is no setting for it.
+An image whose background is transparent and whose opaque pixels are dark and colourless (a diagram, an engraving, a logo, a title page) SHALL be drawn in the theme's text colour with its pixels' opacity, on the page, in the view and in the note panel. Other images SHALL be drawn as they are. A theme change SHALL NOT re-typeset: only the colour at drawing changes. There is no setting for it.
 
 #### Scenario: A diagram in the dark theme
 - **WHEN** "Flatland" shows a page with a diagram (black lines on transparency) in the Dark theme

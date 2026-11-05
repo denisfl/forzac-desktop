@@ -57,8 +57,8 @@
   and in the view, the dedication's small capitals (reduced capitals in PT Serif); "Alice" advanced — Tenniel's
   frontispiece; Keats — verse indents; the library (a test state) — SVG covers of "Alice", "Flatland", Keats and "Pride
   and Prejudice" with their titles — ✓ 2026-10-28. Turns not measured: `--turns` recorded no animation frames
-- [ ] 5.3 On the Raspberry Pi 5 (GTK): the same books, turning through "Alice"'s illustrations without missed frames —
+- [x] 5.3 (2026-11-05: released in 0.20.0 without it, by the maintainer's word; the Pi 5 waived) On the Raspberry Pi 5 (GTK): the same books, turning through "Alice"'s illustrations without missed frames —
   not done: the Pi did not answer on the network on 2026-10-28, and a release build in the Linux container stopped
   OrbStack (the Mac's disk was full)
 - [x] 5.4 `openspec validate standard-ebooks --strict` — ✓ valid
-- [ ] 5.5 Archive after 5.3 or the maintainer's waiver
+- [x] 5.5 (2026-11-05: released in 0.20.0 without it, by the maintainer's word; the Pi 5 waived) Archive after 5.3 or the maintainer's waiver

@@ -12,7 +12,7 @@
 ## 3. GTK
 
 - [x] 3.1 (2026-10-24: the `forzac-debian-dev` container under a headless Weston (pixman), 760 × 980 in Light (ru), Wave (en), Dark (ru), 440 × 800 in Sepia; the panel opened by a temporary, uncommitted hook in `main.rs`) `settings_sheet.rs` and the panels' CSS: the same layout and colours as the Mac's — check: screenshots, both edges of every row line up
-- [ ] 3.2 Keys and clicks in the GTK sheet on a real Linux desktop (no input injection under Weston; the shortcuts' code did not change) — check: by hand on the Pi 5 or Omarchy
+- [x] 3.2 (2026-11-05: released without it, by the maintainer's word; no Linux desktop to try it on) Keys and clicks in the GTK sheet on a real Linux desktop (no input injection under Weston; the shortcuts' code did not change) — check: by hand on the Pi 5 or Omarchy
 
 ## 4. Check
 

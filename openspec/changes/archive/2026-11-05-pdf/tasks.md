@@ -12,7 +12,7 @@
 ## 3. macOS
 
 - [x] 3.1 The PDF window on PDFKit: pages on white, fit, spread, "Slide", keys, clicks, wheel, foot — check: `--png`, screenshots
-- [ ] 3.2 Zoom and pan, sharp after the gesture — check: `--keys`, by hand for the pinch. Keys checked; the pinch and the touchpad by hand remain
+- [x] 3.2 (2026-11-05: the maintainer checked the build on the Mac before 0.20.0) Zoom and pan, sharp after the gesture — check: `--keys`, by hand for the pinch. Keys checked; the pinch and the touchpad by hand remain
 - [x] 3.3 Menu, contents from the outline, search, links, the Back pill, in the Light chrome — check: screenshots in Dark and Light
 
 ## 4. Linux
@@ -25,5 +25,5 @@
 ## 5. Check
 
 - [x] 5.1 `cargo test -p forzac-core`, `clippy`, `fmt`; `openspec validate pdf --strict`
-- [ ] 5.2 Measure the Speed requirement on the Mac; the Pi 5 when the maintainer lifts its waiver. Mac: 20 turns of a text PDF at 120 Hz, 475 frames, 4 late (max 13.4 ms), against 3 of 463 (max 14.3 ms) for a book; idle 0.04 s of CPU in 10 s. The Pi remains
-- [ ] 5.3 `docs/android-parity.md` F5 and NP1, README, release notes; archive. Parity and README done; the release notes and the archive wait for the release
+- [x] 5.2 (2026-11-05: released in 0.20.0 without it, by the maintainer's word; the Pi 5 waived) Measure the Speed requirement on the Mac; the Pi 5 when the maintainer lifts its waiver. Mac: 20 turns of a text PDF at 120 Hz, 475 frames, 4 late (max 13.4 ms), against 3 of 463 (max 14.3 ms) for a book; idle 0.04 s of CPU in 10 s. The Pi remains
+- [x] 5.3 (2026-11-05: docs/releases/0.20.0.md) `docs/android-parity.md` F5 and NP1, README, release notes; archive. Parity and README done; the release notes and the archive wait for the release

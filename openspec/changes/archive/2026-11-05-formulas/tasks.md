@@ -34,8 +34,8 @@
 ## 7. Check
 
 - [x] 7.1 `cargo fmt`, `clippy`, `cargo test -p forzac-core`, the corpus test; `openspec validate formulas --strict`
-- [ ] 7.2 The test EPUB beside Android's output of the same file — check: the maintainer sees both, as screenshots. The desktop's are taken; Android's are not
-- [ ] 7.3 Measurements on the M1 MacBook Pro: `bench` on a chapter of 1,000 formulas; `scripts/measure.sh` and `--turns 20` on pages of formulas against a novel. Mac, 2026-10-31: a chapter of 1,000 formulas 20–22 ms cold; three runs of 20 turns at 120 Hz, 2, 3 and 7 late of about 460 (max 14.5 ms) against 5, 6 and 6 for a novel (max 14.3 ms). The Pi 5 when its waiver is lifted
+- [x] 7.2 (2026-11-05: released in 0.20.0 without it, by the maintainer's word; the Pi 5 waived) The test EPUB beside Android's output of the same file — check: the maintainer sees both, as screenshots. The desktop's are taken; Android's are not
+- [x] 7.3 (2026-11-05: released in 0.20.0 without it, by the maintainer's word; the Pi 5 waived) Measurements on the M1 MacBook Pro: `bench` on a chapter of 1,000 formulas; `scripts/measure.sh` and `--turns 20` on pages of formulas against a novel. Mac, 2026-10-31: a chapter of 1,000 formulas 20–22 ms cold; three runs of 20 turns at 120 Hz, 2, 3 and 7 late of about 460 (max 14.5 ms) against 5, 6 and 6 for a novel (max 14.3 ms). The Pi 5 when its waiver is lifted
 - [x] 7.4 `docs/android-parity.md` F7, A14, NP5; `docs/roadmap.md`; README; the iOS session told about `paths` when this lands
-- [ ] 7.5 A real textbook with MathML, if the maintainer has one, by hand — check: the maintainer's word
-- [ ] 7.6 Release notes; archive
+- [x] 7.5 (2026-11-05: released in 0.20.0 without it, by the maintainer's word; the Pi 5 waived) A real textbook with MathML, if the maintainer has one, by hand — check: the maintainer's word
+- [x] 7.6 (2026-11-05: docs/releases/0.20.0.md) Release notes; archive
