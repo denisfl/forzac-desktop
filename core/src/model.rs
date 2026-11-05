@@ -40,6 +40,9 @@ pub struct Book {
     pub pdf: Option<usize>,
     /// A book of picture pages (fixed-layout EPUB): no chapters, its shell draws the pages.
     pub pictures: Option<Pictures>,
+    /// Where the text begins, when the book says (EPUB 3 `landmarks` `bodymatter`, EPUB 2 `guide` `text` or `start`): a book
+    /// opened for the first time opens there rather than on its imprint or title page.
+    pub start: Option<Locator>,
 }
 
 /// The pages of a book of picture pages, in reading order.

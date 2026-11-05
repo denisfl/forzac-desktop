@@ -28,6 +28,7 @@ struct Epub<'a> {
     extra: Vec<(&'a str, String)>,
     manifest: String,
     binaries: Vec<(&'a str, Vec<u8>)>,
+    guide: String,
 }
 
 impl Epub<'_> {
@@ -58,8 +59,9 @@ impl Epub<'_> {
                 {}
               </manifest>
               <spine toc="ncx">{spine}</spine>
+              {}
             </package>"#,
-            self.manifest
+            self.manifest, self.guide
         );
         let points: String = self
             .ncx
@@ -403,6 +405,30 @@ fn nav_toc_with_levels() {
     let b = book(e);
     assert_eq!(b.toc.iter().map(|e| (e.title.as_str(), e.level)).collect::<Vec<_>>(), [("Часть", 1), ("Глава", 2)]);
     assert_eq!(b.toc[1].target, Locator { chapter: 0, block: 1, offset: 0 });
+}
+
+#[test]
+fn the_text_begins_where_the_landmarks_or_the_guide_say() {
+    let docs3 =
+        || docs(&[("imprint.xhtml", "<h1>Imprint</h1><p>Издатель</p>"), ("a.xhtml", r#"<h1>Глава</h1><p>Текст</p><p id="s">Начало</p>"#)]);
+    let nav = |href: &str| {
+        xhtml(&format!(
+            r#"<nav epub:type="toc"><ol><li><a href="a.xhtml">Глава</a></li></ol></nav><nav epub:type="landmarks"><ol><li><a epub:type="toc" href="imprint.xhtml">Оглавление</a></li><li><a epub:type="bodymatter" href="{href}">Начало</a></li></ol></nav>"#
+        ))
+    };
+    let with_nav = |href: &str| {
+        let mut e = docs3();
+        e.extra = vec![("OPS/nav.xhtml", nav(href))];
+        e.manifest = r#"<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>"#.into();
+        book(e)
+    };
+    assert_eq!(with_nav("a.xhtml").start, Some(Locator { chapter: 1, block: 0, offset: 0 }), "EPUB 3: bodymatter");
+    assert_eq!(with_nav("a.xhtml#s").start, Some(Locator { chapter: 1, block: 2, offset: 0 }), "its fragment");
+    let mut e = docs3();
+    e.guide = r#"<guide><reference type="cover" href="imprint.xhtml"/><reference type="text" href="a.xhtml"/></guide>"#.into();
+    assert_eq!(book(e).start, Some(Locator { chapter: 1, block: 0, offset: 0 }), "EPUB 2: the guide's text");
+    assert_eq!(book(docs3()).start, None, "nothing said: the first page");
+    assert_eq!(with_nav("imprint.xhtml").start, None, "the book's first place: nothing to change");
 }
 
 #[test]

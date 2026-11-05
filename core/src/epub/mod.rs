@@ -46,6 +46,8 @@ struct Opf {
     fixed: bool,
     /// `page-progression-direction` is `rtl`.
     rtl: bool,
+    /// EPUB 2's `guide` reference of type `text` or `start`: the document and its fragment.
+    guide_start: Option<(String, Option<String>)>,
 }
 
 /// The part of a document from block `doc_start` on lies in `chapter` from block `offset`.
@@ -211,6 +213,16 @@ pub(crate) fn read(archive: &HashMap<String, Vec<u8>>) -> Result<Book, Error> {
         })
         .collect();
 
+    // Where the text begins: the landmarks' `bodymatter`, else the guide's `text` or `start`; nothing when that is the book's
+    // first place anyway, or a place the chapters do not hold (a document left out of them).
+    let start = read_landmarks(&files, &opf)
+        .or_else(|| opf.guide_start.clone())
+        .and_then(|(path, fragment)| {
+            let block = fragment.as_deref().and_then(|f| anchor(&path, f)).filter(|a| !a.hidden).map_or(0, |a| a.start);
+            locate(&path, block)
+        })
+        .filter(|at| *at != Locator::default());
+
     let images = book_images(&opf, &files);
 
     let mut book = Book {
@@ -227,6 +239,7 @@ pub(crate) fn read(archive: &HashMap<String, Vec<u8>>) -> Result<Book, Error> {
         toc,
         images,
         math: docs.iter().flat_map(|d| d.formulas.iter().map(|(k, f)| (k.clone(), f.clone()))).collect::<HashMap<_, _>>().into(),
+        start,
         ..Book::default()
     };
     resolve_links(&mut book, &|path, fragment| {
@@ -321,6 +334,7 @@ fn read_opf(files: &HashMap<&str, &[u8]>) -> Result<Opf, Error> {
     let mut spine = Vec::new();
     let mut ncx_id = None;
     let mut guide_cover = None;
+    let mut guide_start = None;
     // Calibre's series (EPUB 2) or EPUB 3's collections with their position, by the collection's id.
     let (mut calibre_series, mut calibre_index) = (None::<String>, None::<String>);
     let mut collections: Vec<(Option<String>, String)> = Vec::new();
@@ -391,6 +405,9 @@ fn read_opf(files: &HashMap<&str, &[u8]>) -> Result<Opf, Error> {
             }
         }
         "reference" if attr(attrs, "type") == Some("cover") => guide_cover = attr(attrs, "href").map(|h| resolve_path(&path, h)),
+        "reference" if matches!(attr(attrs, "type"), Some("text" | "start")) && guide_start.is_none() => {
+            guide_start = attr(attrs, "href").map(|h| (resolve_path(&path, h), fragment_of(h)));
+        }
         _ => {}
     });
     for (id, role) in roles {
@@ -430,7 +447,22 @@ fn read_opf(files: &HashMap<&str, &[u8]>) -> Result<Opf, Error> {
     };
     let language = language.map(|l| l.trim().to_owned());
     let fixed = pre_paginated || (!spine.is_empty() && fixed_items == spine.len());
-    Ok(Opf { title: collapse(&title), authors, language, description, series, genres, year, items, spine, ncx, cover, fixed, rtl })
+    Ok(Opf {
+        title: collapse(&title),
+        authors,
+        language,
+        description,
+        series,
+        genres,
+        year,
+        items,
+        spine,
+        ncx,
+        cover,
+        fixed,
+        rtl,
+        guide_start,
+    })
 }
 
 /// The image type of a manifest item: its declared `image/*` type, or, when the manifest labels it otherwise
@@ -593,6 +625,40 @@ fn read_nav(files: &HashMap<&str, &[u8]>, opf: &Opf) -> Option<Vec<RawToc>> {
         }
     }
     (!entries.is_empty()).then_some(entries)
+}
+
+/// EPUB 3: the `bodymatter` link of `<nav epub:type="landmarks">`, as a document and its fragment.
+fn read_landmarks(files: &HashMap<&str, &[u8]>, opf: &Opf) -> Option<(String, Option<String>)> {
+    let nav = opf.items.iter().find(|i| i.properties.split_whitespace().any(|p| p == "nav"))?;
+    let mut found = None;
+    let mut inside = None; // depth of the landmarks `nav`
+    let mut depth = 0usize;
+    let mut xml = Xml::new(files.get(nav.path.as_str())?);
+    while let Ok(ev) = xml.next() {
+        match ev {
+            Ev::Eof => break,
+            Ev::Start(name, attrs) => {
+                if name == "nav" && inside.is_none() && attr(&attrs, "type").is_some_and(|t| t.split_whitespace().any(|t| t == "landmarks"))
+                {
+                    inside = Some(depth);
+                }
+                if inside.is_some() && name == "a" && attr(&attrs, "type").is_some_and(|t| t.split_whitespace().any(|t| t == "bodymatter"))
+                {
+                    found = attr(&attrs, "href").map(|h| (resolve_path(&nav.path, h), fragment_of(h)));
+                    break;
+                }
+                depth += 1;
+            }
+            Ev::End => {
+                depth = depth.saturating_sub(1);
+                if inside == Some(depth) {
+                    inside = None;
+                }
+            }
+            Ev::Text(_) => {}
+        }
+    }
+    found
 }
 
 /// EPUB 2: the NCX, nested `navPoint`s.

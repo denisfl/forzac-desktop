@@ -179,6 +179,9 @@ ForzacLocator forzac_flow_locator(ForzacDocument *doc, uint32_t chapter, float y
 // Contents, valid until the document is closed.
 const ForzacTocEntry *forzac_contents(ForzacDocument *doc, uint32_t *count);
 float forzac_progress(const ForzacDocument *doc, ForzacLocator at);
+// Where a book opened for the first time opens: where its text begins when the book says (EPUB landmarks, guide), else
+// its start.
+ForzacLocator forzac_book_start(const ForzacDocument *doc);
 // The cover's bytes: a raster image, or an SVG cover drawn into a PNG of at most 352 × 528; NULL when there is none.
 const uint8_t *forzac_cover(const ForzacDocument *doc, size_t *len);
 // A note for a panel `width` wide into *out; returns its height, negative when there is no such note.

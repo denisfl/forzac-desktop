@@ -807,6 +807,15 @@ pub unsafe extern "C" fn forzac_contents(doc: *mut Document, count: *mut u32) ->
     doc.contents.as_ptr()
 }
 
+/// Where a book opened for the first time opens: where its text begins when it says (`Book::start`), else its start.
+///
+/// # Safety
+/// `doc` must come from [`forzac_open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_book_start(doc: *const Document) -> ForzacLocator {
+    unsafe { &*doc }.book.start.unwrap_or_default().into()
+}
+
 /// The share of the book's text before `at`, 0 to 1.
 ///
 /// # Safety
