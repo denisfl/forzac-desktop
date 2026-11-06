@@ -94,8 +94,9 @@ The checklist; every item is done on hardware, not in containers (`CLAUDE.md`, `
       **fresh macOS user account**, opened by following the line under the site's macOS link (the Gatekeeper step), on
       macOS 14 and on a macOS 15 Mac.
 - [ ] Mac, the update: the previous release, installed from its DMG by dragging it in Finder and opened by the
-      first-open step, shows "Version X.Y.Z is out — install" once the release is published; "install" restarts it as
-      X.Y.Z without asking anything. Before publishing, try it against the draft's files from `localhost`
+      first-open step, shows "Version X.Y.Z is out. Install" once the release is published (at once with Forzac ›
+      Check for Updates…); "Install" restarts it as X.Y.Z without asking anything. Before publishing, try it against
+      the draft's files from `localhost`
       (`defaults write app.truenrth.forzac SUFeedURL http://127.0.0.1:8765/appcast.xml`, an appcast made by
       `scripts/appcast.sh X.Y.Z Forzac-macos-arm64.dmg http://127.0.0.1:8765/Forzac-macos-arm64.dmg`, the line shown
       by setting `update-latest` in the state file; `defaults delete app.truenrth.forzac SUFeedURL` afterwards).

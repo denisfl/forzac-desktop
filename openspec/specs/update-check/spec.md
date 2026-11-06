@@ -100,12 +100,12 @@ in the new version, with no window or question of its own. While this runs, the 
 library SHALL keep working; the book windows SHALL be closed by the relaunch as by Quit, keeping every reading place.
 When the update cannot be installed — the appcast or the image cannot be fetched, the signature does not verify, the
 appcast offers nothing newer than the running app, the app runs from the disk image, a translocated copy or a folder the
-reader cannot write to — the line SHALL turn back into "Version 0.9.1 is out — download" with the site link and "×",
+reader cannot write to — the line SHALL turn back into "Version 0.9.1 is out. Download" with the site link and "×",
 for as long as the app runs, with no error dialog. Forzac SHALL NOT check, download or install anything until the
 reader clicks "install".
 
 #### Scenario: Installing an update
-- **WHEN** Forzac 0.9.0 in `/Applications` shows "Version 0.9.1 is out — install" and the reader clicks "install"
+- **WHEN** Forzac 0.9.0 in `/Applications` shows "Version 0.9.1 is out. Install" and the reader clicks "Install"
 - **THEN** the line reads "Installing version 0.9.1…", then Forzac quits and starts again as 0.9.1 without asking
   anything, and the next start shows no update line
 
