@@ -527,9 +527,15 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("the file is unavailable", "файл недоступен"),
     // The library.
     ("Open a book", "Открыть книгу"),
-    ("Version {version} is out", "Вышла версия {version}"),
-    ("download", "скачать"),
-    ("install", "установить"),
+    ("Download", "Скачать"),
+    ("Install", "Установить"),
+    ("Check for Updates…", "Проверить обновления…"),
+    ("Version {version} is out.", "Вышла версия {version}."),
+    ("Later", "Позже"),
+    ("OK", "ОК"),
+    ("Forzac {version} is the latest version.", "Установлена последняя версия — {version}."),
+    ("Couldn't check for updates", "Не удалось проверить обновления"),
+    ("GitHub didn't answer. Try again later.", "GitHub не ответил. Попробуйте позже."),
     ("Installing version {version}…", "Устанавливается версия {version}…"),
     ("Read books right on your computer", "Читайте книги прямо на\u{a0}компьютере"),
     (

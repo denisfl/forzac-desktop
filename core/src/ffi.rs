@@ -2390,6 +2390,26 @@ pub unsafe extern "C" fn forzac_update_notice(state: *mut State) -> *const c_cha
     state.notice.as_ptr()
 }
 
+/// Remembers the answer to a check the reader asked for: 1 a newer version is out (`forzac_update_notice` names it, even
+/// if it was dismissed), 0 this build is the latest, -1 the answer names no release or the state cannot be written.
+///
+/// # Safety
+/// `state` from [`forzac_state_open`]; `answer` a valid NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn forzac_update_asked(state: *mut State, answer: *const c_char) -> i32 {
+    match crate::update::record_asked(&mut unsafe { &mut *state }.store, Some(&unsafe { str(answer) })) {
+        crate::update::Checked::Newer(_) => 1,
+        crate::update::Checked::Latest => 0,
+        crate::update::Checked::Failed => -1,
+    }
+}
+
+/// This build's version (`update::VERSION`); valid for good.
+#[unsafe(no_mangle)]
+pub extern "C" fn forzac_update_version() -> *const c_char {
+    c_static(crate::update::VERSION)
+}
+
 /// Hides the offered version until a newer one is released; false when the file cannot be written.
 ///
 /// # Safety

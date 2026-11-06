@@ -488,6 +488,10 @@ bool forzac_update_due(const ForzacState *state);
 bool forzac_update_record(ForzacState *state, const char *answer);
 const char *forzac_update_notice(ForzacState *state);
 bool forzac_update_dismiss(ForzacState *state);
+// Check for Updates…: the answer to a check the reader asked for: 1 a newer version (forzac_update_notice names it, even
+// if dismissed), 0 the latest, -1 no release in the answer. forzac_update_version is this build's version.
+int32_t forzac_update_asked(ForzacState *state, const char *answer);
+const char *forzac_update_version(void);
 
 void forzac_state_load_bookmarks(const ForzacState *state, ForzacDocument *doc);
 bool forzac_state_save_bookmarks(ForzacState *state, ForzacDocument *doc);

@@ -64,3 +64,17 @@ fn the_answer_is_remembered_and_offered() {
     assert!(record(&mut store, &answer("99.1")));
     assert_eq!(notice(&store), Some("99.1"), "a newer one is offered again");
 }
+
+#[test]
+fn a_check_by_hand_offers_a_dismissed_version_again() {
+    let mut s = store();
+    assert!(record(&mut s, &answer("v99.0.0")));
+    dismiss(&mut s).unwrap();
+    assert_eq!(notice(&s), None);
+    assert_eq!(record_asked(&mut s, Some(&answer("v99.0.0"))), Checked::Newer("99.0.0".to_owned()));
+    assert_eq!(notice(&s), Some("99.0.0"), "shown again");
+    assert_eq!(record_asked(&mut s, Some(&answer(&format!("v{VERSION}")))), Checked::Latest, "the latest");
+    assert_eq!(record_asked(&mut s, Some("{}")), Checked::Failed, "no release");
+    assert_eq!(record_asked(&mut s, None), Checked::Failed, "no answer");
+    assert!(!due(&s), "remembered as a check");
+}

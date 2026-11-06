@@ -1170,7 +1170,7 @@ fn library_window(app: &gtk::Application, options: &Options, store: &SharedStore
             *window.borrow_mut() = Some(library.window.downgrade());
             if !stateless {
                 remember_size(&library.window, &store, "window-library");
-                library.check_update();
+                library.check_update(false);
             }
             shown(library);
         }

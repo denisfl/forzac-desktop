@@ -32,6 +32,32 @@ pub fn record(store: &mut Store, answer: &str) -> bool {
     store.set_settings(&[(CHECKED, now().to_string()), (LATEST, latest)]).is_ok()
 }
 
+/// What a check the reader asked for found ("Check for Updates…").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Checked {
+    /// A newer version, offered again even if the reader dismissed it.
+    Newer(String),
+    /// This build is the latest.
+    Latest,
+    /// No answer, an answer that names no release version, or a state that cannot be written.
+    Failed,
+}
+
+/// Remembers the `answer` to a check the reader asked for (`None`: GitHub did not answer).
+pub fn record_asked(store: &mut Store, answer: Option<&str>) -> Checked {
+    if !answer.is_some_and(|a| record(store, a)) {
+        return Checked::Failed;
+    }
+    let latest = store.setting(LATEST).unwrap_or_default().to_owned();
+    if !newer(&latest, VERSION) {
+        return Checked::Latest;
+    }
+    if store.setting(DISMISSED) == Some(latest.as_str()) && store.set_setting(DISMISSED, "").is_err() {
+        return Checked::Failed;
+    }
+    Checked::Newer(latest)
+}
+
 /// The version the library offers: the latest release when it is newer than this build and not dismissed.
 pub fn notice(store: &Store) -> Option<&str> {
     let latest = store.setting(LATEST)?;

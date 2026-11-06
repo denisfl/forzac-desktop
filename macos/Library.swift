@@ -603,7 +603,7 @@ final class LibraryWindow: NSObject, NSSearchFieldDelegate, NSWindowDelegate, NS
     var onChangeFolder: ((String, Bool) -> Void)?
     /// Sends a book to the Kindle (the app runs it): its path and title.
     var onSendToKindle: ((String, String) -> Void)?
-    /// "Version N is out — download ×" (`update-check`), at the top of "Books".
+    /// "Version N is out. Install ×" (`update-check`), at the top of "Books".
     private let updateText = ClickLabel()
     private let updateClose = ClickLabel()
     private var hasUpdate = false
@@ -658,7 +658,7 @@ final class LibraryWindow: NSObject, NSSearchFieldDelegate, NSWindowDelegate, NS
         toolbar.centeredItemIdentifiers = [.sections]
         window.toolbar = toolbar
         window.toolbarStyle = .unified
-        // "install" (macos-auto-update) until it fails, then "download" from the site.
+        // "Install" (macos-auto-update) until it fails, then "Download" from the site.
         updateText.onClick = {
             switch Installer.shared.phase {
             case .offered: Installer.shared.install()
@@ -1382,8 +1382,8 @@ final class LibraryWindow: NSObject, NSSearchFieldDelegate, NSWindowDelegate, NS
         if Installer.shared.phase == .installing {
             text = NSMutableAttributedString(string: fill(tr("Installing version {version}…"), ["version": String(cString: version)]), attributes: muted)
         } else {
-            text = NSMutableAttributedString(string: fill(tr("Version {version} is out"), ["version": String(cString: version)]) + " — ", attributes: muted)
-            let link = Installer.shared.phase == .offered ? tr("install") : tr("download")
+            text = NSMutableAttributedString(string: fill(tr("Version {version} is out."), ["version": String(cString: version)]) + " ", attributes: muted)
+            let link = Installer.shared.phase == .offered ? tr("Install") : tr("Download")
             text.append(NSAttributedString(string: link, attributes: [.font: interfaceFont(13), .foregroundColor: nsColor(palette.link)]))
         }
         // Too long for a narrow window: elided, still one click.

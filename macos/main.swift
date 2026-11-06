@@ -803,10 +803,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// Asks GitHub for the latest release when a check is due (`update-check`), in the background, with nothing about
-    /// the reader, the books or the app's version; the library's line follows the answer.
-    private func checkUpdate(_ state: OpaquePointer) {
-        guard !checkingUpdate, forzac_update_due(state), let url = URL(string: String(cString: forzac_update_releases())) else { return }
+    /// Forzac › Check for Updates… (`update-check`): asks at once and answers in a dialog.
+    @objc func checkForUpdates(_ sender: Any?) {
+        guard let state else { return }
+        checkUpdate(state, asked: true)
+    }
+
+    /// The dialog after a check the reader asked for: `asked` is `forzac_update_asked`'s answer, -1 for no answer.
+    private func showChecked(_ asked: Int32) {
+        let alert = NSAlert()
+        switch asked {
+        case 1:
+            let version = state.flatMap { forzac_update_notice($0) }.map { String(cString: $0) } ?? ""
+            alert.messageText = fill(tr("Version {version} is out."), ["version": version])
+            alert.addButton(withTitle: Installer.shared.phase == .failed ? tr("Download") : tr("Install"))
+            alert.addButton(withTitle: tr("Later"))
+        case 0:
+            alert.messageText = fill(tr("Forzac {version} is the latest version."), ["version": String(cString: forzac_update_version())])
+        default:
+            alert.messageText = tr("Couldn't check for updates")
+            alert.informativeText = tr("GitHub didn't answer. Try again later.")
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn, asked == 1 else { return }
+        if Installer.shared.phase == .failed {
+            NSWorkspace.shared.open(URL(string: String(cString: forzac_update_page()))!)
+        } else {
+            Installer.shared.install()
+        }
+    }
+
+    /// Asks GitHub for the latest release when a check is due (`update-check`), or at once when the reader `asked`, in the
+    /// background, with nothing about the reader, the books or the app's version; the library's line follows the answer.
+    private func checkUpdate(_ state: OpaquePointer, asked: Bool = false) {
+        guard !checkingUpdate, asked || forzac_update_due(state), let url = URL(string: String(cString: forzac_update_releases())) else { return }
         checkingUpdate = true
         var request = URLRequest(url: url, timeoutInterval: 10)
         request.setValue("Forzac", forHTTPHeaderField: "User-Agent")
@@ -817,7 +847,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.checkingUpdate = false
-                if let answer, let state = self.state, forzac_update_record(state, answer) { self.library?.showUpdate() }
+                guard let state = self.state else { return }
+                if asked {
+                    let result = answer.map { forzac_update_asked(state, $0) } ?? -1
+                    self.library?.showUpdate()
+                    return self.showChecked(result)
+                }
+                if let answer, forzac_update_record(state, answer) { self.library?.showUpdate() }
             }
         }.resume()
         session.finishTasksAndInvalidate()
@@ -1107,6 +1143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         submenu(tr("Forzac"), [
             item(tr("About Forzac"), #selector(showAbout(_:))),
+            item(tr("Check for Updates…"), #selector(checkForUpdates(_:))),
             .separator(),
             item(tr("Settings…"), #selector(showSettings(_:)), ","),
             .separator(),

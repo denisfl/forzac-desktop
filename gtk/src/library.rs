@@ -866,7 +866,7 @@ pub struct Library {
     /// The books' page in the scrolled column: the update line, the tabs, the body.
     page: gtk::Box,
     body: gtk::Box,
-    /// "Version N is out — download ×" (`update-check`), on top of "Books".
+    /// "Version N is out. Download ×" (`update-check`), on top of "Books".
     update: (gtk::Box, gtk::Label),
     /// The search bar under the header (`library-sections`) and its field.
     search_bar: gtk::SearchBar,
@@ -971,6 +971,10 @@ impl Library {
         main_menu.append_item(&item(tr("Settings"), "lib.settings", "<Control>comma"));
         main_menu.append_item(&item(tr("Keyboard Shortcuts"), "lib.help", "<Control>question"));
         main_menu.append_item(&item(tr("About Forzac"), "lib.aboutapp", ""));
+        // A build from a package manager never checks: the package manager updates it.
+        if !crate::fonts::assets().join("packaged").exists() {
+            main_menu.append_item(&item(tr("Check for Updates…"), "lib.checkupdate", ""));
+        }
         let menu_button = gtk::MenuButton::builder()
             .child(&Icon::new(icons::MENU, 20))
             .tooltip_text(tr("Main Menu"))
@@ -1143,28 +1147,71 @@ impl Library {
         Some(library)
     }
 
-    /// Asks GitHub for the latest release when a check is due, through `curl` in the background; the line follows the
-    /// answer. Not for builds from a package manager (`share/forzac/packaged`), which it updates.
-    pub fn check_update(self: &Rc<Self>) {
+    /// Asks GitHub for the latest release when a check is due, or at once when the reader `asked` ("Check for
+    /// Updates…", answered in a dialog), through `curl` in the background; the line follows the answer. Not for builds
+    /// from a package manager (`share/forzac/packaged`), which it updates.
+    pub fn check_update(self: &Rc<Self>, asked: bool) {
         thread_local!(static CHECKING: Cell<bool> = const { Cell::new(false) });
-        if CHECKING.get() || crate::fonts::assets().join("packaged").exists() || !update::due(&self.store.borrow()) {
+        if CHECKING.get() || crate::fonts::assets().join("packaged").exists() || !(asked || update::due(&self.store.borrow())) {
             return;
         }
         let args = ["curl", "-fsSL", "--max-time", "10", "-H", "Accept: application/vnd.github+json", update::RELEASES];
         let flags = gio::SubprocessFlags::STDOUT_PIPE | gio::SubprocessFlags::STDERR_SILENCE;
         // No curl: no check.
-        let Ok(curl) = gio::Subprocess::newv(&args.map(std::ffi::OsStr::new), flags) else { return };
+        let Ok(curl) = gio::Subprocess::newv(&args.map(std::ffi::OsStr::new), flags) else {
+            if asked {
+                self.show_checked(update::Checked::Failed);
+            }
+            return;
+        };
         CHECKING.set(true);
         let weak = Rc::downgrade(self);
         let store = self.store.clone();
         glib::spawn_future_local(async move {
             let answer = curl.communicate_utf8_future(None).await;
             CHECKING.set(false);
-            let Ok((Some(answer), _)) = answer else { return };
+            let answer = answer.ok().and_then(|(a, _)| a);
+            if asked {
+                let result = update::record_asked(&mut store.borrow_mut(), answer.as_deref());
+                if let Some(l) = weak.upgrade() {
+                    l.show_update();
+                    l.show_checked(result);
+                }
+                return;
+            }
+            let Some(answer) = answer else { return };
             if update::record(&mut store.borrow_mut(), &answer)
                 && let Some(l) = weak.upgrade()
             {
                 l.show_update();
+            }
+        });
+    }
+
+    /// The dialog after a check the reader asked for: a newer version with "Download", the latest, or no answer.
+    fn show_checked(&self, result: update::Checked) {
+        let dialog = gtk::AlertDialog::builder().modal(true).build();
+        match &result {
+            update::Checked::Newer(version) => {
+                dialog.set_message(&fill(tr("Version {version} is out."), &[("version", version)]));
+                dialog.set_buttons(&[tr("Later"), tr("Download")]);
+                dialog.set_cancel_button(0);
+                dialog.set_default_button(1);
+            }
+            update::Checked::Latest => {
+                dialog.set_message(&fill(tr("Forzac {version} is the latest version."), &[("version", update::VERSION)]));
+                dialog.set_buttons(&[tr("OK")]);
+            }
+            update::Checked::Failed => {
+                dialog.set_message(tr("Couldn't check for updates"));
+                dialog.set_detail(tr("GitHub didn't answer. Try again later."));
+                dialog.set_buttons(&[tr("OK")]);
+            }
+        }
+        let window = self.window.clone();
+        dialog.choose(Some(&self.window), gio::Cancellable::NONE, move |answer| {
+            if matches!((&result, answer), (update::Checked::Newer(_), Ok(1))) {
+                gtk::UriLauncher::new(update::PAGE).launch(Some(&window), gio::Cancellable::NONE, |_| {});
             }
         });
     }
@@ -1175,9 +1222,9 @@ impl Library {
         let notice = update::notice(&self.store.borrow()).map(str::to_owned);
         line.set_visible(notice.is_some() && !self.searching.get());
         if let Some(version) = notice {
-            let text = glib::markup_escape_text(&fill(tr("Version {version} is out"), &[("version", &version)]));
-            let link = glib::markup_escape_text(tr("download"));
-            label.set_markup(&format!("{text} — <a href=\"{}\">{link}</a>", update::PAGE));
+            let text = glib::markup_escape_text(&fill(tr("Version {version} is out."), &[("version", &version)]));
+            let link = glib::markup_escape_text(tr("Download"));
+            label.set_markup(&format!("{text} <a href=\"{}\">{link}</a>", update::PAGE));
         }
     }
 
@@ -2789,7 +2836,16 @@ impl Library {
                 l.ask_shelf(book as usize);
             }
         });
-        for (name, act) in [("openbook", 0), ("addfolder", 1), ("settings", 2), ("help", 3), ("aboutapp", 4), ("books", 5), ("stats", 6)] {
+        for (name, act) in [
+            ("openbook", 0),
+            ("addfolder", 1),
+            ("settings", 2),
+            ("help", 3),
+            ("aboutapp", 4),
+            ("books", 5),
+            ("stats", 6),
+            ("checkupdate", 7),
+        ] {
             let action = gio::SimpleAction::new(name, None);
             let weak = Rc::downgrade(self);
             action.connect_activate(move |_, _| {
@@ -2801,7 +2857,8 @@ impl Library {
                     3 => l.toggle_help(),
                     4 => l.show_about_app(),
                     5 => l.show_section(0),
-                    _ => l.show_section(1),
+                    6 => l.show_section(1),
+                    _ => l.check_update(true),
                 }
             });
             actions.add_action(&action);
